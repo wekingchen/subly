@@ -345,7 +345,7 @@ def start_prewarm(
 
         targets = []
         for r in rows:
-            if mode == "missing" and not payload.force:
+            if mode == "missing":
                 info = library_icon_cache_info(r.slug)
                 if info["cached"]:
                     continue

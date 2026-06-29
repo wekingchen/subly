@@ -7,7 +7,7 @@
       </div>
       <div class="row actions-top">
         <button class="btn ghost" @click="load">{{ t('iconLib.refresh') }}</button>
-        <button class="btn ghost" :disabled="job?.status === 'running'" @click="startPrewarm('missing')">{{ t('iconLib.fetchMissing') }}</button>
+        <button class="btn ghost" :disabled="job?.status === 'running'" @click="startPrewarm('missing', true)">{{ t('iconLib.fetchMissing') }}</button>
         <button class="btn ghost" :disabled="job?.status === 'running'" @click="startPrewarm('all', true)">{{ t('iconLib.fetchAll') }}</button>
         <button class="btn" @click="openNew">+ {{ t('iconLib.add') }}</button>
       </div>
