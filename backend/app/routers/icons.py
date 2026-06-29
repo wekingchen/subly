@@ -512,7 +512,18 @@ def _discover_icon_links(client: httpx.Client, domain: str) -> list[str]:
     return [item["url"] for item in ranked[:_MAX_DISCOVERED_LINKS]]
 
 
-def _fetch_library_icon(base: str, domain: str) -> tuple[bytes, str, str, str] | None:
+def _simple_icon_slug(label: str | None, domain: str) -> str:
+    """把服务名粗略转换为 simple-icons slug。
+
+    simple-icons 的 slug 不是域名，而是品牌名（如 Netflix -> netflix）。
+    这里用服务名优先，失败会继续走后续 provider；不维护大映射，避免频繁更新。
+    """
+    source = (label or "").strip() or domain.split(".", 1)[0]
+    source = source.split("/", 1)[0]
+    return re.sub(r"[^a-z0-9]", "", source.lower())
+
+
+def _fetch_library_icon(base: str, domain: str, label: str | None = None) -> tuple[bytes, str, str, str] | None:
     if not settings.icon_fetch_enabled:
         return None
 
@@ -532,6 +543,40 @@ def _fetch_library_icon(base: str, domain: str) -> tuple[bytes, str, str, str] |
             if result:
                 data, mime_type, ext = result
                 return data, mime_type, ext, "html"
+
+        unavatar = f"https://unavatar.io/{domain}"
+        tried.append("unavatar")
+        if not _provider_skipped("unavatar"):
+            result = _fetch_candidate_icon(client, unavatar, "unavatar", base)
+            if result:
+                data, mime_type, ext = result
+                return data, mime_type, ext, "unavatar"
+
+        iconhorse = f"https://icon.horse/icon/{domain}"
+        tried.append("iconhorse")
+        if not _provider_skipped("iconhorse"):
+            result = _fetch_candidate_icon(client, iconhorse, "iconhorse", base)
+            if result:
+                data, mime_type, ext = result
+                return data, mime_type, ext, "iconhorse"
+
+        simple_slug = _simple_icon_slug(label, domain)
+        if simple_slug:
+            simpleicons = f"https://cdn.simpleicons.org/{simple_slug}"
+            tried.append("simpleicons")
+            if not _provider_skipped("simpleicons"):
+                result = _fetch_candidate_icon(client, simpleicons, "simpleicons", base)
+                if result:
+                    data, mime_type, ext = result
+                    return data, mime_type, ext, "simpleicons"
+
+            jsdelivr = f"https://cdn.jsdelivr.net/npm/simple-icons@latest/icons/{simple_slug}.svg"
+            tried.append("jsdelivr-simpleicons")
+            if not _provider_skipped("jsdelivr-simpleicons"):
+                result = _fetch_candidate_icon(client, jsdelivr, "jsdelivr-simpleicons", base)
+                if result:
+                    data, mime_type, ext = result
+                    return data, mime_type, ext, "jsdelivr-simpleicons"
 
         duckduckgo = f"https://icons.duckduckgo.com/ip3/{domain}.ico"
         tried.append("duckduckgo")
@@ -612,7 +657,7 @@ def fetch_library_icon_to_cache(
     if not _FETCH_SEMAPHORE.acquire(timeout=wait_s):
         return {"status": "skipped", "source": "rate_limited", "ext": None, "error": "rate_limited"}
     try:
-        fetched = _fetch_library_icon(base, domain)
+        fetched = _fetch_library_icon(base, domain, label)
     finally:
         _FETCH_SEMAPHORE.release()
 
@@ -721,7 +766,7 @@ def library_icon(slug: str, db: Session = Depends(get_db)):
         response.headers["X-Subly-Icon"] = "rate-limited"
         return response
     try:
-        fetched = _fetch_library_icon(base, domain)
+        fetched = _fetch_library_icon(base, domain, label)
     finally:
         _FETCH_SEMAPHORE.release()
 
