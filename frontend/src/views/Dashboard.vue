@@ -276,5 +276,14 @@ h3 { margin-top: 0; }
 .rc-a { font-size: 12px; }
 
 @media (max-width: 980px) { .stats { grid-template-columns: 1fr 1fr; } .main { grid-template-columns: 1fr; } }
-@media (max-width: 720px) { .stats { grid-template-columns: 1fr 1fr; } }
+@media (max-width: 720px) {
+  .stats { grid-template-columns: 1fr 1fr; }
+  .hero { flex-wrap: wrap; }
+  .hero .btn { margin-top: 8px; }
+  .stat .badge { width: 40px; height: 40px; }
+  .stat .badge :deep(svg) { width: 20px; height: 20px; }
+  .stat .big { font-size: 21px; }
+  .donut-wrap { flex-wrap: wrap; }
+}
+@media (max-width: 380px) { .stats { grid-template-columns: 1fr; } }
 </style>

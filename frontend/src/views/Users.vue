@@ -27,25 +27,25 @@
         </thead>
         <tbody>
           <tr v-for="u in shown" :key="u.id">
-            <td>{{ u.username }}</td>
-            <td class="muted">
+            <td :data-label="t('admin.username')">{{ u.username }}</td>
+            <td :data-label="t('admin.email')" class="muted">
               {{ u.email }}
               <span v-if="!u.email_verified" class="tag bad sm" :title="t('admin.emailUnverified')">✉︎!</span>
             </td>
-            <td>
+            <td :data-label="t('admin.role')">
               <span class="tag" :class="u.is_admin ? 'adm' : ''">
                 {{ u.is_admin ? t('admin.admin') : t('admin.user') }}
               </span>
             </td>
-            <td>
+            <td :data-label="t('admin.status')">
               <span v-if="!u.is_approved" class="tag warn">{{ t('admin.pending') }}</span>
               <span v-else class="tag" :class="u.is_active ? 'ok' : 'bad'">
                 {{ u.is_active ? t('admin.active') : t('admin.disabled') }}
               </span>
             </td>
-            <td>{{ u.subscription_count }}</td>
-            <td class="muted">{{ fmt(u.created_at) }}</td>
-            <td class="acts">
+            <td :data-label="t('admin.subs')">{{ u.subscription_count }}</td>
+            <td :data-label="t('admin.created')" class="muted">{{ fmt(u.created_at) }}</td>
+            <td class="acts" :data-label="t('common.actions')">
               <button v-if="!u.is_approved" class="btn sm" @click="approve(u)">✓ {{ t('admin.approve') }}</button>
               <button class="btn sm ghost" @click="toggleAdmin(u)">
                 {{ u.is_admin ? t('admin.revokeAdmin') : t('admin.makeAdmin') }}
@@ -69,6 +69,7 @@
 
     <div v-if="showForm" class="modal-mask" @click.self="showForm = false">
       <div class="modal" style="width:420px">
+        <button class="modal-x" :aria-label="t('common.close')" @click="showForm = false">×</button>
         <h3>{{ t('admin.createUser') }}</h3>
         <label>{{ t('admin.username') }}</label>
         <input v-model="form.username" />
@@ -80,9 +81,34 @@
           <input type="checkbox" v-model="form.is_admin" /> {{ t('admin.admin') }}
         </label>
         <p v-if="formErr" class="err">{{ formErr }}</p>
-        <div class="row" style="justify-content:flex-end;margin-top:14px">
+        <div class="modal-foot">
           <button class="btn ghost" @click="showForm = false">{{ t('admin.cancel') }}</button>
           <button class="btn" @click="create">{{ t('admin.create') }}</button>
+        </div>
+      </div>
+    </div>
+
+    <div v-if="pwdTarget" class="modal-mask" @click.self="pwdTarget = null">
+      <div class="modal" style="width:420px">
+        <button class="modal-x" :aria-label="t('common.close')" @click="pwdTarget = null">×</button>
+        <h3>{{ t('admin.resetPwd') }}</h3>
+        <p style="font-size:14px;line-height:1.6">{{ t('admin.resetPwdPrompt') }} · {{ pwdTarget.username }}</p>
+        <input v-model="pwdValue" type="password" :placeholder="t('admin.newPwdPh')" @keyup.enter="confirmResetPwd" />
+        <div class="modal-foot">
+          <button class="btn ghost" @click="pwdTarget = null">{{ t('admin.cancel') }}</button>
+          <button class="btn" :disabled="!pwdValue" @click="confirmResetPwd">{{ t('common.confirm') }}</button>
+        </div>
+      </div>
+    </div>
+
+    <div v-if="delTarget" class="modal-mask" @click.self="delTarget = null">
+      <div class="modal" style="width:420px">
+        <button class="modal-x" :aria-label="t('common.close')" @click="delTarget = null">×</button>
+        <h3>🗑️ {{ t('admin.deleteTitle') }}</h3>
+        <p style="font-size:14px;line-height:1.6">{{ t('admin.confirmDelete') }} · {{ delTarget.username }}</p>
+        <div class="modal-foot">
+          <button class="btn ghost" @click="delTarget = null">{{ t('admin.cancel') }}</button>
+          <button class="btn danger" @click="confirmDelete">{{ t('common.confirm') }}</button>
         </div>
       </div>
     </div>
@@ -90,7 +116,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import api from '../api'
 
@@ -101,6 +127,16 @@ const tab = ref('pending')
 const showForm = ref(false)
 const formErr = ref('')
 const form = ref({ username: '', email: '', password: '', is_admin: false })
+
+const pwdTarget = ref(null)
+const pwdValue = ref('')
+const delTarget = ref(null)
+
+watch([showForm, pwdTarget, delTarget], () => {
+  const open = showForm.value || pwdTarget.value || delTarget.value
+  document.body.classList.toggle('modal-open', !!open)
+})
+onBeforeUnmount(() => document.body.classList.remove('modal-open'))
 
 function fmt(s) { return s ? new Date(s).toLocaleDateString() : '' }
 
@@ -137,13 +173,23 @@ const approve = (u) => patch(u, { is_approved: true })
 const toggleAdmin = (u) => patch(u, { is_admin: !u.is_admin })
 const toggleActive = (u) => patch(u, { is_active: !u.is_active })
 function resetPwd(u) {
-  const pwd = prompt(t('admin.resetPwdPrompt'))
-  if (pwd) patch(u, { password: pwd })
+  pwdTarget.value = u
+  pwdValue.value = ''
 }
-async function remove(u) {
-  if (!confirm(t('admin.confirmDelete'))) return
+async function confirmResetPwd() {
+  if (!pwdTarget.value || !pwdValue.value) return
+  await patch(pwdTarget.value, { password: pwdValue.value })
+  pwdTarget.value = null
+  pwdValue.value = ''
+}
+function remove(u) {
+  delTarget.value = u
+}
+async function confirmDelete() {
+  if (!delTarget.value) return
   err.value = ''
-  try { await api.delete(`/api/admin/users/${u.id}`); load() }
+  const id = delTarget.value.id
+  try { await api.delete(`/api/admin/users/${id}`); delTarget.value = null; load() }
   catch (e) { err.value = e.response?.data?.detail || 'Error' }
 }
 
@@ -171,6 +217,12 @@ h1 { margin-top: 0; }
   table, thead, tbody, th, td, tr { display: block; }
   thead { display: none; }
   tr { border: 1px solid var(--border); border-radius: 10px; padding: 8px; margin-bottom: 10px; }
-  td { border: none; padding: 4px 6px; }
+  td { border: none; padding: 6px 6px 4px; }
+  td::before { content: attr(data-label); display: block; font-size: 11px; font-weight: 600;
+    color: var(--text-soft); text-transform: uppercase; letter-spacing: .03em; margin-bottom: 2px; }
+  td.acts::before { display: none; }
+  .acts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .acts .btn.sm { min-height: 44px; }
+  .acts .btn.danger { grid-column: 1 / -1; }
 }
 </style>

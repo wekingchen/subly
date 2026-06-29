@@ -53,8 +53,8 @@
       </template>
 
       <div class="lang">
-        <a href="#" @click.prevent="setLang('zh')">中文</a> ·
-        <a href="#" @click.prevent="setLang('en')">EN</a> ·
+        <a href="#" @click.prevent="setLang('zh')">中文</a>
+        <a href="#" @click.prevent="setLang('en')">EN</a>
         <a href="#" @click.prevent="setLang('ru')">RU</a>
       </div>
     </div>
@@ -151,12 +151,13 @@ h2 { margin: 8px 0 4px; }
 .step-t { margin: 8px 0 6px; }
 .hint { font-size: 13px; line-height: 1.6; }
 .seg { display: flex; background: var(--bg); border-radius: 8px; padding: 4px; margin-bottom: 8px; }
-.seg button { flex: 1; border: none; background: transparent; padding: 8px; border-radius: 6px;
+.seg button { flex: 1; border: none; background: transparent; min-height: 44px; padding: 8px; border-radius: 6px;
   cursor: pointer; color: var(--text-soft); }
 .seg button.on { background: var(--surface); color: var(--text); box-shadow: var(--shadow); }
 label { text-align: left; }
 .err { color: var(--danger); font-size: 13px; margin-top: 10px; }
 .ok { color: var(--success); font-size: 13px; margin-top: 10px; }
 .back { display: block; margin-top: 14px; font-size: 13px; }
-.lang { text-align: center; margin-top: 16px; font-size: 13px; color: var(--text-soft); }
+.lang { display: flex; justify-content: center; gap: 6px; align-items: center; margin-top: 16px; font-size: 13px; color: var(--text-soft); }
+.lang a { display: inline-flex; align-items: center; min-height: 44px; padding: 0 8px; }
 </style>

@@ -6,13 +6,14 @@
         <span class="year muted">{{ year }}</span>
       </div>
       <div class="nav">
-        <button class="navbtn" @click="move(-1)">‹</button>
+        <button class="navbtn" :aria-label="t('calendar.prevMonth')" @click="move(-1)">‹</button>
         <button class="today-btn" @click="goToday">{{ t('calendar.today') }}</button>
-        <button class="navbtn" @click="move(1)">›</button>
+        <button class="navbtn" :aria-label="t('calendar.nextMonth')" @click="move(1)">›</button>
       </div>
     </div>
 
     <div class="card cal-card">
+      <!-- 桌面：7 列月历 -->
       <div class="cal">
         <div class="dow" v-for="d in dows" :key="d">{{ d }}</div>
         <div v-for="(cell, i) in cells" :key="i" class="cell"
@@ -30,6 +31,22 @@
             </div>
           </div>
         </div>
+      </div>
+
+      <!-- 移动端：议程列表 -->
+      <div class="agenda">
+        <div v-for="d in agendaDays" :key="d.key" class="ag-day" :class="{ today: d.isToday }">
+          <div class="ag-head">
+            <span class="ag-date">{{ d.label }}</span>
+            <span class="ag-count">{{ d.events.length }}</span>
+          </div>
+          <div v-for="ev in d.events" :key="ev.id" class="ag-ev" :style="{ '--c': evColor(ev) }">
+            <ServiceIcon :src="ev.icon" :name="ev.name" :fallback="emojiOf(ev)" class="ag-ico" />
+            <span class="ag-name">{{ ev.name }}</span>
+            <span v-if="ev.amount" class="ag-amt muted">{{ ev.amount }} {{ ev.currency }}</span>
+          </div>
+        </div>
+        <div v-if="!agendaDays.length" class="ag-empty muted">{{ t('calendar.noEvents') }}</div>
       </div>
     </div>
   </div>
@@ -102,6 +119,22 @@ const cells = computed(() => {
   return arr
 })
 
+const agendaDays = computed(() => {
+  const loc = locale.value === 'zh' ? 'zh-CN' : locale.value
+  const fmt = new Intl.DateTimeFormat(loc, { month: 'short', day: 'numeric', weekday: 'short' })
+  return cells.value
+    .filter((c) => c.inMonth && c.events.length)
+    .map((c) => {
+      const d = new Date(year.value, month.value, c.day)
+      return {
+        key: `${year.value}-${month.value}-${c.day}`,
+        label: fmt.format(d),
+        isToday: c.isToday,
+        events: c.events
+      }
+    })
+})
+
 onMounted(async () => {
   const { data } = await api.get('/api/subscriptions', { params: { billing_type: 'recurring', active: true } })
   subs.value = data
@@ -118,10 +151,11 @@ onMounted(async () => {
   font-size: 18px; color: var(--text); cursor: pointer; }
 .navbtn:hover { border-color: var(--primary); color: var(--primary); }
 .today-btn { padding: 7px 14px; border-radius: 9px; border: 1px solid var(--border); background: var(--surface);
-  font-size: 13px; color: var(--text); cursor: pointer; }
+  font-size: 13px; color: var(--text); cursor: pointer; min-height: 34px; }
 .today-btn:hover { border-color: var(--primary); color: var(--primary); }
 
 .cal-card { padding: 0; overflow: hidden; }
+.agenda { display: none; }
 .cal { display: grid; grid-template-columns: repeat(7, 1fr); }
 .dow { text-align: right; font-size: 12px; font-weight: 600; color: var(--text-soft);
   padding: 12px 10px 8px; text-transform: uppercase; letter-spacing: .03em; }
@@ -144,9 +178,23 @@ onMounted(async () => {
 .ev.more { background: transparent; color: var(--text-soft); padding: 0 5px; }
 
 @media (max-width: 720px) {
-  .cell { min-height: 72px; }
-  .ev { font-size: 10px; }
-  .ev :deep(*) { }
+  .head { flex-wrap: wrap; gap: 10px; }
+  .nav { width: 100%; justify-content: space-between; }
+  .navbtn, .today-btn { min-width: 44px; height: 44px; }
+  .cal { display: none; }
+  .agenda { display: flex; flex-direction: column; gap: 10px; padding: 12px; }
+  .ag-day { border: 1px solid var(--border); border-radius: 12px; padding: 10px; background: var(--surface); }
+  .ag-day.today { border-color: var(--danger); }
+  .ag-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+  .ag-date { font-weight: 700; }
+  .ag-count { background: var(--surface-2); color: var(--text-soft); border-radius: 999px; padding: 2px 8px; font-size: 12px; }
+  .ag-ev { display: flex; align-items: center; gap: 8px; min-height: 44px; border-radius: 10px; padding: 6px 8px;
+    background: color-mix(in srgb, var(--c) 12%, transparent); }
+  .ag-ico { width: 24px; height: 24px; border-radius: 6px; object-fit: contain; flex-shrink: 0; }
+  .ag-name { flex: 1; min-width: 0; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .ag-amt { font-size: 12px; white-space: nowrap; }
+  .ag-empty { padding: 28px 10px; text-align: center; }
   .month { font-size: 20px; }
 }
 </style>
+

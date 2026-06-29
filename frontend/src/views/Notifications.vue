@@ -50,4 +50,9 @@ h1 { margin-top: 0; }
 .tag.ok { background: #dcfce7; color: #15803d; }
 .tag.bad { background: #fee2e2; color: #b91c1c; }
 .tag.chan { background: var(--surface-2); color: var(--text-soft); }
+@media (max-width: 720px) {
+  .head { flex-wrap: wrap; gap: 10px; }
+  .head .btn { width: 100%; }
+  .lc-top { flex-wrap: wrap; gap: 6px; }
+}
 </style>

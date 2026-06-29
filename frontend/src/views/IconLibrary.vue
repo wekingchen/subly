@@ -101,6 +101,7 @@
 
     <div v-if="showForm" class="modal-mask" @click.self="showForm = false">
       <div class="modal">
+        <button class="modal-x" :aria-label="t('common.close')" @click="showForm = false">×</button>
         <h3>{{ editing ? t('iconLib.formTitleEdit') : t('iconLib.formTitleNew') }}</h3>
         <p v-if="formErr" class="err">{{ formErr }}</p>
         <label>{{ t('iconLib.name') }}</label>
@@ -120,9 +121,21 @@
           <label style="flex:1">{{ t('iconLib.sort') }}<input v-model.number="form.sort" type="number" /></label>
           <label class="check"><input v-model="form.is_active" type="checkbox" /> {{ t('iconLib.active') }}</label>
         </div>
-        <div class="modal-actions">
+        <div class="modal-foot">
           <button class="btn" @click="save">{{ t('iconLib.save') }}</button>
           <button class="btn ghost" @click="showForm = false">{{ t('iconLib.cancel') }}</button>
+        </div>
+      </div>
+    </div>
+
+    <div v-if="confirmState" class="modal-mask" @click.self="confirmState = null">
+      <div class="modal" style="width:400px">
+        <button class="modal-x" :aria-label="t('common.close')" @click="confirmState = null">×</button>
+        <h3>{{ confirmState.title }}</h3>
+        <p style="font-size:14px;line-height:1.6">{{ confirmState.message }}</p>
+        <div class="modal-foot">
+          <button class="btn ghost" @click="confirmState = null">{{ t('iconLib.cancel') }}</button>
+          <button class="btn danger" @click="confirmState.onConfirm">{{ t('common.confirm') }}</button>
         </div>
       </div>
     </div>
@@ -130,7 +143,7 @@
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import api from '../api'
 import ServiceIcon from '../components/ServiceIcon.vue'
@@ -148,7 +161,12 @@ const editing = ref(null)
 const formErr = ref('')
 const form = ref({})
 const job = ref(null)
+const confirmState = ref(null)
 let pollTimer = null
+
+watch([showForm, confirmState], () => {
+  document.body.classList.toggle('modal-open', !!(showForm.value || confirmState.value))
+})
 
 const activeCount = computed(() => items.value.filter((x) => x.is_active).length)
 const inactiveCount = computed(() => items.value.length - activeCount.value)
@@ -215,18 +233,35 @@ async function save() {
 }
 
 async function deactivate(svc) {
-  if (!confirm(t('iconLib.confirmDeactivate'))) return
-  await api.delete(`/api/admin/icon-services/${svc.id}`)
-  await load()
+  confirmState.value = {
+    title: t('iconLib.deactivate'),
+    message: t('iconLib.confirmDeactivate'),
+    onConfirm: async () => {
+      await api.delete(`/api/admin/icon-services/${svc.id}`)
+      confirmState.value = null
+      await load()
+    }
+  }
 }
 async function restore(svc) { await api.post(`/api/admin/icon-services/${svc.id}/restore`); await load() }
 async function fetchOne(svc) { await api.post(`/api/admin/icon-services/${svc.id}/prewarm`, null, { params: { force: true } }); await load() }
 
 async function startPrewarm(mode, force = false) {
-  if (mode === 'all' && !confirm(t('iconLib.confirmFetchAll'))) return
-  const { data } = await api.post('/api/admin/icon-services/prewarm', { mode, force })
-  job.value = data
-  startPoll(data.id)
+  const run = async () => {
+    const { data } = await api.post('/api/admin/icon-services/prewarm', { mode, force })
+    job.value = data
+    startPoll(data.id)
+    confirmState.value = null
+  }
+  if (mode === 'all') {
+    confirmState.value = {
+      title: t('iconLib.fetchAll'),
+      message: t('iconLib.confirmFetchAll'),
+      onConfirm: run
+    }
+    return
+  }
+  await run()
 }
 
 function startPoll(id) {
@@ -242,7 +277,10 @@ function startPoll(id) {
 }
 
 onMounted(load)
-onBeforeUnmount(() => { if (pollTimer) clearInterval(pollTimer) })
+onBeforeUnmount(() => {
+  if (pollTimer) clearInterval(pollTimer)
+  document.body.classList.remove('modal-open')
+})
 </script>
 
 <style scoped>
@@ -281,5 +319,14 @@ h1 { margin:0; }
 .check input { width:auto; }
 .modal-actions { display:flex; gap:8px; justify-content:flex-end; margin-top:16px; }
 @media (max-width: 900px) { .stats { grid-template-columns: repeat(2, 1fr); } .head { flex-direction:column; } }
-@media (max-width: 720px) { table { min-width: 820px; } }
+@media (max-width: 720px) {
+  table { min-width: 820px; }
+  .actions-top { width: 100%; }
+  .actions-top .btn { flex: 1 1 calc(50% - 6px); min-height: 44px; }
+  .bar { flex-direction: column; align-items: stretch; }
+  .bar .seg, .bar select { width: 100%; }
+  .search { width: 100%; max-width: none; }
+  .acts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .acts .btn.sm { min-height: 44px; }
+}
 </style>

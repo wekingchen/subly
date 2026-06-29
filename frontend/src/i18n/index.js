@@ -2,7 +2,7 @@ import { createI18n } from 'vue-i18n'
 
 const zh = {
   app: { title: '省心订阅 Subly', tagline: '订阅 / 续费 / 保号，一个都不漏' },
-  nav: { dashboard: '仪表盘', subscriptions: '订阅管理', calendar: '日历', reports: '报表分析', notifications: '通知中心', logs: '实时日志', settings: '设置', iconLibrary: '图标库管理', users: '用户管理', logout: '退出' },
+  nav: { dashboard: '仪表盘', subscriptions: '订阅管理', calendar: '日历', reports: '报表分析', notifications: '通知中心', logs: '实时日志', settings: '设置', iconLibrary: '图标库管理', users: '用户管理', logout: '退出', menu: '导航菜单' },
   notify: { title: '通知中心', runScan: '立即扫描提醒', empty: '暂无通知记录', sent: '已发送', failed: '失败', daysBefore: '提前天数' },
   rtlog: { title: '实时日志', live: '实时', paused: '已暂停', action: '操作', user: '用户', detail: '详情', time: '时间', empty: '暂无日志', auto: '自动刷新' },
   account: { title: '账号与密码', username: '用户名', email: '邮箱', saveAccount: '保存账号', changePwd: '修改密码', oldPwd: '原密码', newPwd: '新密码', pwdOk: '密码已修改', accountOk: '账号已更新' },
@@ -12,6 +12,7 @@ const zh = {
     status: '状态', active: '正常', disabled: '已禁用', subs: '订阅数', created: '注册时间',
     createUser: '新建用户', password: '密码', makeAdmin: '设为管理员', revokeAdmin: '取消管理员',
     enable: '启用', disable: '禁用', resetPwd: '重置密码', resetPwdPrompt: '输入新密码：',
+    newPwdPh: '新密码', deleteTitle: '删除用户',
     confirmDelete: '确认删除该用户及其全部数据？', create: '创建', cancel: '取消',
     approved: '已通过', pending: '待审核', approve: '通过审核', emailUnverified: '邮箱未验证',
     pendingTab: '待审核 ({n})', allTab: '全部用户', noPending: '没有待审核的用户'
@@ -52,11 +53,12 @@ const zh = {
     renewDue: '常规循环：从原到期日 +1 个周期（不浪费已付时间）',
     renewNext: '续费后下次到期：', renewOk: '已续费，下次到期 {date}', confirm: '确认续费',
     expiredTag: '已过期', soonTag: '即将到期', uncategorized: '未分类', dragHint: '拖动卡片可排序，拖动分类标题可调整分类顺序',
+    moveUp: '上移', moveDown: '下移', moreIcons: '显示更多图标',
     deleteTitle: '删除订阅', deletePwdTip: '为防止误删，请输入你的登录密码以确认删除「{name}」', pwdPh: '登录密码',
     remark: '个性化备注', remarkPh: '如：家庭主力机 / 香港 CN2（会显示在卡片上）',
     ipLabel: 'IP 地址（选填）', ipv4: 'IPv4', ipv6: 'IPv6'
   },
-  calendar: { title: '续费日历', noEvents: '本月无续费', today: '今天', more: '还有 {n} 项' },
+  calendar: { title: '续费日历', noEvents: '本月无续费', today: '今天', prevMonth: '上个月', nextMonth: '下个月', more: '还有 {n} 项' },
   reports: {
     title: '报表分析', overview: '总览', insights: '支出洞察', categoryDetail: '分类明细', recentPayments: '近期付款',
     ranking: '支出排行', oneTime: '永久购买', upcoming: '即将续费', expired: '已过期',
@@ -119,7 +121,7 @@ const zh = {
 
 const en = {
   app: { title: 'Subly', tagline: 'Never miss a renewal again' },
-  nav: { dashboard: 'Dashboard', subscriptions: 'Subscriptions', calendar: 'Calendar', reports: 'Reports', notifications: 'Notifications', logs: 'Live Logs', settings: 'Settings', iconLibrary: 'Icon Library', users: 'Users', logout: 'Logout' },
+  nav: { dashboard: 'Dashboard', subscriptions: 'Subscriptions', calendar: 'Calendar', reports: 'Reports', notifications: 'Notifications', logs: 'Live Logs', settings: 'Settings', iconLibrary: 'Icon Library', users: 'Users', logout: 'Logout', menu: 'Menu' },
   notify: { title: 'Notification Center', runScan: 'Run scan now', empty: 'No notifications yet', sent: 'Sent', failed: 'Failed', daysBefore: 'Days before' },
   rtlog: { title: 'Live Logs', live: 'Live', paused: 'Paused', action: 'Action', user: 'User', detail: 'Detail', time: 'Time', empty: 'No logs', auto: 'Auto refresh' },
   account: { title: 'Account & Password', username: 'Username', email: 'Email', saveAccount: 'Save account', changePwd: 'Change password', oldPwd: 'Old password', newPwd: 'New password', pwdOk: 'Password changed', accountOk: 'Account updated' },
@@ -129,6 +131,7 @@ const en = {
     status: 'Status', active: 'Active', disabled: 'Disabled', subs: 'Subs', created: 'Created',
     createUser: 'New user', password: 'Password', makeAdmin: 'Make admin', revokeAdmin: 'Revoke admin',
     enable: 'Enable', disable: 'Disable', resetPwd: 'Reset password', resetPwdPrompt: 'New password:',
+    newPwdPh: 'New password', deleteTitle: 'Delete user',
     confirmDelete: 'Delete this user and all their data?', create: 'Create', cancel: 'Cancel',
     approved: 'Approved', pending: 'Pending', approve: 'Approve', emailUnverified: 'Email not verified',
     pendingTab: 'Pending ({n})', allTab: 'All users', noPending: 'No users awaiting approval'
@@ -169,11 +172,12 @@ const en = {
     renewDue: 'Regular recurring: +1 cycle from current due date (no paid time lost)',
     renewNext: 'Next due after renewal:', renewOk: 'Renewed, next due {date}', confirm: 'Confirm',
     expiredTag: 'Expired', soonTag: 'Due soon', uncategorized: 'Uncategorized', dragHint: 'Drag cards to reorder; drag a category header to reorder categories',
+    moveUp: 'Move up', moveDown: 'Move down', moreIcons: 'Show more icons',
     deleteTitle: 'Delete subscription', deletePwdTip: 'To prevent mistakes, enter your login password to delete "{name}"', pwdPh: 'Login password',
     remark: 'Personal note', remarkPh: 'e.g. main box / HK CN2 (shown on card)',
     ipLabel: 'IP address (optional)', ipv4: 'IPv4', ipv6: 'IPv6'
   },
-  calendar: { title: 'Renewal Calendar', noEvents: 'No renewals this month', today: 'Today', more: '+{n} more' },
+  calendar: { title: 'Renewal Calendar', noEvents: 'No renewals this month', today: 'Today', prevMonth: 'Previous month', nextMonth: 'Next month', more: '+{n} more' },
   reports: {
     title: 'Reports', overview: 'Overview', insights: 'Insights', categoryDetail: 'Category detail', recentPayments: 'Recent payments',
     ranking: 'Ranking', oneTime: 'Permanent', upcoming: 'Upcoming', expired: 'Expired',
@@ -236,7 +240,7 @@ const en = {
 
 const ru = {
   app: { title: 'Subly', tagline: 'Не пропустите ни одного продления' },
-  nav: { dashboard: 'Панель', subscriptions: 'Подписки', calendar: 'Календарь', reports: 'Отчёты', notifications: 'Уведомления', logs: 'Логи', settings: 'Настройки', iconLibrary: 'Библиотека иконок', users: 'Пользователи', logout: 'Выход' },
+  nav: { dashboard: 'Панель', subscriptions: 'Подписки', calendar: 'Календарь', reports: 'Отчёты', notifications: 'Уведомления', logs: 'Логи', settings: 'Настройки', iconLibrary: 'Библиотека иконок', users: 'Пользователи', logout: 'Выход', menu: 'Меню' },
   notify: { title: 'Центр уведомлений', runScan: 'Запустить проверку', empty: 'Нет уведомлений', sent: 'Отправлено', failed: 'Ошибка', daysBefore: 'За дней' },
   rtlog: { title: 'Логи в реальном времени', live: 'Онлайн', paused: 'Пауза', action: 'Действие', user: 'Польз.', detail: 'Детали', time: 'Время', empty: 'Нет логов', auto: 'Автообновление' },
   account: { title: 'Аккаунт и пароль', username: 'Логин', email: 'Эл. почта', saveAccount: 'Сохранить', changePwd: 'Сменить пароль', oldPwd: 'Старый пароль', newPwd: 'Новый пароль', pwdOk: 'Пароль изменён', accountOk: 'Аккаунт обновлён' },
@@ -246,6 +250,7 @@ const ru = {
     status: 'Статус', active: 'Активен', disabled: 'Отключён', subs: 'Подписки', created: 'Создан',
     createUser: 'Новый', password: 'Пароль', makeAdmin: 'Сделать админом', revokeAdmin: 'Снять админа',
     enable: 'Включить', disable: 'Отключить', resetPwd: 'Сбросить пароль', resetPwdPrompt: 'Новый пароль:',
+    newPwdPh: 'Новый пароль', deleteTitle: 'Удалить пользователя',
     confirmDelete: 'Удалить пользователя и все его данные?', create: 'Создать', cancel: 'Отмена',
     approved: 'Одобрен', pending: 'Ожидает', approve: 'Одобрить', emailUnverified: 'Почта не подтверждена',
     pendingTab: 'Ожидают ({n})', allTab: 'Все', noPending: 'Нет ожидающих одобрения'
@@ -286,11 +291,12 @@ const ru = {
     renewDue: 'Обычное: +1 цикл от текущей даты продления (без потери оплаченного)',
     renewNext: 'Следующее продление:', renewOk: 'Продлено, следующее {date}', confirm: 'Подтвердить',
     expiredTag: 'Истекло', soonTag: 'Скоро', uncategorized: 'Без категории', dragHint: 'Перетащите карточки для сортировки; заголовок категории — для порядка категорий',
+    moveUp: 'Вверх', moveDown: 'Вниз', moreIcons: 'Показать ещё иконки',
     deleteTitle: 'Удалить подписку', deletePwdTip: 'Во избежание ошибок введите пароль, чтобы удалить «{name}»', pwdPh: 'Пароль',
     remark: 'Заметка', remarkPh: 'напр. основной сервер / HK CN2 (на карточке)',
     ipLabel: 'IP-адрес (необязательно)', ipv4: 'IPv4', ipv6: 'IPv6'
   },
-  calendar: { title: 'Календарь продлений', noEvents: 'Нет продлений', today: 'Сегодня', more: '+{n} ещё' },
+  calendar: { title: 'Календарь продлений', noEvents: 'Нет продлений', today: 'Сегодня', prevMonth: 'Предыдущий месяц', nextMonth: 'Следующий месяц', more: '+{n} ещё' },
   reports: {
     title: 'Отчёты', overview: 'Обзор', insights: 'Аналитика', categoryDetail: 'По категориям', recentPayments: 'Платежи',
     ranking: 'Рейтинг', oneTime: 'Покупки', upcoming: 'Скоро', expired: 'Истёкшие',

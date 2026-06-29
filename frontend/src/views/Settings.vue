@@ -470,10 +470,10 @@ hr { border: none; border-top: 1px solid var(--border); margin: 16px 0; }
 .ok { color: var(--success); font-size: 13px; }
 .err { color: var(--danger); font-size: 13px; word-break: break-all; }
 .tg-head { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; }
-.switch { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-soft); cursor: pointer; width: auto; margin: 0; }
+.switch { display: flex; align-items: center; gap: 6px; min-height: 44px; font-size: 13px; color: var(--text-soft); cursor: pointer; width: auto; margin: 0; }
 .switch input { width: auto; }
 .theme-picker { display: flex; gap: 10px; margin: 6px 0 4px; }
-.th { width: 30px; height: 30px; border-radius: 50%; border: 2px solid var(--border); cursor: pointer; padding: 0; }
+.th { width: 40px; height: 40px; border-radius: 50%; border: 2px solid var(--border); cursor: pointer; padding: 0; }
 .th.on { border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-soft); }
 .rate-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 10px; }
 .rate { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; background: var(--surface-2);
@@ -484,5 +484,9 @@ hr { border: none; border-top: 1px solid var(--border); margin: 16px 0; }
 .sys-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px; }
 .si { display: flex; flex-direction: column; gap: 3px; padding: 12px; background: var(--surface-2); border-radius: 10px; font-size: 14px; }
 .si .muted { font-size: 12px; }
-@media (max-width: 720px) { .two { grid-template-columns: 1fr; } }
+@media (max-width: 720px) {
+  .two { grid-template-columns: 1fr; }
+  .tg-head .row { width: 100%; }
+  .tg-head .row .btn { flex: 1 1 calc(50% - 8px); }
+}
 </style>

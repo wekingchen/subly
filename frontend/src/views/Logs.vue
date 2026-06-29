@@ -67,7 +67,7 @@ onUnmounted(() => clearInterval(timer))
 <style scoped>
 .head { display: flex; justify-content: space-between; align-items: center; }
 h1 { margin-top: 0; }
-.switch { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-soft); cursor: pointer; }
+.switch { display: flex; align-items: center; gap: 8px; min-height: 44px; font-size: 13px; color: var(--text-soft); cursor: pointer; }
 .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--text-soft); }
 .dot.on { background: var(--success); box-shadow: 0 0 0 3px rgba(16,185,129,.25); animation: pulse 1.5s infinite; }
 @keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: .4 } }

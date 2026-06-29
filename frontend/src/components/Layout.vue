@@ -2,17 +2,17 @@
   <div class="shell">
     <!-- 移动端顶部栏 -->
     <header class="topbar">
-      <button class="hamb" @click="drawer = true" aria-label="menu">☰</button>
+      <button ref="hambRef" class="hamb" @click="openDrawer" :aria-expanded="drawer ? 'true' : 'false'" aria-controls="mobile-sidebar" :aria-label="t('nav.menu')">☰</button>
       <div class="brand sm">🔔 {{ t('app.title') }}</div>
-      <div style="width:38px"></div>
+      <div style="width:44px"></div>
     </header>
 
     <!-- 遮罩（移动端抽屉打开时） -->
     <div v-if="drawer" class="drawer-mask" @click="drawer = false"></div>
 
-    <aside class="sidebar" :class="{ open: drawer }">
+    <aside id="mobile-sidebar" class="sidebar" :class="{ open: drawer }" :role="drawer ? 'dialog' : undefined" :aria-modal="drawer ? 'true' : undefined" :aria-label="t('nav.menu')">
       <div class="brand">🔔 {{ t('app.title') }}</div>
-      <nav @click="drawer = false">
+      <nav @click="closeDrawer">
         <router-link v-for="it in navItems" :key="it.to" :to="it.to" class="nav-card">
           <span class="nav-ico" v-html="icon(it.key)"></span>
           <span class="nav-label">{{ t(it.label) }}</span>
@@ -37,7 +37,7 @@
 </template>
 
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { useAuth } from '../stores/auth'
@@ -47,6 +47,28 @@ const { t } = useI18n()
 const auth = useAuth()
 const router = useRouter()
 const drawer = ref(false)
+const hambRef = ref(null)
+
+function openDrawer() {
+  drawer.value = true
+}
+function closeDrawer() {
+  drawer.value = false
+}
+watch(drawer, (open) => {
+  document.body.classList.toggle('modal-open', open)
+  if (!open) nextTick(() => hambRef.value?.focus?.())
+})
+function onKey(e) {
+  if (e.key === 'Escape' && drawer.value) closeDrawer()
+}
+if (typeof window !== 'undefined') {
+  window.addEventListener('keydown', onKey)
+}
+onBeforeUnmount(() => {
+  if (typeof window !== 'undefined') window.removeEventListener('keydown', onKey)
+  document.body.classList.remove('modal-open')
+})
 
 const navItems = computed(() => {
   const base = [
@@ -118,13 +140,15 @@ nav { display: flex; flex-direction: column; gap: 7px; }
     position: sticky; top: 0; z-index: 45; background: var(--surface);
     border-bottom: 1px solid var(--border); padding: 10px 14px; }
   .topbar .brand.sm { margin: 0; font-size: 15px; }
-  .hamb { width: 38px; height: 38px; border: none; background: transparent;
-    font-size: 20px; color: var(--text); cursor: pointer; }
+  .hamb { width: 44px; height: 44px; border: none; background: transparent;
+    font-size: 20px; color: var(--text); cursor: pointer; border-radius: 10px; }
+  .topbar { padding-top: calc(10px + env(safe-area-inset-top)); padding-bottom: calc(10px + env(safe-area-inset-bottom)); }
   .drawer-mask { display: block; position: fixed; inset: 0; background: rgba(15,18,35,.45);
     z-index: 48; }
-  .sidebar { position: fixed; top: 0; left: 0; height: 100vh; width: 250px;
-    transform: translateX(-110%); transition: transform .25s ease; box-shadow: var(--shadow-lg); }
+  .sidebar { position: fixed; top: 0; left: 0; height: 100dvh; width: 250px;
+    transform: translateX(-110%); transition: transform .25s ease; box-shadow: var(--shadow-lg);
+    overflow-y: auto; -webkit-overflow-scrolling: touch; padding-bottom: calc(18px + env(safe-area-inset-bottom)); }
   .sidebar.open { transform: translateX(0); }
-  .content { padding: 16px 14px; }
+  .content { padding: 16px 14px; min-width: 0; }
 }
 </style>

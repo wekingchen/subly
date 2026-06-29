@@ -29,6 +29,10 @@
         <span class="cat-ico">{{ g.icon }}</span>
         <span class="cat-name">{{ g.name }}</span>
         <span class="cat-count">{{ g.items.length }}</span>
+        <span class="mobile-sort">
+          <button class="btn sm ghost" @click.stop="moveCat(g.key, -1)" :aria-label="t('sub.moveUp')">↑</button>
+          <button class="btn sm ghost" @click.stop="moveCat(g.key, 1)" :aria-label="t('sub.moveDown')">↓</button>
+        </span>
       </div>
 
       <div class="sub-grid">
@@ -90,6 +94,10 @@
             <button v-if="s.billing_type === 'recurring'" class="btn sm" @click="askRenew(s)">♻️ {{ t('sub.renew') }}</button>
             <button class="btn sm danger" @click="askDelete(s)">{{ t('sub.delete') }}</button>
           </div>
+          <div class="card-sort">
+            <button class="btn sm ghost" @click.stop="moveSub(g.key, s.id, -1)" :aria-label="t('sub.moveUp')">↑</button>
+            <button class="btn sm ghost" @click.stop="moveSub(g.key, s.id, 1)" :aria-label="t('sub.moveDown')">↓</button>
+          </div>
         </div>
       </div>
     </div>
@@ -97,6 +105,7 @@
     <!-- 续费确认弹窗 -->
     <div v-if="renewTarget" class="modal-mask" @click.self="renewTarget = null">
       <div class="modal" style="width:460px">
+        <button class="modal-x" :aria-label="t('common.close')" @click="renewTarget = null">×</button>
         <h3>♻️ {{ t('sub.renewTitle') }}</h3>
         <p style="font-size:14px;line-height:1.6">{{ t('sub.renewMsg', { name: renewTarget.name }) }}</p>
         <label class="opt" :class="{ on: renewMode === 'today' }">
@@ -113,7 +122,7 @@
             <div class="muted opt-d">→ {{ previewDue }}</div>
           </div>
         </label>
-        <div class="row" style="justify-content:flex-end;margin-top:16px">
+        <div class="modal-foot">
           <button class="btn ghost" @click="renewTarget = null">{{ t('sub.cancel') }}</button>
           <button class="btn" :disabled="renewing" @click="confirmRenew">{{ t('sub.confirm') }}</button>
         </div>
@@ -123,11 +132,12 @@
     <!-- 删除确认（需验证密码） -->
     <div v-if="delTarget" class="modal-mask" @click.self="delTarget = null">
       <div class="modal" style="width:420px">
+        <button class="modal-x" :aria-label="t('common.close')" @click="delTarget = null">×</button>
         <h3>🗑️ {{ t('sub.deleteTitle') }}</h3>
         <p style="font-size:14px;line-height:1.6">{{ t('sub.deletePwdTip', { name: delTarget.name }) }}</p>
         <input v-model="delPwd" type="password" :placeholder="t('sub.pwdPh')" @keyup.enter="confirmDelete" />
         <p v-if="delErr" class="err">{{ delErr }}</p>
-        <div class="row" style="justify-content:flex-end;margin-top:16px">
+        <div class="modal-foot">
           <button class="btn ghost" @click="delTarget = null">{{ t('sub.cancel') }}</button>
           <button class="btn danger" :disabled="deleting || !delPwd" @click="confirmDelete">{{ t('sub.delete') }}</button>
         </div>
@@ -137,6 +147,7 @@
     <!-- 添加/编辑订阅 -->
     <div v-if="showForm" class="modal-mask" @click.self="showForm = false">
       <div class="modal">
+        <button class="modal-x" :aria-label="t('common.close')" @click="showForm = false">×</button>
         <h3>{{ form.id ? t('sub.edit') : t('sub.add') }}</h3>
 
         <div class="block">
@@ -149,9 +160,9 @@
               <label>{{ t('sub.name') }}</label>
               <input v-model="form.name" @input="onNameInput" autocomplete="off" />
               <div v-if="suggestions.length" class="suggest">
-                <div v-for="s in suggestions" :key="s.slug" class="suggest-i" @click="pickService(s)">
+                <button type="button" v-for="s in suggestions" :key="s.slug" class="suggest-i" @click="pickService(s)">
                   <ServiceIcon :src="s.icon" :name="s.name" class="ico" loading="lazy" decoding="async" /> {{ s.name }}
-                </div>
+                </button>
               </div>
             </div>
             <div style="flex:1">
@@ -188,11 +199,12 @@
               </label>
             </div>
             <div v-if="showIconLibrary" class="lib-grid">
-              <ServiceIcon v-for="it in visibleIconLib" :key="it.slug" :src="it.icon" :name="it.name" :title="it.name"
-                           class="lib-ico" loading="lazy" decoding="async" @click="form.icon = it.icon" />
+              <button type="button" v-for="it in visibleIconLib" :key="it.slug" class="lib-ico-btn" :title="it.name" @click="form.icon = it.icon">
+                <ServiceIcon :src="it.icon" :name="it.name" class="lib-ico" loading="lazy" decoding="async" />
+              </button>
             </div>
             <div v-if="showIconLibrary && visibleIconLib.length < iconLib.length" class="row" style="justify-content:center;margin-top:8px">
-              <button class="btn ghost sm" @click="showMoreIcons">显示更多图标</button>
+              <button class="btn ghost sm" @click="showMoreIcons">{{ t('sub.moreIcons') }}</button>
             </div>
           </details>
         </div>
@@ -326,7 +338,7 @@
         </div>
 
         <p v-if="formErr" class="err">{{ formErr }}</p>
-        <div class="row" style="justify-content:flex-end;margin-top:16px">
+        <div class="modal-foot">
           <button class="btn ghost" @click="showForm = false">{{ t('sub.cancel') }}</button>
           <button class="btn" @click="save">{{ t('sub.save') }}</button>
         </div>
@@ -365,7 +377,7 @@
 </template>
 
 <script setup>
-import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import api from '../api'
 import ServiceIcon from '../components/ServiceIcon.vue'
@@ -404,6 +416,12 @@ const delTarget = ref(null)
 const delPwd = ref('')
 const delErr = ref('')
 const deleting = ref(false)
+
+watch([showForm, renewTarget, delTarget, showBrowser], () => {
+  const open = showForm.value || renewTarget.value || delTarget.value || showBrowser.value
+  document.body.classList.toggle('modal-open', !!open)
+})
+onBeforeUnmount(() => document.body.classList.remove('modal-open'))
 
 const toasts = ref([])
 let toastId = 0
@@ -549,6 +567,27 @@ let dragCard = null
 const dragOverCat = ref(null)
 const dragOverSub = ref(null)
 function clearDrag() { dragCatKey = null; dragCard = null; dragOverCat.value = null; dragOverSub.value = null }
+
+async function moveCat(key, dir) {
+  const arr = [...catOrder.value]
+  const from = arr.indexOf(key)
+  const to = from + dir
+  if (from < 0 || to < 0 || to >= arr.length) return
+  arr.splice(to, 0, arr.splice(from, 1)[0])
+  catOrder.value = arr
+  const ids = arr.filter((k) => k !== NONE).map(Number)
+  try { await auth.updateMe({ category_order: ids }) } catch { /* ignore */ }
+}
+
+async function moveSub(catKey, id, dir) {
+  const arr = [...(orderMap[catKey] || [])]
+  const from = arr.indexOf(id)
+  const to = from + dir
+  if (from < 0 || to < 0 || to >= arr.length) return
+  arr.splice(to, 0, arr.splice(from, 1)[0])
+  orderMap[catKey] = arr
+  try { await api.post('/api/subscriptions/reorder', { ordered_ids: arr }) } catch { /* ignore */ }
+}
 
 function onCatDragStart(key, e) {
   // 仅当不是从卡片发起时才作为分类拖拽
@@ -812,6 +851,7 @@ h1 { margin-top: 0; }
 .cat-name { font-weight: 700; font-size: 16px; }
 .cat-count { background: var(--surface-2); color: var(--text-soft); border-radius: 20px;
   padding: 1px 9px; font-size: 12px; }
+.mobile-sort, .card-sort { display: none; gap: 6px; }
 
 /* 放大后的订阅卡片 */
 .sub-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 16px; }
@@ -873,12 +913,14 @@ h1 { margin-top: 0; }
 .ico-lg.emoji { display: flex; align-items: center; justify-content: center; font-size: 24px; }
 .suggest { position: absolute; z-index: 5; left: 0; right: 0; background: var(--surface);
   border: 1px solid var(--border); border-radius: 8px; box-shadow: var(--shadow); margin-top: 2px; }
-.suggest-i { display: flex; align-items: center; gap: 8px; padding: 7px 10px; cursor: pointer; font-size: 14px; }
+.suggest-i { display: flex; align-items: center; gap: 8px; padding: 7px 10px; cursor: pointer; font-size: 14px;
+  width: 100%; background: transparent; border: none; text-align: left; color: var(--text); }
 .suggest-i:hover { background: var(--primary-soft); }
 .icon-lib summary { cursor: pointer; font-size: 13px; color: var(--text-soft); }
 .lib-grid { display: grid; grid-template-columns: repeat(auto-fill, 34px); gap: 8px; max-height: 140px; overflow: auto; }
-.lib-ico { width: 30px; height: 30px; border-radius: 6px; padding: 3px; border: 1px solid var(--border); cursor: pointer; object-fit: contain; }
-.lib-ico:hover { border-color: var(--primary); }
+.lib-ico-btn { width: 34px; height: 34px; padding: 0; border: none; background: transparent; cursor: pointer; }
+.lib-ico { width: 30px; height: 30px; border-radius: 6px; padding: 3px; border: 1px solid var(--border); object-fit: contain; }
+.lib-ico-btn:hover .lib-ico { border-color: var(--primary); }
 .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
 .chip { background: var(--primary-soft); color: var(--primary); padding: 3px 8px; border-radius: 16px; font-size: 13px; }
 .radio-row { gap: 18px; }
@@ -900,5 +942,20 @@ h1 { margin-top: 0; }
 @media (max-width: 720px) {
   .sub-grid { grid-template-columns: 1fr; }
   .sc-name { font-size: 16px; }
+  .drag-hint { display: none; }
+  .cat-head { cursor: default; flex-wrap: wrap; }
+  .cat-head .grip { display: none; }
+  .mobile-sort { display: inline-flex; margin-left: auto; }
+  .sub-card { cursor: default; }
+  .sc-acts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .sc-acts .btn { min-height: 44px; }
+  .card-sort { display: grid; grid-template-columns: repeat(2, 1fr); margin-top: 8px; }
+  .icon-pick { width: 100%; justify-content: center; align-items: center; }
+  .ico-lg { width: 56px; height: 56px; }
+  .lib-grid { grid-template-columns: repeat(auto-fill, minmax(44px, 1fr)); max-height: 190px; }
+  .lib-ico-btn { width: 44px; height: 44px; justify-self: center; }
+  .browser-group-t { min-height: 44px; padding: 6px 0; }
+  .svc { min-height: 44px; }
 }
 </style>
+

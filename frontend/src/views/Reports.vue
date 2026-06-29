@@ -69,23 +69,26 @@
     <div v-else-if="active === 'insights'">
       <div class="card sect">
         <h3>🏆 {{ t('reports.ranking') }}</h3>
-        <table>
-          <thead><tr><th>#</th><th>{{ t('sub.name') }}</th><th>{{ t('reports.category') }}</th><th>{{ t('reports.monthly') }}</th></tr></thead>
-          <tbody>
-            <tr v-for="(s, i) in ranking" :key="s.id">
-              <td class="rk">{{ i + 1 }}</td>
-              <td><span class="nm"><ServiceIcon :src="s.icon" :name="s.name" :fallback="emojiOf(s)" class="nm-ico" /><span class="nm-txt"><b>{{ s.name }}</b><i v-if="s.plan" class="nm-sub">{{ s.plan }}</i><i v-if="s.remark" class="nm-remark">📝 {{ s.remark }}</i></span></span></td>
-              <td class="muted">{{ catName(s.category_id) }}</td>
-              <td>{{ cur }} {{ (s.amount_in_base || 0).toFixed(2) }}</td>
-            </tr>
-            <tr v-if="!ranking.length"><td colspan="4" class="muted">{{ t('reports.empty') }}</td></tr>
-          </tbody>
-        </table>
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr><th>#</th><th>{{ t('sub.name') }}</th><th>{{ t('reports.category') }}</th><th>{{ t('reports.monthly') }}</th></tr></thead>
+            <tbody>
+              <tr v-for="(s, i) in ranking" :key="s.id">
+                <td class="rk">{{ i + 1 }}</td>
+                <td><span class="nm"><ServiceIcon :src="s.icon" :name="s.name" :fallback="emojiOf(s)" class="nm-ico" /><span class="nm-txt"><b>{{ s.name }}</b><i v-if="s.plan" class="nm-sub">{{ s.plan }}</i><i v-if="s.remark" class="nm-remark">📝 {{ s.remark }}</i></span></span></td>
+                <td class="muted">{{ catName(s.category_id) }}</td>
+                <td>{{ cur }} {{ (s.amount_in_base || 0).toFixed(2) }}</td>
+              </tr>
+              <tr v-if="!ranking.length"><td colspan="4" class="muted">{{ t('reports.empty') }}</td></tr>
+            </tbody>
+          </table>
+        </div>
       </div>
 
       <div class="grid two">
         <div class="card sect">
           <h3>⏰ {{ t('reports.upcoming') }}</h3>
+          <div class="tbl-wrap">
           <table>
             <tbody>
               <tr v-for="s in upcoming" :key="s.id">
@@ -96,9 +99,11 @@
               <tr v-if="!upcoming.length"><td colspan="3" class="muted">{{ t('reports.empty') }}</td></tr>
             </tbody>
           </table>
+          </div>
         </div>
         <div class="card sect">
           <h3>⚠️ {{ t('reports.expired') }}</h3>
+          <div class="tbl-wrap">
           <table>
             <tbody>
               <tr v-for="s in expired" :key="s.id">
@@ -109,11 +114,13 @@
               <tr v-if="!expired.length"><td colspan="3" class="muted">{{ t('reports.empty') }}</td></tr>
             </tbody>
           </table>
+          </div>
         </div>
       </div>
 
       <div class="card sect">
         <h3>♾️ {{ t('reports.oneTime') }}</h3>
+        <div class="tbl-wrap">
         <table>
           <thead><tr><th>{{ t('sub.name') }}</th><th>{{ t('reports.category') }}</th><th>{{ t('sub.amount') }}</th><th>{{ t('sub.startDate') }}</th></tr></thead>
           <tbody>
@@ -126,6 +133,7 @@
             <tr v-if="!oneTime.length"><td colspan="4" class="muted">{{ t('reports.empty') }}</td></tr>
           </tbody>
         </table>
+        </div>
       </div>
     </div>
 
@@ -136,6 +144,7 @@
           <h3>🔁 {{ t('reports.recurringSubs') }}
             <span class="muted total">{{ cur }} {{ (detail.recurring_monthly_total || 0).toFixed(2) }} / {{ t('reports.monthly') }}</span>
           </h3>
+          <div class="tbl-wrap">
           <table>
             <thead><tr><th>{{ t('reports.category') }}</th><th>{{ t('reports.count') }}</th><th>{{ t('reports.monthly') }}</th></tr></thead>
             <tbody>
@@ -145,11 +154,13 @@
               <tr v-if="!detail.recurring?.length"><td colspan="3" class="muted">{{ t('reports.empty') }}</td></tr>
             </tbody>
           </table>
+          </div>
         </div>
         <div class="card sect">
           <h3>♾️ {{ t('reports.permanentBuy') }}
             <span class="muted total">{{ cur }} {{ (detail.one_time_total || 0).toFixed(2) }}</span>
           </h3>
+          <div class="tbl-wrap">
           <table>
             <thead><tr><th>{{ t('reports.category') }}</th><th>{{ t('reports.count') }}</th><th>{{ t('reports.amount') }}</th></tr></thead>
             <tbody>
@@ -159,6 +170,7 @@
               <tr v-if="!detail.one_time?.length"><td colspan="3" class="muted">{{ t('reports.empty') }}</td></tr>
             </tbody>
           </table>
+          </div>
         </div>
       </div>
     </div>
@@ -339,7 +351,13 @@ h1 { margin-top: 0; }
 
 @media (max-width: 720px) {
   .kpis { grid-template-columns: 1fr 1fr; }
+  .kpi-v { font-size: 20px; }
   .two { grid-template-columns: 1fr; }
-  .bar-row { grid-template-columns: 100px 1fr 90px; }
+}
+@media (max-width: 480px) {
+  .bar-row { grid-template-columns: 1fr auto; gap: 6px; }
+  .bar-track { grid-column: 1 / -1; }
+  .bar-val { text-align: right; }
 }
 </style>
+
