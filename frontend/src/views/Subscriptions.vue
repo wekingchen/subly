@@ -43,6 +43,7 @@
              @dragover.prevent.stop="onCardDragOver(g.key, s.id)"
              @dragend="clearDrag"
              @drop.stop="onCardDrop(g.key, s.id)">
+          <div class="status-strip" :class="statusOf(s)"></div>
           <div class="sc-head">
             <ServiceIcon :src="s.icon" :name="s.name" :fallback="s.icon || '🔖'"
                          class="sc-ico" loading="lazy" decoding="async" />
@@ -857,6 +858,11 @@ h1 { margin-top: 0; }
 .sub-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 16px; }
 .sub-card { padding: 18px; cursor: grab; position: relative; overflow: hidden;
   transition: transform .25s cubic-bezier(.2,.8,.2,1), box-shadow .25s ease, border-color .2s ease; }
+/* 续费状态色条：safe / soon / overdue */
+.status-strip { position: absolute; left: 0; top: 0; bottom: 0; width: 4px; }
+.status-strip.ok { background: var(--success); opacity: .35; }
+.status-strip.soon { background: var(--warning); opacity: .85; }
+.status-strip.overdue { background: var(--danger); }
 /* 悬停动感：上浮 + 轻微放大 + 渐变高光描边 + 顶部光带扫过 */
 .sub-card::after { content: ''; position: absolute; top: 0; left: -60%; width: 40%; height: 100%;
   background: linear-gradient(100deg, transparent, color-mix(in srgb, var(--primary) 14%, transparent), transparent);

@@ -30,7 +30,9 @@ const zh = {
     monthSpend: '本月支出', yearSpend: '年度支出', active: '生效订阅', upcoming: '即将到期', recent: '最近订阅',
     none: '暂无数据', perMonth: '/月', daysLeft: '剩 {n} 天', today: '今天到期',
     overdue: '已过期', byCategory: '分类占比', avgMonth: '平均月支出', expiringSoon: '即将到期', viewAll: '查看全部',
-    greeting: '你好，{name} 👋', subtitle: '这是你的订阅总览', catOverview: '分类总览（全部订阅）'
+    greeting: '你好，{name} 👋', subtitle: '这是你的订阅总览', catOverview: '分类总览（全部订阅）',
+    radarTitle: '续费雷达', radarHero: '未来 30 天有 {n} 项续费，预计 {amount}',
+    radarOverdue: '已过期', radar3: '3 天内', radar7: '7 天内', radar30: '30 天内'
   },
   sub: {
     add: '添加订阅', edit: '编辑订阅', name: '名称', amount: '金额', currency: '货币',
@@ -149,7 +151,9 @@ const en = {
     monthSpend: 'This Month', yearSpend: 'This Year', active: 'Active', upcoming: 'Upcoming', recent: 'Recent',
     none: 'No data', perMonth: '/mo', daysLeft: '{n} days left', today: 'Due today',
     overdue: 'Overdue', byCategory: 'By category', avgMonth: 'Avg / month', expiringSoon: 'Expiring soon', viewAll: 'View all',
-    greeting: 'Hi, {name} 👋', subtitle: 'Here is your subscription overview', catOverview: 'All subscriptions by category'
+    greeting: 'Hi, {name} 👋', subtitle: 'Here is your subscription overview', catOverview: 'All subscriptions by category',
+    radarTitle: 'Renewal Radar', radarHero: '{n} renewals in the next 30 days, estimated {amount}',
+    radarOverdue: 'Overdue', radar3: 'Within 3 days', radar7: 'Within 7 days', radar30: 'Within 30 days'
   },
   sub: {
     add: 'Add', edit: 'Edit', name: 'Name', amount: 'Amount', currency: 'Currency',
@@ -268,7 +272,9 @@ const ru = {
     monthSpend: 'За месяц', yearSpend: 'За год', active: 'Активные', upcoming: 'Скоро', recent: 'Недавние',
     none: 'Нет данных', perMonth: '/мес', daysLeft: 'осталось {n} дн.', today: 'Сегодня',
     overdue: 'Просрочено', byCategory: 'По категориям', avgMonth: 'Ср. в месяц', expiringSoon: 'Скоро истекают', viewAll: 'Все',
-    greeting: 'Привет, {name} 👋', subtitle: 'Обзор ваших подписок', catOverview: 'Все подписки по категориям'
+    greeting: 'Привет, {name} 👋', subtitle: 'Обзор ваших подписок', catOverview: 'Все подписки по категориям',
+    radarTitle: 'Радар продлений', radarHero: 'В ближайшие 30 дней {n} продлений, ≈ {amount}',
+    radarOverdue: 'Просрочено', radar3: 'До 3 дней', radar7: 'До 7 дней', radar30: 'До 30 дней'
   },
   sub: {
     add: 'Добавить', edit: 'Изменить', name: 'Название', amount: 'Сумма', currency: 'Валюта',

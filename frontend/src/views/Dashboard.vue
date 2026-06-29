@@ -6,9 +6,25 @@
       <div class="hero card">
         <div>
           <div class="hi">{{ t('dashboard.greeting', { name: auth.user?.username || '' }) }}</div>
-          <div class="sub muted">{{ t('dashboard.subtitle') }}</div>
+          <div class="sub muted">{{ radarHero }}</div>
         </div>
         <router-link to="/subscriptions" class="btn">+ {{ t('sub.add') }}</router-link>
+      </div>
+
+      <!-- 续费雷达 -->
+      <div class="card radar" v-if="radarTotal">
+        <div class="radar-head">
+          <h3>{{ t('dashboard.radarTitle') }}</h3>
+          <router-link to="/calendar" class="more">{{ t('dashboard.viewAll') }} →</router-link>
+        </div>
+        <div class="radar-bars">
+          <router-link v-for="b in radarBars" :key="b.key" :to="b.to" class="radar-bar" :class="b.key">
+            <span class="rb-count">{{ b.count }}</span>
+            <span class="rb-label">{{ b.label }}</span>
+            <span class="rb-amt muted">{{ fmt(b.amount) }}</span>
+            <span class="rb-track"><span class="rb-fill" :style="{ width: b.fill + '%' }"></span></span>
+          </router-link>
+        </div>
       </div>
 
       <!-- KPI -->
@@ -143,6 +159,40 @@ function dueClass(s) {
   const d = daysLeft(s)
   return d !== null && d <= 3 ? 'warn' : ''
 }
+function radarBucket(s) {
+  if (s.billing_type !== 'recurring' || !s.next_renewal_date || s.show_in_calendar === false) return null
+  const d = daysLeft(s)
+  if (d === null || d > 30) return null
+  if (d < 0) return 'overdue'
+  if (d <= 3) return 'd3'
+  if (d <= 7) return 'd7'
+  return 'd30'
+}
+const radarRaw = computed(() => {
+  const base = {
+    overdue: { key: 'overdue', label: t('dashboard.radarOverdue'), count: 0, amount: 0, to: '/reports' },
+    d3: { key: 'd3', label: t('dashboard.radar3'), count: 0, amount: 0, to: '/calendar' },
+    d7: { key: 'd7', label: t('dashboard.radar7'), count: 0, amount: 0, to: '/calendar' },
+    d30: { key: 'd30', label: t('dashboard.radar30'), count: 0, amount: 0, to: '/calendar' }
+  }
+  for (const s of allSubs.value) {
+    const key = radarBucket(s)
+    if (!key) continue
+    base[key].count += 1
+    base[key].amount += Number(s.amount_in_base || 0)
+  }
+  return Object.values(base)
+})
+const radarTotal = computed(() => radarRaw.value.reduce((n, b) => n + b.count, 0))
+const radarBars = computed(() => {
+  const max = Math.max(1, ...radarRaw.value.map((b) => b.count))
+  return radarRaw.value.map((b) => ({ ...b, fill: Math.round((b.count / max) * 100) }))
+})
+const radarHero = computed(() => {
+  if (!radarTotal.value) return t('dashboard.subtitle')
+  const amount = radarRaw.value.reduce((n, b) => n + b.amount, 0)
+  return t('dashboard.radarHero', { n: radarTotal.value, amount: fmt(amount) })
+})
 function statusOf(s) {
   if (s.billing_type !== 'recurring' || !s.next_renewal_date) return 'ok'
   const d = daysLeft(s)
@@ -212,6 +262,29 @@ onMounted(async () => {
 .hi { font-size: 20px; font-weight: 700; }
 .sub { font-size: 14px; margin-top: 2px; }
 
+/* 续费雷达 */
+.radar { margin-bottom: 16px; }
+.radar-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+.radar-head h3 { margin: 0; }
+.radar-bars { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+.radar-bar { display: flex; flex-direction: column; gap: 4px; padding: 12px; border: 1px solid var(--border);
+  border-radius: 12px; background: var(--surface-2); text-decoration: none; color: var(--text); }
+.rb-count { font-size: 26px; font-weight: 800; letter-spacing: -.02em; line-height: 1; }
+.rb-label { font-size: 12px; font-weight: 600; color: var(--text-soft); }
+.rb-amt { font-size: 12px; }
+.rb-track { height: 6px; border-radius: 999px; background: color-mix(in srgb, var(--border) 60%, transparent); overflow: hidden; margin-top: 4px; }
+.rb-fill { display: block; height: 100%; border-radius: 999px; }
+.radar-bar.overdue { border-color: color-mix(in srgb, var(--danger) 50%, var(--border)); }
+.radar-bar.overdue .rb-count { color: var(--danger); }
+.radar-bar.overdue .rb-fill { background: var(--danger); }
+.radar-bar.d3 { border-color: color-mix(in srgb, var(--warning) 50%, var(--border)); }
+.radar-bar.d3 .rb-count { color: var(--warning); }
+.radar-bar.d3 .rb-fill { background: var(--warning); }
+.radar-bar.d7 .rb-count { color: var(--primary); }
+.radar-bar.d7 .rb-fill { background: var(--primary); }
+.radar-bar.d30 .rb-count { color: var(--text-soft); }
+.radar-bar.d30 .rb-fill { background: color-mix(in srgb, var(--primary) 40%, var(--border)); }
+
 .stats { grid-template-columns: repeat(4, 1fr); margin-bottom: 16px; }
 .stat { display: flex; align-items: center; gap: 14px; }
 .stat .badge { width: 48px; height: 48px; border-radius: 14px; display: flex; align-items: center;
@@ -278,6 +351,7 @@ h3 { margin-top: 0; }
 @media (max-width: 980px) { .stats { grid-template-columns: 1fr 1fr; } .main { grid-template-columns: 1fr; } }
 @media (max-width: 720px) {
   .stats { grid-template-columns: 1fr 1fr; }
+  .radar-bars { grid-template-columns: 1fr 1fr; }
   .hero { flex-wrap: wrap; }
   .hero .btn { margin-top: 8px; }
   .stat .badge { width: 40px; height: 40px; }
