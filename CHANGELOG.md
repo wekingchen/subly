@@ -9,12 +9,18 @@
 ## [Unreleased]
 
 ### Added
+- 新增 Bark 推送 TTL 设置：用户可在「设置 → Bark 配置」填写非负整数秒数，测试推送与定时提醒都会透传；留空继续使用 Bark 默认值，`0` 会被保留并显式发送
+- Docker 镜像发布工作流支持手动运行时输入版本号（如 `1.0.0`），并校验 Docker tag 格式后同时发布 `latest` 与指定版本
 - 新增家庭共享功能（开发中）
 - 计划添加用户导入/导出功能
 
 ### Changed
+- 内置图标库改为多来源 favicon 下载：优先直连站点 `favicon.ico`、首页 icon link，再尝试公共 provider，并支持 PNG / ICO / WEBP / JPEG 多格式缓存
+- 图标下载新增可配置开关与限制：`ICON_FETCH_ENABLED`、`ICON_FETCH_GOOGLE_ENABLED`、`ICON_FETCH_TIMEOUT_S`、`ICON_FETCH_MAX_BYTES`
 
 ### Fixed
+- 修复冷缓存、Google favicon 不可达或触发限流 / 熔断时，图标库返回透明 1x1 PNG 导致整库视觉空白的问题；失败时现在会显示稳定颜色和首字母的可见 fallback
+- 前端订阅页、仪表盘、日历和报表统一使用 `ServiceIcon`，可在图片加载失败或旧透明占位图场景下自动切换为可见 fallback
 
 ### Removed
 
@@ -148,4 +154,4 @@
 
 ---
 
-**最后更新**：2026-06-19
+**最后更新**：2026-06-29
