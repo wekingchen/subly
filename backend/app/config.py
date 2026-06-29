@@ -20,6 +20,12 @@ class Settings(BaseSettings):
     # 超过该耗时的请求额外记一条 slow_request（WARNING），便于定位卡顿
     slow_request_ms: int = 1000
 
+    # 图标库：失败时有可见 fallback；真实 favicon 下载可按部署环境调整
+    icon_fetch_enabled: bool = True
+    icon_fetch_google_enabled: bool = True
+    icon_fetch_timeout_s: float = 2.0
+    icon_fetch_max_bytes: int = 262144
+
     # Telegram
     telegram_bot_token: str = ""
 

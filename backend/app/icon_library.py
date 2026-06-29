@@ -256,9 +256,16 @@ def website_for_name(name: str) -> str | None:
     return None
 
 
-def domain_for_slug(slug: str) -> str | None:
+def service_for_slug(slug: str) -> dict | None:
+    """按图标 slug 查找服务信息，供后端下载和 fallback 使用。"""
     target = slug.replace(".png", "")
-    for _, domain, _ in SERVICES:
-        if _slug(domain) == target:
-            return domain
+    for name, domain, cat in SERVICES:
+        cur = _slug(domain)
+        if cur == target:
+            return {"name": name, "domain": domain, "category": cat, "slug": cur}
     return None
+
+
+def domain_for_slug(slug: str) -> str | None:
+    service = service_for_slug(slug)
+    return service["domain"] if service else None

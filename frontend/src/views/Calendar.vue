@@ -22,8 +22,7 @@
             <div v-for="ev in cell.events.slice(0, 3)" :key="ev.id" class="ev"
                  :style="{ '--c': evColor(ev) }" :title="ev.name">
               <span class="ev-dot"></span>
-              <img v-if="isImg(ev.icon)" :src="ev.icon" class="ev-ico" />
-              <span v-else class="ev-emoji">{{ emojiOf(ev) }}</span>
+              <ServiceIcon :src="ev.icon" :name="ev.name" :fallback="emojiOf(ev)" class="ev-ico" />
               <span class="ev-name">{{ ev.name }}</span>
             </div>
             <div v-if="cell.events.length > 3" class="ev more">
@@ -40,6 +39,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import api from '../api'
+import ServiceIcon from '../components/ServiceIcon.vue'
 
 const { t, locale } = useI18n()
 const now = new Date()
