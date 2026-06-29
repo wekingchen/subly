@@ -1,0 +1,52 @@
+name: Build and Publish Docker image
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'v*' ]
+  workflow_dispatch:
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    # 默认 GITHUB_TOKEN 没有 packages 写权限，推送到 GHCR 会被拒（denied），
+    # 导致 Build and push 步骤失败。这里显式授予 packages:write。
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: |
+            ${{ secrets.DOCKERHUB_USERNAME }}/subly:latest
+            ${{ secrets.DOCKERHUB_USERNAME }}/subly:${{ github.ref_name }}
+            ghcr.io/${{ github.repository_owner }}/subly:latest
+            ghcr.io/${{ github.repository_owner }}/subly:${{ github.ref_name }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

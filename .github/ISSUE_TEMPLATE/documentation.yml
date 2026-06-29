@@ -1,0 +1,44 @@
+name: 📖 Documentation
+description: 报告文档问题或建议改进
+title: "[DOCS] "
+labels: ["documentation"]
+assignees: []
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢帮助我们改进文档！
+
+  - type: textarea
+    id: description
+    attributes:
+      label: 问题描述
+      description: 文档中有什么问题或不清楚的地方？
+      placeholder: "例如：安装步骤中缺少了某个重要配置..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: location
+    attributes:
+      label: 文档位置
+      description: 指出文档在哪里（文件名 + 位置）
+      placeholder: "例如：README.md 的 Docker 部署章节..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: suggestion
+    attributes:
+      label: 改进建议
+      description: 你建议如何改进？
+      placeholder: "例如：添加更详细的配置示例..."
+
+  - type: checkboxes
+    id: checkboxes
+    attributes:
+      label: 检查清单
+      options:
+        - label: 这是关于文档的问题
+          required: true
