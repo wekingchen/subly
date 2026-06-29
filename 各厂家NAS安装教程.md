@@ -29,6 +29,8 @@
 | `ICON_FETCH_GOOGLE_ENABLED` | 是否启用 Google favicon provider，网络不可达时可关 | `true` |
 | `ICON_FETCH_TIMEOUT_S` | 单次图标下载超时秒数 | `2.0` |
 | `ICON_FETCH_MAX_BYTES` | 单个图标最大下载字节数 | `262144` |
+| `ICON_FETCH_CONCURRENCY` | 冷缓存时 favicon 下载并发数 | `6` |
+| `ICON_FETCH_SVG_ENABLED` | 是否接受并消毒缓存远端 SVG favicon | `true` |
 
 > Bark 推送无需环境变量，登录后在网页「设置」里填 Device Key 即可；TTL 可留空使用 Bark 默认值，也可填写非负整数秒数。Telegram 也可以留空在网页里配。
 

@@ -15,11 +15,13 @@
 - 计划添加用户导入/导出功能
 
 ### Changed
-- 内置图标库改为多来源 favicon 下载：优先直连站点 `favicon.ico`、首页 icon link，再尝试公共 provider，并支持 PNG / ICO / WEBP / JPEG 多格式缓存
-- 图标下载新增可配置开关与限制：`ICON_FETCH_ENABLED`、`ICON_FETCH_GOOGLE_ENABLED`、`ICON_FETCH_TIMEOUT_S`、`ICON_FETCH_MAX_BYTES`
+- 内置图标库改为多来源 favicon 下载：优先直连站点 `favicon.ico`、首页 icon link，再尝试公共 provider，并支持 PNG / ICO / WEBP / JPEG / SVG 多格式缓存
+- 图标下载新增可配置开关与限制：`ICON_FETCH_ENABLED`、`ICON_FETCH_GOOGLE_ENABLED`、`ICON_FETCH_TIMEOUT_S`、`ICON_FETCH_MAX_BYTES`、`ICON_FETCH_CONCURRENCY`、`ICON_FETCH_SVG_ENABLED`
 
 ### Fixed
 - 修复冷缓存、Google favicon 不可达或触发限流 / 熔断时，图标库返回透明 1x1 PNG 导致整库视觉空白的问题；失败时现在会显示稳定颜色和首字母的可见 fallback
+- 修复图标库冷启动时一次打开多个图标、因下载并发被限流而大面积显示首字母的问题：并发上限提升为可配置（默认 6），限流时短暂排队等待而非立即返回 fallback，且限流 fallback 标记为 `no-store` 不被浏览器缓存
+- 远端 SVG favicon 在缓存前严格消毒（移除脚本 / 事件属性 / 外链 / data URL），命中现代品牌站点的高清 SVG 图标
 - 前端订阅页、仪表盘、日历和报表统一使用 `ServiceIcon`，可在图片加载失败或旧透明占位图场景下自动切换为可见 fallback
 
 ### Removed

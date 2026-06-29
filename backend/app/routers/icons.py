@@ -111,7 +111,8 @@ _SVG_NS = "http://www.w3.org/2000/svg"
 _FAIL_TTL = 300                     # 单个 slug 失败后 5 分钟内不再重试
 _failed: dict[str, float] = {}       # slug -> 失败时间戳
 _lock = threading.Lock()
-_FETCH_SEMAPHORE = threading.BoundedSemaphore(2)  # 全局最多并发下载 2 个 favicon
+_FETCH_CONCURRENCY = min(16, max(2, int(settings.icon_fetch_concurrency or 6)))
+_FETCH_SEMAPHORE = threading.BoundedSemaphore(_FETCH_CONCURRENCY)  # 全局 favicon 下载并发上限
 
 # provider 级临时跳过：某个公共 provider（如 google/duckduckgo）短时间连续网络错误，
 # 则单独跳过该 provider 一段时间，但不影响直连站点（direct/html）。
@@ -650,8 +651,12 @@ def library_icon(slug: str):
     if _failed_recently(base) or _breaker_open() or not settings.icon_fetch_enabled:
         return _fallback_svg_response(base, label)
 
-    if not _FETCH_SEMAPHORE.acquire(blocking=False):
-        return _fallback_svg_response(base, label, cache_seconds=60)
+    wait_s = max(2.0, min(8.0, float(settings.icon_fetch_timeout_s or 2.0) * 3))
+    if not _FETCH_SEMAPHORE.acquire(timeout=wait_s):
+        response = _fallback_svg_response(base, label, cache_seconds=5)
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["X-Subly-Icon"] = "rate-limited"
+        return response
     try:
         fetched = _fetch_library_icon(base, domain)
     finally:

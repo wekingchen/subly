@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     icon_fetch_timeout_s: float = 2.0
     icon_fetch_max_bytes: int = 262144
     icon_fetch_svg_enabled: bool = True        # 是否接受并消毒缓存远端 SVG favicon
+    icon_fetch_concurrency: int = 6            # 冷缓存时最多并发下载 favicon 数量
 
     # Telegram
     telegram_bot_token: str = ""

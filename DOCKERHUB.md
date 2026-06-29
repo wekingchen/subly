@@ -64,6 +64,8 @@ volumes:
 | `ICON_FETCH_GOOGLE_ENABLED` | Enable Google favicon provider. Disable it if your network cannot reach Google. Default `true`. |
 | `ICON_FETCH_TIMEOUT_S` | Per-attempt icon fetch timeout in seconds. Default `2.0`. |
 | `ICON_FETCH_MAX_BYTES` | Maximum icon download size in bytes. Default `262144`. |
+| `ICON_FETCH_CONCURRENCY` | Cold-cache favicon download concurrency. Default `6`. |
+| `ICON_FETCH_SVG_ENABLED` | Accept and sanitize remote SVG favicons. Default `true`. |
 
 Bark needs no env var — configure the Device Key and optional non-negative TTL seconds in the web Settings page.
 
