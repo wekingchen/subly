@@ -101,7 +101,7 @@ def refresh_rates(user: User = Depends(get_current_user), db: Session = Depends(
     try:
         count = exchange.refresh_rates(db)
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"汇率刷新失败：{e}")
+        raise HTTPException(502, f"汇率刷新失败：{exchange.safe_error_message(e)}")
     return {"ok": True, "updated": count, "at": datetime.utcnow()}
 
 

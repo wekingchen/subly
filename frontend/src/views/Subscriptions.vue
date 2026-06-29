@@ -40,7 +40,7 @@
              @dragend="clearDrag"
              @drop.stop="onCardDrop(g.key, s.id)">
           <div class="sc-head">
-            <img v-if="isImg(s.icon)" :src="s.icon" class="sc-ico" />
+            <img v-if="isImg(s.icon)" :src="s.icon" class="sc-ico" loading="lazy" decoding="async" />
             <span v-else class="sc-ico emoji">{{ s.icon || '🔖' }}</span>
             <div class="sc-title">
               <div class="sc-name">{{ s.name }}</div>
@@ -151,7 +151,7 @@
               <input v-model="form.name" @input="onNameInput" autocomplete="off" />
               <div v-if="suggestions.length" class="suggest">
                 <div v-for="s in suggestions" :key="s.slug" class="suggest-i" @click="pickService(s)">
-                  <img :src="s.icon" class="ico" /> {{ s.name }}
+                  <img :src="s.icon" class="ico" loading="lazy" decoding="async" /> {{ s.name }}
                 </div>
               </div>
             </div>
@@ -178,7 +178,7 @@
 
           <button class="btn ghost sm" style="margin-top:8px" @click="openBrowser">📚 {{ t('sub.browse') }}</button>
 
-          <details class="icon-lib">
+          <details class="icon-lib" @toggle="onIconLibraryToggle">
             <summary>{{ t('sub.icon') }} — {{ t('sub.iconLibrary') }} / URL / {{ t('sub.uploadIcon') }}</summary>
             <input v-model="form.icon" placeholder="🔖 emoji / /static/... / https://..." style="margin:8px 0" />
             <div class="row" style="margin-bottom:8px">
@@ -188,9 +188,12 @@
                 <input type="file" accept="image/*" hidden @change="uploadIcon" />
               </label>
             </div>
-            <div class="lib-grid">
-              <img v-for="it in iconLib" :key="it.slug" :src="it.icon" :title="it.name"
-                   class="lib-ico" @click="form.icon = it.icon" />
+            <div v-if="showIconLibrary" class="lib-grid">
+              <img v-for="it in visibleIconLib" :key="it.slug" :src="it.icon" :title="it.name"
+                   class="lib-ico" loading="lazy" decoding="async" @click="form.icon = it.icon" />
+            </div>
+            <div v-if="showIconLibrary && visibleIconLib.length < iconLib.length" class="row" style="justify-content:center;margin-top:8px">
+              <button class="btn ghost sm" @click="showMoreIcons">显示更多图标</button>
             </div>
           </details>
         </div>
@@ -341,10 +344,14 @@
         <p class="muted" style="font-size:13px;margin-top:0">{{ t('sub.pickHint') }}</p>
         <input v-model="browserQ" :placeholder="t('sub.searchPh')" style="margin-bottom:12px" />
         <div v-for="g in groupedLib" :key="g.key" class="lib-group">
-          <div class="lib-group-t">{{ g.label }}</div>
-          <div class="svc-grid">
+          <button class="lib-group-t browser-group-t" @click="toggleBrowserGroup(g.key)">
+            <span>{{ isBrowserGroupExpanded(g.key) ? '▾' : '▸' }}</span>
+            <span>{{ g.label }}</span>
+            <span class="muted">({{ g.items.length }})</span>
+          </button>
+          <div v-if="isBrowserGroupExpanded(g.key)" class="svc-grid">
             <button v-for="s in g.items" :key="s.slug" class="svc" @click="pickFromBrowser(s)">
-              <img :src="s.icon" class="svc-ico" /> <span>{{ s.name }}</span>
+              <img :src="s.icon" class="svc-ico" loading="lazy" decoding="async" /> <span>{{ s.name }}</span>
             </button>
           </div>
         </div>
@@ -372,6 +379,9 @@ const categories = ref([])
 const methods = ref([])
 const bundles = ref([])
 const iconLib = ref([])
+const showIconLibrary = ref(false)
+const visibleIconCount = ref(0)
+const ICON_BATCH_SIZE = 36
 const filter = ref('')
 const showForm = ref(false)
 const formErr = ref('')
@@ -384,6 +394,7 @@ const suggestions = ref([])
 
 const showBrowser = ref(false)
 const browserQ = ref('')
+const openBrowserGroups = ref(new Set())
 
 const renewTarget = ref(null)
 const renewMode = ref('today')
@@ -588,8 +599,19 @@ async function load() {
 }
 function setFilter(f) { filter.value = f; load() }
 
+const visibleIconLib = computed(() => iconLib.value.slice(0, visibleIconCount.value))
+function onIconLibraryToggle(e) {
+  showIconLibrary.value = e.target.open
+  visibleIconCount.value = e.target.open ? ICON_BATCH_SIZE : 0
+}
+function showMoreIcons() {
+  visibleIconCount.value = Math.min(iconLib.value.length, visibleIconCount.value + ICON_BATCH_SIZE)
+}
+
 function openNew() {
   form.value = blank(); formErr.value = ''; bundleMode.value = 'none'
+  showIconLibrary.value = false
+  visibleIconCount.value = 0
   newBundleName.value = ''; suggestions.value = []; showForm.value = true
   recomputeNext()
 }
@@ -599,6 +621,8 @@ function openEdit(s) {
   formErr.value = ''; suggestions.value = []
   bundleMode.value = s.bundle_id ? 'join' : 'none'
   newBundleName.value = ''
+  showIconLibrary.value = false
+  visibleIconCount.value = 0
   showForm.value = true
   nextTick(() => { suppressAuto = false })
 }
@@ -638,7 +662,19 @@ function pickService(s) {
   suggestions.value = []
 }
 
-function openBrowser() { browserQ.value = ''; showBrowser.value = true }
+function openBrowser() {
+  browserQ.value = ''
+  openBrowserGroups.value = new Set()
+  showBrowser.value = true
+}
+const browserHasQuery = computed(() => browserQ.value.trim().length > 0)
+function isBrowserGroupExpanded(key) { return browserHasQuery.value || openBrowserGroups.value.has(key) }
+function toggleBrowserGroup(key) {
+  const next = new Set(openBrowserGroups.value)
+  if (next.has(key)) next.delete(key)
+  else next.add(key)
+  openBrowserGroups.value = next
+}
 const groupedLib = computed(() => {
   const q = browserQ.value.toLowerCase().trim()
   const groups = new Map()
@@ -853,6 +889,7 @@ h1 { margin-top: 0; }
 .browser .modal { width: 560px; }
 .lib-group { margin-bottom: 14px; }
 .lib-group-t { font-size: 13px; font-weight: 600; color: var(--text-soft); margin-bottom: 8px; }
+.browser-group-t { width: 100%; display: flex; align-items: center; gap: 6px; padding: 0; border: none; background: transparent; cursor: pointer; text-align: left; }
 .svc-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
 .svc { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border: 1px solid var(--border);
   border-radius: 10px; background: var(--surface); cursor: pointer; font-size: 13px; color: var(--text);
