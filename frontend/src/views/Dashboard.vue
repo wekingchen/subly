@@ -41,8 +41,7 @@
           <p v-if="!data.upcoming.length" class="muted">{{ t('dashboard.none') }}</p>
           <div v-for="s in data.upcoming" :key="s.id" class="line">
             <span class="l-name">
-              <img v-if="isImg(s.icon)" :src="s.icon" class="mini-ico" />
-              <span v-else class="mini-emoji">{{ emojiOf(s) }}</span>
+              <ServiceIcon :src="s.icon" :name="s.name" :fallback="emojiOf(s)" class="mini-ico" />
               <span class="l-txt">{{ s.name }}</span>
             </span>
             <span class="l-right">
@@ -81,8 +80,7 @@
             </div>
             <div v-for="s in g.items" :key="s.id" class="cc-item" :class="statusOf(s)">
               <span class="cc-dot"></span>
-              <img v-if="isImg(s.icon)" :src="s.icon" class="mini-ico" />
-              <span v-else class="mini-emoji sm">{{ emojiOf(s) }}</span>
+              <ServiceIcon :src="s.icon" :name="s.name" :fallback="emojiOf(s)" class="mini-ico" />
               <span class="cc-n">{{ s.name }}</span>
               <span class="cc-d">{{ s.next_renewal_date ? dueText(s) : t('sub.oneTime') }}</span>
             </div>
@@ -96,8 +94,7 @@
         <p v-if="!data.recent.length" class="muted">{{ t('dashboard.none') }}</p>
         <div class="recent-grid">
           <div v-for="s in data.recent" :key="s.id" class="rc">
-            <img v-if="isImg(s.icon)" :src="s.icon" class="rc-ico-img" />
-            <span v-else class="rc-ico">{{ emojiOf(s) }}</span>
+            <ServiceIcon :src="s.icon" :name="s.name" :fallback="emojiOf(s)" class="rc-ico-img" />
             <div class="rc-main"><div class="rc-n">{{ s.name }}</div>
               <div class="muted rc-a">{{ fmt(s.amount_in_base) }}</div></div>
           </div>
@@ -111,6 +108,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import api from '../api'
+import ServiceIcon from '../components/ServiceIcon.vue'
 import { useAuth } from '../stores/auth'
 import { icon } from '../icons'
 

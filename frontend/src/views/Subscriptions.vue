@@ -40,8 +40,8 @@
              @dragend="clearDrag"
              @drop.stop="onCardDrop(g.key, s.id)">
           <div class="sc-head">
-            <img v-if="isImg(s.icon)" :src="s.icon" class="sc-ico" loading="lazy" decoding="async" />
-            <span v-else class="sc-ico emoji">{{ s.icon || '🔖' }}</span>
+            <ServiceIcon :src="s.icon" :name="s.name" :fallback="s.icon || '🔖'"
+                         class="sc-ico" loading="lazy" decoding="async" />
             <div class="sc-title">
               <div class="sc-name">{{ s.name }}</div>
               <div class="muted sc-plan" v-if="s.plan">{{ s.plan }}</div>
@@ -143,15 +143,14 @@
           <div class="block-t">{{ t('sub.secService') }}</div>
           <div class="row">
             <div class="icon-pick">
-              <img v-if="isImg(form.icon)" :src="form.icon" class="ico-lg" />
-              <span v-else class="ico-lg emoji">{{ form.icon || '🔖' }}</span>
+              <ServiceIcon :src="form.icon" :name="form.name" :fallback="form.icon || '🔖'" class="ico-lg" />
             </div>
             <div style="flex:2;position:relative">
               <label>{{ t('sub.name') }}</label>
               <input v-model="form.name" @input="onNameInput" autocomplete="off" />
               <div v-if="suggestions.length" class="suggest">
                 <div v-for="s in suggestions" :key="s.slug" class="suggest-i" @click="pickService(s)">
-                  <img :src="s.icon" class="ico" loading="lazy" decoding="async" /> {{ s.name }}
+                  <ServiceIcon :src="s.icon" :name="s.name" class="ico" loading="lazy" decoding="async" /> {{ s.name }}
                 </div>
               </div>
             </div>
@@ -189,8 +188,8 @@
               </label>
             </div>
             <div v-if="showIconLibrary" class="lib-grid">
-              <img v-for="it in visibleIconLib" :key="it.slug" :src="it.icon" :title="it.name"
-                   class="lib-ico" loading="lazy" decoding="async" @click="form.icon = it.icon" />
+              <ServiceIcon v-for="it in visibleIconLib" :key="it.slug" :src="it.icon" :name="it.name" :title="it.name"
+                           class="lib-ico" loading="lazy" decoding="async" @click="form.icon = it.icon" />
             </div>
             <div v-if="showIconLibrary && visibleIconLib.length < iconLib.length" class="row" style="justify-content:center;margin-top:8px">
               <button class="btn ghost sm" @click="showMoreIcons">显示更多图标</button>
@@ -351,7 +350,7 @@
           </button>
           <div v-if="isBrowserGroupExpanded(g.key)" class="svc-grid">
             <button v-for="s in g.items" :key="s.slug" class="svc" @click="pickFromBrowser(s)">
-              <img :src="s.icon" class="svc-ico" loading="lazy" decoding="async" /> <span>{{ s.name }}</span>
+              <ServiceIcon :src="s.icon" :name="s.name" class="svc-ico" loading="lazy" decoding="async" /> <span>{{ s.name }}</span>
             </button>
           </div>
         </div>
@@ -369,6 +368,7 @@
 import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import api from '../api'
+import ServiceIcon from '../components/ServiceIcon.vue'
 import { useAuth } from '../stores/auth'
 
 const { t } = useI18n()
@@ -413,7 +413,6 @@ function toast(msg, type = 'ok') {
   setTimeout(() => { toasts.value = toasts.value.filter((x) => x.id !== id) }, 2600)
 }
 
-function isImg(v) { return typeof v === 'string' && (v.startsWith('/') || v.startsWith('http')) }
 function payName(s) {
   const p = methods.value.find((x) => x.id === s.payment_method_id)
   return p ? `${p.icon || ''} ${p.name}`.trim() : ''

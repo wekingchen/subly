@@ -55,6 +55,7 @@ class User(Base):
     bark_server: Mapped[str | None] = mapped_column(String(255), nullable=True)   # 默认 https://api.day.app，可填自建服务器
     bark_sound: Mapped[str | None] = mapped_column(String(64), nullable=True)     # 自定义提示音，留空用默认
     bark_group: Mapped[str | None] = mapped_column(String(64), nullable=True)     # 推送分组，留空用 Subly
+    bark_ttl: Mapped[int | None] = mapped_column(Integer, nullable=True)          # TTL（秒），留空用 Bark 默认
 
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 

@@ -18,6 +18,6 @@ COPY backend/ ./
 # 把前端构建产物放到 FastAPI 静态目录（单服务托管）
 COPY --from=frontend /fe/dist ./frontend_dist
 
-RUN mkdir -p data/icons
+RUN mkdir -p data/icons/library
 EXPOSE 8000
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

@@ -74,7 +74,8 @@ const zh = {
     themeLight: '浅色', themeDark: '深色', themeOcean: '海洋', themeForest: '森林', themePurple: '紫罗兰',
     botOk: '机器人正常', botFail: '验证失败', testOk: '测试消息已发送', logs: '通知记录',
     bark: 'Bark 推送', barkEnabled: '启用 Bark 推送', barkKey: 'Device Key',
-    barkServer: '服务器地址（可选）', barkSound: '提示音（可选）', barkGroup: '分组（可选）',
+    barkServer: '服务器地址（可选）', barkSound: '提示音（可选）', barkGroup: '分组（可选）', barkTtl: 'TTL（秒，可选）',
+    barkTtlPh: '留空使用默认', barkTtlInvalid: 'TTL 必须是非负整数',
     barkTip: '在 iOS 上安装 Bark App，打开后复制你的 Device Key 填到下面即可（支持自建服务器）。',
     rateTable: '常用货币汇率', rateTip: '1 单位货币兑换为 {base} 的当日金额', updatedAt: '更新于', noRates: '暂无汇率数据，请点击「刷新汇率」'
   },
@@ -170,7 +171,8 @@ const en = {
     themeLight: 'Light', themeDark: 'Dark', themeOcean: 'Ocean', themeForest: 'Forest', themePurple: 'Purple',
     botOk: 'Bot OK', botFail: 'Verify failed', testOk: 'Test sent', logs: 'Logs',
     bark: 'Bark Push', barkEnabled: 'Enable Bark push', barkKey: 'Device Key',
-    barkServer: 'Server URL (optional)', barkSound: 'Sound (optional)', barkGroup: 'Group (optional)',
+    barkServer: 'Server URL (optional)', barkSound: 'Sound (optional)', barkGroup: 'Group (optional)', barkTtl: 'TTL (seconds, optional)',
+    barkTtlPh: 'Leave blank for default', barkTtlInvalid: 'TTL must be a non-negative integer',
     barkTip: 'Install the Bark app on iOS, copy your Device Key and paste it below (self-hosted servers supported).',
     rateTable: 'Currency rates', rateTip: 'Today value of 1 unit in {base}', updatedAt: 'Updated', noRates: 'No rate data, click "Refresh rates"'
   },
@@ -266,7 +268,8 @@ const ru = {
     themeLight: 'Светлая', themeDark: 'Тёмная', themeOcean: 'Океан', themeForest: 'Лес', themePurple: 'Фиолет',
     botOk: 'Бот в порядке', botFail: 'Ошибка', testOk: 'Тест отправлен', logs: 'Журнал',
     bark: 'Push Bark', barkEnabled: 'Включить push Bark', barkKey: 'Device Key',
-    barkServer: 'Адрес сервера (опц.)', barkSound: 'Звук (опц.)', barkGroup: 'Группа (опц.)',
+    barkServer: 'Адрес сервера (опц.)', barkSound: 'Звук (опц.)', barkGroup: 'Группа (опц.)', barkTtl: 'TTL (сек., опц.)',
+    barkTtlPh: 'Оставьте пустым для значения по умолчанию', barkTtlInvalid: 'TTL должен быть неотрицательным целым числом',
     barkTip: 'Установите приложение Bark на iOS, скопируйте Device Key и вставьте ниже (поддерживается свой сервер).',
     rateTable: 'Курсы валют', rateTip: 'Сегодняшняя стоимость 1 единицы в {base}', updatedAt: 'Обновлено', noRates: 'Нет данных, нажмите «Обновить курсы»'
   },

@@ -74,7 +74,7 @@
           <tbody>
             <tr v-for="(s, i) in ranking" :key="s.id">
               <td class="rk">{{ i + 1 }}</td>
-              <td><span class="nm"><img v-if="isImg(s.icon)" :src="s.icon" class="nm-ico" /><span v-else class="nm-emoji">{{ emojiOf(s) }}</span><span class="nm-txt"><b>{{ s.name }}</b><i v-if="s.plan" class="nm-sub">{{ s.plan }}</i><i v-if="s.remark" class="nm-remark">📝 {{ s.remark }}</i></span></span></td>
+              <td><span class="nm"><ServiceIcon :src="s.icon" :name="s.name" :fallback="emojiOf(s)" class="nm-ico" /><span class="nm-txt"><b>{{ s.name }}</b><i v-if="s.plan" class="nm-sub">{{ s.plan }}</i><i v-if="s.remark" class="nm-remark">📝 {{ s.remark }}</i></span></span></td>
               <td class="muted">{{ catName(s.category_id) }}</td>
               <td>{{ cur }} {{ (s.amount_in_base || 0).toFixed(2) }}</td>
             </tr>
@@ -89,7 +89,7 @@
           <table>
             <tbody>
               <tr v-for="s in upcoming" :key="s.id">
-                <td><span class="nm"><img v-if="isImg(s.icon)" :src="s.icon" class="nm-ico" /><span v-else class="nm-emoji">{{ emojiOf(s) }}</span><span class="nm-txt"><b>{{ s.name }}</b><i class="nm-sub">{{ s.plan ? s.plan + ' · ' : '' }}{{ catName(s.category_id) }}</i><i v-if="s.remark" class="nm-remark">📝 {{ s.remark }}</i></span></span></td>
+                <td><span class="nm"><ServiceIcon :src="s.icon" :name="s.name" :fallback="emojiOf(s)" class="nm-ico" /><span class="nm-txt"><b>{{ s.name }}</b><i class="nm-sub">{{ s.plan ? s.plan + ' · ' : '' }}{{ catName(s.category_id) }}</i><i v-if="s.remark" class="nm-remark">📝 {{ s.remark }}</i></span></span></td>
                 <td class="muted">{{ s.next_renewal_date }}</td>
                 <td>{{ s.amount.toFixed(2) }} {{ s.currency }}</td>
               </tr>
@@ -102,7 +102,7 @@
           <table>
             <tbody>
               <tr v-for="s in expired" :key="s.id">
-                <td><span class="nm"><img v-if="isImg(s.icon)" :src="s.icon" class="nm-ico" /><span v-else class="nm-emoji">{{ emojiOf(s) }}</span><span class="nm-txt"><b>{{ s.name }}</b><i class="nm-sub">{{ s.plan ? s.plan + ' · ' : '' }}{{ catName(s.category_id) }}</i><i v-if="s.remark" class="nm-remark">📝 {{ s.remark }}</i></span></span></td>
+                <td><span class="nm"><ServiceIcon :src="s.icon" :name="s.name" :fallback="emojiOf(s)" class="nm-ico" /><span class="nm-txt"><b>{{ s.name }}</b><i class="nm-sub">{{ s.plan ? s.plan + ' · ' : '' }}{{ catName(s.category_id) }}</i><i v-if="s.remark" class="nm-remark">📝 {{ s.remark }}</i></span></span></td>
                 <td class="danger">{{ s.next_renewal_date }}</td>
                 <td>{{ s.amount.toFixed(2) }} {{ s.currency }}</td>
               </tr>
@@ -118,7 +118,7 @@
           <thead><tr><th>{{ t('sub.name') }}</th><th>{{ t('reports.category') }}</th><th>{{ t('sub.amount') }}</th><th>{{ t('sub.startDate') }}</th></tr></thead>
           <tbody>
             <tr v-for="s in oneTime" :key="s.id">
-              <td><span class="nm"><img v-if="isImg(s.icon)" :src="s.icon" class="nm-ico" /><span v-else class="nm-emoji">{{ emojiOf(s) }}</span><span class="nm-txt"><b>{{ s.name }}</b><i v-if="s.plan" class="nm-sub">{{ s.plan }}</i><i v-if="s.remark" class="nm-remark">📝 {{ s.remark }}</i></span></span></td>
+              <td><span class="nm"><ServiceIcon :src="s.icon" :name="s.name" :fallback="emojiOf(s)" class="nm-ico" /><span class="nm-txt"><b>{{ s.name }}</b><i v-if="s.plan" class="nm-sub">{{ s.plan }}</i><i v-if="s.remark" class="nm-remark">📝 {{ s.remark }}</i></span></span></td>
               <td class="muted">{{ catName(s.category_id) }}</td>
               <td>{{ s.amount.toFixed(2) }} {{ s.currency }}</td>
               <td class="muted">{{ s.start_date }}</td>
@@ -168,8 +168,7 @@
       <h3>💸 {{ t('reports.recentPayments') }}</h3>
       <div v-for="p in payments" :key="p.id + '-' + p.date" class="pay-row">
         <span class="pay-ico">
-          <img v-if="isImg(p.icon)" :src="p.icon" />
-          <span v-else>{{ p.icon || '🔖' }}</span>
+          <ServiceIcon :src="p.icon" :name="p.name" :fallback="p.icon || '🔖'" class="pay-ico-img" />
         </span>
         <div class="pay-main">
           <div class="pay-n">{{ p.name }}<span v-if="p.plan" class="pay-plan"> · {{ p.plan }}</span></div>
@@ -187,6 +186,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import api from '../api'
+import ServiceIcon from '../components/ServiceIcon.vue'
 import { useAuth } from '../stores/auth'
 
 const { t } = useI18n()
@@ -331,7 +331,7 @@ h1 { margin-top: 0; }
 .pay-row:last-child { border-bottom: none; }
 .pay-ico { width: 34px; height: 34px; border-radius: 9px; background: var(--surface-2); border: 1px solid var(--border);
   display: flex; align-items: center; justify-content: center; font-size: 18px; flex-shrink: 0; }
-.pay-ico img { width: 22px; height: 22px; object-fit: contain; }
+.pay-ico-img { width: 22px; height: 22px; border-radius: 6px; object-fit: contain; }
 .pay-main { flex: 1; min-width: 0; }
 .pay-n { font-weight: 600; font-size: 14px; }
 .pay-d { font-size: 12px; }

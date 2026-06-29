@@ -28,6 +28,7 @@ _COLUMNS = [
     ("users", "bark_server", "VARCHAR(255)"),
     ("users", "bark_sound", "VARCHAR(64)"),
     ("users", "bark_group", "VARCHAR(64)"),
+    ("users", "bark_ttl", "INTEGER"),
 ]
 
 

@@ -1,6 +1,6 @@
 from datetime import date, datetime
 
-from pydantic import BaseModel, ConfigDict, EmailStr
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 
 # ---------- Auth ----------
@@ -48,6 +48,7 @@ class UserOut(BaseModel):
     bark_server: str | None
     bark_sound: str | None
     bark_group: str | None
+    bark_ttl: int | None
 
 
 class UserUpdate(BaseModel):
@@ -66,6 +67,7 @@ class UserUpdate(BaseModel):
     bark_server: str | None = None
     bark_sound: str | None = None
     bark_group: str | None = None
+    bark_ttl: int | None = Field(default=None, ge=0)
 
 
 # ---------- Category ----------
@@ -230,6 +232,7 @@ class TelegramTestIn(BaseModel):
 class BarkTestIn(BaseModel):
     device_key: str | None = None
     server: str | None = None
+    ttl: int | None = Field(default=None, ge=0)
 
 
 # ---------- Admin ----------

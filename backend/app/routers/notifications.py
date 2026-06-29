@@ -83,6 +83,7 @@ def bark_test(
     if not device_key:
         raise HTTPException(400, "未填写 Bark Device Key")
     server = payload.server or user.bark_server
+    ttl = payload.ttl if payload.ttl is not None else user.bark_ttl
     try:
         bark.send_push(
             device_key,
@@ -91,6 +92,7 @@ def bark_test(
             server=server,
             sound=user.bark_sound,
             group=user.bark_group,
+            ttl=ttl,
         )
     except Exception as e:  # noqa: BLE001
         activity.log("bark.test", f"测试推送发送失败：{e}", user=user, level="error")
