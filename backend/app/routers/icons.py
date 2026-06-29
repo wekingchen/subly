@@ -556,6 +556,22 @@ def _fetch_library_icon(base: str, domain: str) -> tuple[bytes, str, str, str] |
     return None
 
 
+def _write_icon_cache(base: str, content: bytes, ext: str) -> str:
+    os.makedirs(LIBRARY_DIR, exist_ok=True)
+    path = os.path.join(LIBRARY_DIR, f"{base}{ext}")
+    tmp_path = f"{path}.{uuid.uuid4().hex}.tmp"
+    try:
+        with open(tmp_path, "wb") as f:
+            f.write(content)
+        os.replace(tmp_path, path)
+    except OSError:
+        try:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+        except OSError:
+            pass
+        raise
+    return path
 
 
 def library_icon_cache_info(slug: str) -> dict:
@@ -585,9 +601,11 @@ def fetch_library_icon_to_cache(
         return {"status": "skipped", "source": "cache", "ext": cache["ext"], "error": None}
     if not settings.icon_fetch_enabled:
         return {"status": "skipped", "source": "disabled", "ext": None, "error": "icon_fetch_disabled"}
-    if _failed_recently(base):
+    if force:
+        _clear_slug_failure(base)
+    if _failed_recently(base) and not force:
         return {"status": "skipped", "source": "failed_recently", "ext": None, "error": "failed_recently"}
-    if _breaker_open():
+    if _breaker_open() and not force:
         return {"status": "skipped", "source": "breaker", "ext": None, "error": "breaker_open"}
 
     wait_s = max(2.0, min(8.0, float(settings.icon_fetch_timeout_s or 2.0) * 3))
