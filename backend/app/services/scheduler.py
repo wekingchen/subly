@@ -122,6 +122,7 @@ def run_reminder_scan() -> dict:
                             server=user.bark_server,
                             sound=user.bark_sound,
                             group=user.bark_group,
+                            ttl=user.bark_ttl,
                         )
                         return f"{title}\n{body}"
 

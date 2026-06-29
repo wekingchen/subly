@@ -139,6 +139,10 @@
           <label>{{ t('settings.barkGroup') }}</label>
           <input v-model="bk.group" placeholder="Subly" />
         </div>
+        <div style="flex:1">
+          <label>{{ t('settings.barkTtl') }}</label>
+          <input v-model="bk.ttl" type="text" inputmode="numeric" pattern="\d*" :placeholder="t('settings.barkTtlPh')" />
+        </div>
       </div>
       <div class="row" style="margin-top:12px">
         <button class="btn" @click="saveBark">{{ t('settings.save') }}</button>
@@ -225,7 +229,8 @@ const bk = reactive({
   device_key: auth.user?.bark_device_key || '',
   server: auth.user?.bark_server || '',
   sound: auth.user?.bark_sound || '',
-  group: auth.user?.bark_group || ''
+  group: auth.user?.bark_group || '',
+  ttl: auth.user?.bark_ttl ?? ''
 })
 const bkMsg = ref('')
 const bkOk = ref(false)
@@ -379,21 +384,40 @@ async function saveTg() {
   tgOk.value = true; tgMsg.value = t('settings.saved')
 }
 
+function normalizeBarkTtl() {
+  const raw = bk.ttl
+  if (raw === '' || raw === null || raw === undefined) return null
+  const text = String(raw).trim()
+  if (!text) return null
+  if (!/^\d+$/.test(text)) {
+    bkOk.value = false
+    bkMsg.value = t('settings.barkTtlInvalid')
+    return undefined
+  }
+  return Number(text)
+}
+
 async function saveBark() {
+  const ttl = normalizeBarkTtl()
+  if (ttl === undefined) return false
   await auth.updateMe({
     bark_enabled: bk.enabled,
     bark_device_key: bk.device_key,
     bark_server: bk.server || null,
     bark_sound: bk.sound || null,
-    bark_group: bk.group || null
+    bark_group: bk.group || null,
+    bark_ttl: ttl
   })
   bkOk.value = true; bkMsg.value = t('settings.saved')
+  return true
 }
 
 async function testBark() {
-  await saveBark()
+  const saved = await saveBark()
+  if (!saved) return
+  const ttl = normalizeBarkTtl()
   try {
-    await api.post('/api/notifications/bark/test', { device_key: bk.device_key, server: bk.server || null })
+    await api.post('/api/notifications/bark/test', { device_key: bk.device_key, server: bk.server || null, ttl })
     bkOk.value = true; bkMsg.value = t('settings.testOk')
   } catch (e) { bkOk.value = false; bkMsg.value = e.response?.data?.detail || 'Error' }
 }

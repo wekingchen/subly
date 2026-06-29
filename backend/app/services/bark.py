@@ -21,6 +21,7 @@ def send_push(
     sound: str | None = None,
     group: str | None = None,
     url: str | None = None,
+    ttl: int | None = None,
 ) -> dict:
     """推送一条消息。失败时抛出异常（httpx 的 HTTPStatusError 或网络异常）。"""
     if not device_key:
@@ -36,6 +37,8 @@ def send_push(
         payload["sound"] = sound
     if url:
         payload["url"] = url
+    if ttl is not None:
+        payload["ttl"] = ttl
     with _client() as c:
         resp = c.post(f"{base}/push", json=payload)
         resp.raise_for_status()
