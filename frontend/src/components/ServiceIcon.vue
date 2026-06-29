@@ -42,7 +42,7 @@ function markFailed() {
 
 function onLoad(e) {
   const img = e.target
-  if (img?.naturalWidth <= 1 && img?.naturalHeight <= 1) {
+  if (img && img.naturalWidth <= 1 && img.naturalHeight <= 1) {
     failed.value = true
   }
 }

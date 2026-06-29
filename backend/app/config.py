@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     icon_fetch_google_enabled: bool = True
     icon_fetch_timeout_s: float = 2.0
     icon_fetch_max_bytes: int = 262144
+    icon_fetch_svg_enabled: bool = True        # 是否接受并消毒缓存远端 SVG favicon
 
     # Telegram
     telegram_bot_token: str = ""

@@ -258,7 +258,12 @@ def website_for_name(name: str) -> str | None:
 
 def service_for_slug(slug: str) -> dict | None:
     """按图标 slug 查找服务信息，供后端下载和 fallback 使用。"""
-    target = slug.replace(".png", "")
+    safe = (slug or "").strip()
+    for ext in (".png", ".svg", ".ico", ".webp", ".jpg", ".jpeg"):
+        if safe.endswith(ext):
+            safe = safe[: -len(ext)]
+            break
+    target = safe
     for name, domain, cat in SERVICES:
         cur = _slug(domain)
         if cur == target:
