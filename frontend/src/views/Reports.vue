@@ -69,7 +69,7 @@
     <div v-else-if="active === 'insights'">
       <div class="card sect">
         <h3>🏆 {{ t('reports.ranking') }}</h3>
-        <div class="tbl-wrap">
+        <div class="tbl-wrap desktop-only">
           <table>
             <thead><tr><th>#</th><th>{{ t('sub.name') }}</th><th>{{ t('reports.category') }}</th><th>{{ t('reports.monthly') }}</th></tr></thead>
             <tbody>
@@ -83,12 +83,24 @@
             </tbody>
           </table>
         </div>
+        <div class="ledger mobile-only">
+          <div v-for="(s, i) in ranking" :key="s.id" class="ld-row">
+            <span class="ld-rk">{{ i + 1 }}</span>
+            <ServiceIcon :src="s.icon" :name="s.name" :fallback="emojiOf(s)" class="ld-ico" />
+            <div class="ld-main">
+              <div class="ld-n">{{ s.name }}</div>
+              <div class="muted ld-s">{{ catName(s.category_id) }}</div>
+            </div>
+            <div class="ld-amt">{{ cur }} {{ (s.amount_in_base || 0).toFixed(2) }}<span class="muted">/ {{ t('reports.monthly') }}</span></div>
+          </div>
+          <p v-if="!ranking.length" class="muted">{{ t('reports.empty') }}</p>
+        </div>
       </div>
 
       <div class="grid two">
         <div class="card sect">
           <h3>⏰ {{ t('reports.upcoming') }}</h3>
-          <div class="tbl-wrap">
+          <div class="tbl-wrap desktop-only">
           <table>
             <tbody>
               <tr v-for="s in upcoming" :key="s.id" class="status-row" :class="statusOf(s)">
@@ -100,10 +112,21 @@
             </tbody>
           </table>
           </div>
+          <div class="ledger mobile-only">
+            <div v-for="s in upcoming" :key="s.id" class="ld-row" :class="statusOf(s)">
+              <ServiceIcon :src="s.icon" :name="s.name" :fallback="emojiOf(s)" class="ld-ico" />
+              <div class="ld-main">
+                <div class="ld-n">{{ s.name }}</div>
+                <div class="muted ld-s">{{ s.next_renewal_date }}</div>
+              </div>
+              <div class="ld-amt">{{ s.amount.toFixed(2) }} {{ s.currency }}</div>
+            </div>
+            <p v-if="!upcoming.length" class="muted">{{ t('reports.empty') }}</p>
+          </div>
         </div>
         <div class="card sect">
           <h3>⚠️ {{ t('reports.expired') }}</h3>
-          <div class="tbl-wrap">
+          <div class="tbl-wrap desktop-only">
           <table>
             <tbody>
               <tr v-for="s in expired" :key="s.id" class="status-row overdue">
@@ -115,12 +138,23 @@
             </tbody>
           </table>
           </div>
+          <div class="ledger mobile-only">
+            <div v-for="s in expired" :key="s.id" class="ld-row overdue">
+              <ServiceIcon :src="s.icon" :name="s.name" :fallback="emojiOf(s)" class="ld-ico" />
+              <div class="ld-main">
+                <div class="ld-n">{{ s.name }}</div>
+                <div class="muted ld-s">{{ s.next_renewal_date }}</div>
+              </div>
+              <div class="ld-amt">{{ s.amount.toFixed(2) }} {{ s.currency }}</div>
+            </div>
+            <p v-if="!expired.length" class="muted">{{ t('reports.empty') }}</p>
+          </div>
         </div>
       </div>
 
       <div class="card sect">
         <h3>♾️ {{ t('reports.oneTime') }}</h3>
-        <div class="tbl-wrap">
+        <div class="tbl-wrap desktop-only">
         <table>
           <thead><tr><th>{{ t('sub.name') }}</th><th>{{ t('reports.category') }}</th><th>{{ t('sub.amount') }}</th><th>{{ t('sub.startDate') }}</th></tr></thead>
           <tbody>
@@ -133,6 +167,17 @@
             <tr v-if="!oneTime.length"><td colspan="4" class="muted">{{ t('reports.empty') }}</td></tr>
           </tbody>
         </table>
+        </div>
+        <div class="ledger mobile-only">
+          <div v-for="s in oneTime" :key="s.id" class="ld-row oneTime">
+            <ServiceIcon :src="s.icon" :name="s.name" :fallback="emojiOf(s)" class="ld-ico" />
+            <div class="ld-main">
+              <div class="ld-n">{{ s.name }}</div>
+              <div class="muted ld-s">{{ catName(s.category_id) }} · {{ s.start_date }}</div>
+            </div>
+            <div class="ld-amt">{{ s.amount.toFixed(2) }} {{ s.currency }}</div>
+          </div>
+          <p v-if="!oneTime.length" class="muted">{{ t('reports.empty') }}</p>
         </div>
       </div>
     </div>
@@ -308,7 +353,7 @@ h1 { margin-top: 0; }
 .status-row.overdue td:first-child { border-left-color: var(--danger); }
 .status-row.ok td:first-child { border-left-color: color-mix(in srgb, var(--success) 55%, transparent); }
 
-/* 名称单元格：图标 + 名称 + 套餐/分类副标题，便于定位订阅 */
+.mobile-only { display: none; }
 .rk { width: 28px; color: var(--text-soft); font-weight: 600; }
 .nm { display: flex; align-items: center; gap: 9px; min-width: 0; }
 .nm-ico { width: 26px; height: 26px; border-radius: 7px; object-fit: contain; flex-shrink: 0;
@@ -365,10 +410,31 @@ h1 { margin-top: 0; }
 .pay-d { font-size: 12px; }
 .pay-amt { font-weight: 600; font-size: 14px; }
 
+/* 移动端账本列表（默认隐藏，仅移动端显示；desktop 表格同理仅移动端隐藏）*/
+.ledger { display: none; flex-direction: column; }
+.ld-row { display: flex; align-items: center; gap: 10px; padding: 11px 4px; border-bottom: 1px solid var(--border);
+  min-height: 44px; border-left: 3px solid transparent; padding-left: 8px; }
+.ld-row:last-child { border-bottom: none; }
+.ld-row.soon { border-left-color: var(--warning); }
+.ld-row.overdue { border-left-color: var(--danger); }
+.ld-row.ok { border-left-color: color-mix(in srgb, var(--success) 55%, transparent); }
+.ld-row.oneTime { border-left-color: color-mix(in srgb, var(--text-soft) 40%, transparent); }
+.ld-rk { width: 22px; height: 22px; flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 999px; background: var(--surface-2); color: var(--text-soft); font-size: 12px; font-weight: 700; }
+.ld-ico { width: 26px; height: 26px; border-radius: 7px; object-fit: contain; flex-shrink: 0;
+  border: 1px solid var(--border); background: var(--surface-2); }
+.ld-main { flex: 1; min-width: 0; }
+.ld-n { font-weight: 600; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ld-s { font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ld-amt { font-weight: 600; font-size: 14px; text-align: right; white-space: nowrap; }
+.ld-amt .muted { font-size: 11px; font-weight: 500; }
+
 @media (max-width: 720px) {
   .kpis { grid-template-columns: 1fr 1fr; }
   .kpi-v { font-size: 20px; }
   .two { grid-template-columns: 1fr; }
+  .desktop-only { display: none; }
+  .mobile-only { display: flex; }
 }
 @media (max-width: 480px) {
   .bar-row { grid-template-columns: 1fr auto; gap: 6px; }
