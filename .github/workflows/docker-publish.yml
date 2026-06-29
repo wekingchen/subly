@@ -5,6 +5,11 @@ on:
     branches: [ main ]
     tags: [ 'v*' ]
   workflow_dispatch:
+    inputs:
+      version:
+        description: 'Docker 镜像版本号，例如 1.0.0'
+        required: true
+        type: string
 
 jobs:
   build-and-push:
@@ -37,6 +42,31 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Prepare Docker version
+        id: docker_meta
+        shell: bash
+        env:
+          VERSION_INPUT: ${{ inputs.version }}
+        run: |
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            VERSION="${VERSION_INPUT}"
+          else
+            VERSION="${GITHUB_REF_NAME}"
+          fi
+
+          if [[ -z "${VERSION}" ]]; then
+            echo "Docker image version cannot be empty" >&2
+            exit 1
+          fi
+
+          if ! [[ "${VERSION}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]]; then
+            echo "Invalid Docker image version: ${VERSION}" >&2
+            echo "Use letters, numbers, dots, underscores, or hyphens, and start with a letter or number." >&2
+            exit 1
+          fi
+
+          echo "version=${VERSION}" >> "${GITHUB_OUTPUT}"
+
       - name: Build and push Docker image
         uses: docker/build-push-action@v7
         with:
@@ -45,8 +75,8 @@ jobs:
           platforms: linux/amd64,linux/arm64
           tags: |
             ${{ secrets.DOCKERHUB_USERNAME }}/subly:latest
-            ${{ secrets.DOCKERHUB_USERNAME }}/subly:${{ github.ref_name }}
+            ${{ secrets.DOCKERHUB_USERNAME }}/subly:${{ steps.docker_meta.outputs.version }}
             ghcr.io/${{ github.repository_owner }}/subly:latest
-            ghcr.io/${{ github.repository_owner }}/subly:${{ github.ref_name }}
+            ghcr.io/${{ github.repository_owner }}/subly:${{ steps.docker_meta.outputs.version }}
           cache-from: type=gha
           cache-to: type=gha,mode=max

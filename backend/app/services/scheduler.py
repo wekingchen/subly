@@ -1,4 +1,5 @@
 """定时任务：每日扫描即将到期的订阅，按用户开启的通道（Telegram / Bark）发送提醒。"""
+import logging
 from datetime import date, datetime
 
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -11,6 +12,7 @@ from app.models import Category, NotificationLog, PaymentMethod, Subscription, U
 from app.services import bark, exchange, telegram
 
 _scheduler: BackgroundScheduler | None = None
+logger = logging.getLogger(__name__)
 
 
 def _parse_days(raw: str) -> list[int]:
@@ -223,8 +225,11 @@ def start_scheduler() -> None:
     hour, minute = 9, 0
     try:
         hour, minute = (int(x) for x in settings.reminder_scan_time.split(":"))
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception as e:  # noqa: BLE001
+        logger.warning(
+            "event=scheduler_invalid_reminder_scan_time value=%s fallback=09:00 error_type=%s",
+            settings.reminder_scan_time, type(e).__name__, exc_info=True,
+        )
 
     _scheduler = BackgroundScheduler(timezone=settings.tz)
     _scheduler.add_job(
@@ -241,6 +246,10 @@ def start_scheduler() -> None:
         replace_existing=True,
     )
     _scheduler.start()
+    logger.info(
+        "event=scheduler_started reminder_scan_time=%02d:%02d timezone=%s",
+        hour, minute, settings.tz,
+    )
 
 
 def _refresh_rates_job() -> None:
@@ -248,9 +257,13 @@ def _refresh_rates_job() -> None:
         return
     db = database.SessionLocal()
     try:
-        exchange.refresh_rates(db)
-    except Exception:  # noqa: BLE001
-        pass
+        count = exchange.refresh_rates(db)
+        logger.info("event=exchange_refresh_job_done updated=%s", count)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(
+            "event=exchange_refresh_job_failed error_type=%s status_code=%s",
+            type(e).__name__, exchange.error_status_code(e),
+        )
     finally:
         db.close()
 
@@ -259,4 +272,5 @@ def shutdown_scheduler() -> None:
     global _scheduler
     if _scheduler:
         _scheduler.shutdown(wait=False)
+        logger.info("event=scheduler_stopped")
         _scheduler = None

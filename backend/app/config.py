@@ -15,6 +15,11 @@ class Settings(BaseSettings):
     refresh_token_expire_days: int = 14
     tz: str = "Asia/Shanghai"
 
+    # 日志：输出到 stdout（docker logs 可见），临时排查可设 LOG_LEVEL=DEBUG
+    log_level: str = "INFO"
+    # 超过该耗时的请求额外记一条 slow_request（WARNING），便于定位卡顿
+    slow_request_ms: int = 1000
+
     # Telegram
     telegram_bot_token: str = ""
 

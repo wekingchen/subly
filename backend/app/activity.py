@@ -2,8 +2,12 @@
 
 使用独立会话写入，避免干扰调用方的事务。
 """
+import logging
+
 from app import database
 from app.models import ActivityLog
+
+logger = logging.getLogger(__name__)
 
 
 def log(action: str, detail: str = "", user=None, level: str = "info") -> None:
@@ -21,7 +25,12 @@ def log(action: str, detail: str = "", user=None, level: str = "info") -> None:
             )
         )
         db.commit()
-    except Exception:  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001
+        logger.warning(
+            "event=activity_log_failed action=%s user_id=%s level=%s error_type=%s",
+            action, getattr(user, "id", None), level, type(e).__name__,
+            exc_info=True,
+        )
         db.rollback()
     finally:
         db.close()

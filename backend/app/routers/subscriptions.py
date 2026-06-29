@@ -1,6 +1,9 @@
+import hashlib
+import logging
+import time
 from datetime import date
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -15,6 +18,16 @@ from app.security import verify_password
 from app.services import exchange
 
 router = APIRouter(prefix="/api/subscriptions", tags=["subscriptions"])
+logger = logging.getLogger(__name__)
+
+
+def _request_id(request: Request | None) -> str:
+    return getattr(getattr(request, "state", None), "request_id", "-")
+
+
+def _name_hash(name: str | None) -> str:
+    raw = (name or "").encode("utf-8")
+    return hashlib.sha1(raw).hexdigest()[:8]
 
 
 def _to_out(db: Session, sub: Subscription, base_currency: str) -> SubscriptionOut:
@@ -49,16 +62,34 @@ def list_subs(
 @router.post("", response_model=SubscriptionOut)
 def create_sub(
     payload: SubscriptionIn,
+    request: Request,
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    t0 = time.perf_counter()
+    rid = _request_id(request)
+    name = payload.name or ""
+    logger.info(
+        "event=create_sub_start request_id=%s user_id=%s billing_type=%s currency=%s "
+        "cycle=%s cycle_count=%s category_id=%s payment_method_id=%s bundle_id=%s "
+        "has_icon=%s has_url=%s has_notes=%s has_remark=%s has_family_members=%s "
+        "name_len=%s name_hash=%s",
+        rid, user.id, payload.billing_type, payload.currency,
+        payload.cycle, payload.cycle_count, payload.category_id,
+        payload.payment_method_id, payload.bundle_id, bool(payload.icon),
+        bool(payload.url), bool(payload.notes), bool(payload.remark),
+        bool(payload.family_members), len(name), _name_hash(name),
+    )
+
     data = payload.model_dump()
     data["start_date"] = data.get("start_date") or date.today()
+    auto_url_filled = False
     # 附加信息：常用订阅名自动补全官方网站
     if not data.get("url"):
         site = icon_library.website_for_name(data.get("name", ""))
         if site:
             data["url"] = site
+            auto_url_filled = True
     if data["billing_type"] == "recurring" and not data.get("next_renewal_date"):
         data["next_renewal_date"] = compute_next_renewal(
             data["start_date"], data["cycle"], data["cycle_count"]
@@ -66,12 +97,45 @@ def create_sub(
     if data["billing_type"] == "one_time":
         data["next_renewal_date"] = None
         data["auto_renew"] = False
+    logger.info(
+        "event=create_sub_prepared request_id=%s user_id=%s auto_url_filled=%s "
+        "next_renewal_date_present=%s auto_renew=%s elapsed_ms=%s",
+        rid, user.id, auto_url_filled, bool(data.get("next_renewal_date")),
+        data.get("auto_renew"), int((time.perf_counter() - t0) * 1000),
+    )
+
     sub = Subscription(**data, user_id=user.id)
     db.add(sub)
-    db.commit()
+    logger.info("event=create_sub_commit_start request_id=%s user_id=%s", rid, user.id)
+    commit_t = time.perf_counter()
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        logger.exception(
+            "event=create_sub_commit_failed request_id=%s user_id=%s elapsed_ms=%s",
+            rid, user.id, int((time.perf_counter() - t0) * 1000),
+        )
+        raise
+    logger.info(
+        "event=create_sub_commit_ok request_id=%s user_id=%s subscription_id=%s "
+        "commit_ms=%s elapsed_ms=%s",
+        rid, user.id, sub.id, int((time.perf_counter() - commit_t) * 1000),
+        int((time.perf_counter() - t0) * 1000),
+    )
+
     db.refresh(sub)
+    logger.info(
+        "event=create_sub_refresh_ok request_id=%s subscription_id=%s elapsed_ms=%s",
+        rid, sub.id, int((time.perf_counter() - t0) * 1000),
+    )
     activity.log("subscription.create", f"新增订阅「{sub.name}」", user=user)
-    return _to_out(db, sub, user.base_currency)
+    out = _to_out(db, sub, user.base_currency)
+    logger.info(
+        "event=create_sub_done request_id=%s user_id=%s subscription_id=%s elapsed_ms=%s",
+        rid, user.id, sub.id, int((time.perf_counter() - t0) * 1000),
+    )
+    return out
 
 
 @router.get("/{sub_id}", response_model=SubscriptionOut)
