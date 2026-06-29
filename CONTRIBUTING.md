@@ -51,7 +51,7 @@
 
 4. **提交更改**
    ```bash
-   git add .
+   git add <需要提交的文件>
    git commit -m "feat: 添加功能描述"
    # 或 "fix: 修复问题描述"
    ```
@@ -108,6 +108,7 @@ npm run lint
 - 添加注释说明复杂逻辑
 - 一次提交只做一件事
 - 保持小的、可审查的 Pull Request
+- 不要提交本地生成目录或构建产物，例如 `.claude/`、`frontend/node_modules/`、`frontend/dist/`、`__pycache__/`
 
 ---
 
@@ -177,11 +178,19 @@ npm test
 
 ## Pull Request 流程
 
+提交 PR 前请同步更新相关文档，尤其是用户可见功能、环境变量、部署方式、通知通道和图标库行为的变化；重要变更也应写入 `CHANGELOG.md` 的 `[Unreleased]` 部分。
+
 1. **本地测试** - 确保代码本地能运行
 2. **提交 PR** - 填写 PR 模板，清晰说明更改内容
 3. **审查** - 等待 Maintainer 审查
 4. **修改反馈** - 根据审查意见做修改
 5. **合并** - 审查通过后合并到 main 分支
+
+### 维护者发布流程
+
+- `main` 分支推送后会触发 Docker 镜像构建与发布。
+- 需要手动发布指定镜像版本时，在 GitHub Actions 中运行 **Build and Publish Docker image**，填写版本号（如 `1.0.0`）；工作流会校验 Docker tag 格式，并同时推送 `latest` 与指定版本。
+- 发布前确认工作区只包含应发布文件，不要包含 `.claude/`、`frontend/node_modules/`、`frontend/dist/`、`__pycache__/` 等本地生成内容。
 
 ### PR 模板
 

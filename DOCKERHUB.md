@@ -39,6 +39,8 @@ services:
       ADMIN_USERNAME: admin
       ADMIN_PASSWORD: admin123
       ADMIN_EMAIL: admin@example.com
+      ICON_FETCH_ENABLED: "true"
+      ICON_FETCH_GOOGLE_ENABLED: "true"
     volumes:
       - subly_data:/app/data
     ports:
@@ -58,16 +60,20 @@ volumes:
 | `REMINDER_SCAN_TIME` | Daily scan time for reminders, e.g. `09:00`. |
 | `TELEGRAM_BOT_TOKEN` | Optional; can also be set in the web UI. |
 | `EXCHANGE_API_BASE` / `EXCHANGE_API_URL` | Exchange-rate source (defaults provided). |
+| `ICON_FETCH_ENABLED` | Enable on-demand favicon downloads for the built-in icon library. Default `true`. |
+| `ICON_FETCH_GOOGLE_ENABLED` | Enable Google favicon provider. Disable it if your network cannot reach Google. Default `true`. |
+| `ICON_FETCH_TIMEOUT_S` | Per-attempt icon fetch timeout in seconds. Default `2.0`. |
+| `ICON_FETCH_MAX_BYTES` | Maximum icon download size in bytes. Default `262144`. |
 
-Bark needs no env var — configure the Device Key in the web Settings page.
+Bark needs no env var — configure the Device Key and optional non-negative TTL seconds in the web Settings page.
 
 ## Volumes
 
-- `/app/data` — SQLite database file + uploaded icons. Persist this.
+- `/app/data` — SQLite database file + uploaded icons + built-in icon-library cache. Persist this.
 
 ## Features
 
-Multi-user (JWT, admin/user roles) · recurring & one-time subscriptions · multi-language (中/EN/RU) · 5 themes · multi-currency with live FX · dashboard analytics · category management · Apple-style calendar · spending reports · **Telegram + Bark** notifications (run side by side) · per-user & **admin full-site** backup/restore · built-in SQLite, zero config.
+Multi-user (JWT, admin/user roles) · recurring & one-time subscriptions · multi-language (中/EN/RU) · 5 themes · multi-currency with live FX · dashboard analytics · category management · Apple-style calendar · spending reports · **Telegram + Bark** notifications (run side by side, optional Bark TTL) · icon library with favicon cache and visible fallback · per-user & **admin full-site** backup/restore · built-in SQLite, zero config.
 
 ## License
 

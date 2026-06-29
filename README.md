@@ -27,14 +27,14 @@ docker run -d -p 8842:8000 -v subly_data:/app/data yourname/subly:latest
 | 💳 **订阅管理** | 周期订阅 + 一次性买断，自动计算下次续费日，到期 / 即将到期醒目提醒 |
 | 📱 **保号场景** | 针对电信运营商保号：续费后从当前时间重新计算周期（无论提前还是过期续费） |
 | 🔔 **Telegram 提醒** | 续费日前自动推送，提前天数可自定义，支持 TG API 反代 / HTTP 代理 |
-| 🔔 **Bark 推送** | iOS 推送提醒，与 Telegram 可同时开启、各发各的，支持自建 Bark 服务器 |
+| 🔔 **Bark 推送** | iOS 推送提醒，与 Telegram 可同时开启、各发各的，支持自建 Bark 服务器与可选 TTL |
 | 📊 **仪表盘 & 报表** | 月度 / 年度支出、支出洞察与排行、永久购买、即将续费、分类明细 |
 | 🗓️ **日历视图** | 苹果风格日历，订阅一目了然 |
 | 💱 **多货币** | 全球主流货币 + 自定义货币，实时汇率自动更新 |
 | 🗂️ **分类管理** | 流媒体 / AI / 游戏 / VPS / 运营商等预置分类，支持自定义与拖拽排序 |
 | 💾 **备份恢复** | 单用户 JSON 备份；管理员可一键**整站备份 / 恢复**全部成员数据 |
 | 🌍 **多语言 / 多主题** | 中文 / English / Русский，5 套主题 |
-| 🖼️ **自定义图标** | Emoji、上传图片或 URL |
+| 🖼️ **自定义图标** | Emoji、上传图片、URL，内置图标库支持 favicon 下载、缓存与可见 fallback |
 | 🗄️ **内置 SQLite** | 零配置，开箱即用，无需准备外部数据库 |
 
 ---
@@ -92,8 +92,12 @@ docker compose up -d --build
 | `REMINDER_SCAN_TIME` | | 每天扫描到期订阅、发送提醒的时间，如 `09:00` |
 | `TELEGRAM_BOT_TOKEN` | | 可留空，后续在网页「设置」里配置 |
 | `EXCHANGE_API_BASE` / `EXCHANGE_API_URL` | | 汇率数据源（已给默认免费源） |
+| `ICON_FETCH_ENABLED` | | 是否允许内置图标库联网下载 favicon，默认 `true` |
+| `ICON_FETCH_GOOGLE_ENABLED` | | 是否启用 Google favicon provider，默认 `true`；网络不可达时可关闭 |
+| `ICON_FETCH_TIMEOUT_S` | | 单次图标下载超时秒数，默认 `2.0` |
+| `ICON_FETCH_MAX_BYTES` | | 单个图标最大下载字节数，默认 `262144` |
 
-Bark 推送无需环境变量，在网页「设置」里填 Device Key 即可。完整示例见 [.env.example](./.env.example)。
+Bark 推送无需环境变量，在网页「设置」里填 Device Key 即可；TTL 可留空使用 Bark 默认值，也可填写非负整数秒数。完整示例见 [.env.example](./.env.example)。
 
 ---
 
@@ -106,7 +110,7 @@ Bark 推送无需环境变量，在网页「设置」里填 Device Key 即可。
 | 数据库 | SQLite（内置，零配置，文件持久化在 `/app/data`） |
 | 部署 | Docker（多架构 amd64 / arm64）· Caddy 自动 HTTPS |
 
-数据持久化在容器的 `/app/data` 卷中：SQLite 数据库文件 + 上传的图标。
+数据持久化在容器的 `/app/data` 卷中：SQLite 数据库文件 + 上传的图标 + 内置图标库缓存。
 
 ---
 
@@ -114,9 +118,10 @@ Bark 推送无需环境变量，在网页「设置」里填 Device Key 即可。
 
 - **第一次登录**：直接用启动时环境变量设置的管理员账号登录即可，无需任何安装向导。
 - **Telegram 提醒**：找 @BotFather `/newbot` 拿 Bot Token → 设置 → Telegram 配置 → 填 Token、验证机器人、获取 Chat ID、发送测试。
-- **Bark 推送**：iOS 上安装 [Bark](https://github.com/Finb/Bark) App，打开复制 Device Key → 设置 → Bark 配置 → 粘贴 Key、发送测试。支持自建 Bark 服务器地址。两个通道可以同时开启，各发各的，互不影响。
+- **Bark 推送**：iOS 上安装 [Bark](https://github.com/Finb/Bark) App，打开复制 Device Key → 设置 → Bark 配置 → 粘贴 Key、按需填写 TTL（秒，非负整数，留空用 Bark 默认值）、发送测试。支持自建 Bark 服务器地址。两个通道可以同时开启，各发各的，互不影响。
 - **续费规则**：点击续费后系统从当前时间重新计算下次到期（保号场景），循环订阅可选择按原到期日累加。
 - **备份**：设置 → 数据备份，导出 / 导入 JSON；管理员可整站备份与恢复全部成员数据。
+- **图标库**：内置服务图标会按需下载 favicon 并缓存到 `/app/data/icons/library`；网络不可达或 provider 失败时，会显示稳定颜色与首字母的可见 fallback，不再出现透明空白图标。
 - **API 文档**：启动后访问 `http://<host>:8000/docs`（Swagger UI）。
 
 更多文档：[各厂家NAS安装教程](./各厂家NAS安装教程.md) · [技术方案](./技术方案.md)
@@ -139,7 +144,13 @@ docker compose -f docker-compose.hub.yml pull && docker compose -f docker-compos
 <summary><b>Telegram / Bark 收不到消息？</b></summary>
 
 - Telegram：确认 Bot Token 正确、已和机器人对过话拿到 Chat ID；中国大陆需在设置里配置代理或 API 反代。
-- Bark：确认 Device Key 正确、iOS 上 Bark App 在线；自建 Bark 服务器需确认地址可从容器访问。
+- Bark：确认 Device Key 正确、iOS 上 Bark App 在线；自建 Bark 服务器需确认地址可从容器访问。TTL 只能填写非负整数秒数，留空表示使用 Bark 默认值。
+</details>
+
+<details>
+<summary><b>图标库不显示真实图标怎么办？</b></summary>
+
+内置图标库会优先从目标站点和公共 favicon provider 下载图标，下载失败时仍会显示可见 fallback。若你的部署环境无法访问 Google favicon provider，可设置 `ICON_FETCH_GOOGLE_ENABLED=false`；若完全不希望容器联网下载图标，可设置 `ICON_FETCH_ENABLED=false`。
 </details>
 
 <details>
@@ -173,7 +184,7 @@ docker compose -f docker-compose.hub.yml pull && docker compose -f docker-compos
 
 **Self-hosted subscription / renewal manager with built-in SQLite (zero-config) and Telegram + Bark reminders, so you never let a subscription — or a SIM keep-alive plan — expire.**
 
-**Highlights:** multi-user (JWT, admin/user roles) · recurring & one-time subscriptions · Telegram **and** Bark (iOS) reminders, run side by side · dashboard & spending reports · Apple-style calendar · multi-currency with live FX · category management · per-user **and admin full-site** backup/restore · multi-language (中/EN/RU) · 5 themes · **built-in SQLite, no external database needed**.
+**Highlights:** multi-user (JWT, admin/user roles) · recurring & one-time subscriptions · Telegram **and** Bark (iOS) reminders with optional Bark TTL, run side by side · dashboard & spending reports · Apple-style calendar · multi-currency with live FX · category management · icon library with favicon cache and visible fallback · per-user **and admin full-site** backup/restore · multi-language (中/EN/RU) · 5 themes · **built-in SQLite, no external database needed**.
 
 ```bash
 docker run -d --name subly -p 8842:8000 \
@@ -194,7 +205,7 @@ Based on [suyijun8182/easysub](https://github.com/suyijun8182/easysub) (MIT). NA
 
 **Самостоятельно размещаемый менеджер подписок со встроенным SQLite (без настройки) и напоминаниями в Telegram + Bark — чтобы ни одна подписка (и SIM для поддержания номера) не истекла.**
 
-**Возможности:** мультипользовательский режим (JWT, роли админ/пользователь) · регулярные и разовые подписки · напоминания в Telegram **и** Bark (iOS) одновременно · дашборд и отчёты о расходах · календарь в стиле Apple · мультивалютность с live-курсами · управление категориями · резервное копирование/восстановление для пользователя **и всего сайта (админ)** · мультиязычность (中/EN/RU) · 5 тем · **встроенный SQLite, внешняя БД не требуется**.
+**Возможности:** мультипользовательский режим (JWT, роли админ/пользователь) · регулярные и разовые подписки · напоминания в Telegram **и** Bark (iOS) одновременно, с опциональным Bark TTL · дашборд и отчёты о расходах · календарь в стиле Apple · мультивалютность с live-курсами · управление категориями · библиотека иконок с favicon-кэшем и видимым fallback · резервное копирование/восстановление для пользователя **и всего сайта (админ)** · мультиязычность (中/EN/RU) · 5 тем · **встроенный SQLite, внешняя БД не требуется**.
 
 ```bash
 docker run -d --name subly -p 8842:8000 \

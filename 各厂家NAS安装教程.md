@@ -25,11 +25,15 @@
 | `TZ` | 时区 | `Asia/Shanghai` |
 | `REMINDER_SCAN_TIME` | 每天提醒扫描时间 | `09:00` |
 | `TELEGRAM_BOT_TOKEN` | 可留空，后续网页里配 | |
+| `ICON_FETCH_ENABLED` | 是否允许内置图标库联网下载 favicon | `true` |
+| `ICON_FETCH_GOOGLE_ENABLED` | 是否启用 Google favicon provider，网络不可达时可关 | `true` |
+| `ICON_FETCH_TIMEOUT_S` | 单次图标下载超时秒数 | `2.0` |
+| `ICON_FETCH_MAX_BYTES` | 单个图标最大下载字节数 | `262144` |
 
-> Bark 推送无需环境变量，登录后在网页「设置」里填 Device Key 即可；Telegram 也可以留空在网页里配。
+> Bark 推送无需环境变量，登录后在网页「设置」里填 Device Key 即可；TTL 可留空使用 Bark 默认值，也可填写非负整数秒数。Telegram 也可以留空在网页里配。
 
 - **端口**：容器内部 `8000`，映射到宿主任意端口（本文统一用 `8842`）。
-- **持久化目录**：把容器内 `/app/data` 映射到 NAS 的一个目录（存 SQLite 数据库文件 + 上传图标）。**这个目录一定要做持久化映射，否则重建容器会丢数据。**
+- **持久化目录**：把容器内 `/app/data` 映射到 NAS 的一个目录（存 SQLite 数据库文件、上传图标、内置图标库缓存）。**这个目录一定要做持久化映射，否则重建容器会丢数据。**
 
 完成创建后，浏览器访问 `http://<NAS局域网IP>:8842`，直接用上面设置的管理员账号登录即可。
 
@@ -150,9 +154,14 @@ NAS 图形界面：重新拉取 `latest`，再重建容器（保持 `/app/data` 
 - 把映射左边的 `8842` 改成别的端口（如 `9000`），访问就用新端口。
 
 **Q：数据存在哪？**
-- 全部在容器的 `/app/data` 卷里：SQLite 数据库文件（`subly.db`）+ 上传的图标。只要这个目录做了持久化映射，重建/升级容器都不会丢数据。
+- 全部在容器的 `/app/data` 卷里：SQLite 数据库文件（`subly.db`）+ 上传的图标 + 内置图标库缓存。只要这个目录做了持久化映射，重建/升级容器都不会丢数据。
 
 **Q：Telegram / Bark 收不到提醒？**
 - Telegram：确认 Bot Token 正确、已和机器人对话过拿到 Chat ID；国内访问需要在设置里配代理或 API 反代。
-- Bark：确认 Device Key 正确、iOS 上 Bark App 在线；自建 Bark 服务器要确认容器能访问到那个地址。
+- Bark：确认 Device Key 正确、iOS 上 Bark App 在线；自建 Bark 服务器要确认容器能访问到那个地址。TTL 只能填写非负整数秒数，留空表示使用 Bark 默认值。
 - 两者可以同时开启，互不影响，建议先在「设置」页点「发送测试」确认通道本身是通的。
+
+**Q：图标库没有真实图标或加载很慢？**
+- 内置图标库会按需下载 favicon 并缓存到 `/app/data/icons/library`；下载失败时会显示可见 fallback，不会再显示透明空白图标。
+- 如果 NAS 所在网络无法访问 Google favicon provider，可添加环境变量 `ICON_FETCH_GOOGLE_ENABLED=false`。
+- 如果不希望容器联网下载图标，可添加环境变量 `ICON_FETCH_ENABLED=false`，系统会直接使用可见 fallback。
