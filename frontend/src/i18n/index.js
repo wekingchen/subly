@@ -96,7 +96,7 @@ const zh = {
   },
   iconLib: {
     title: '图标库管理', subtitle: '管理内置服务列表与图标库缓存',
-    add: '新增服务', edit: '编辑', fetchOne: '抓取图标', fetchMissing: '预热缺失图标', fetchAll: '全部重新抓取',
+    add: '新增服务', edit: '编辑', duplicate: '复制', copySuffix: '副本', fetchOne: '抓取图标', fetchMissing: '预热缺失图标', fetchAll: '全部重新抓取',
     running: '正在抓取…', done: '完成', total: '总数', cached: '已缓存', missing: '未缓存',
     active: '启用', inactive: '已停用', activate: '启用', deactivate: '停用', builtin: '内置', custom: '自定义',
     name: '名称', domain: '域名', website: '官网', category: '分类', slug: 'Slug', status: '状态', source: '来源',
@@ -213,7 +213,7 @@ const en = {
   },
   iconLib: {
     title: 'Icon Library', subtitle: 'Manage the built-in service list and icon cache',
-    add: 'Add service', edit: 'Edit', fetchOne: 'Fetch icon', fetchMissing: 'Fetch missing', fetchAll: 'Refetch all',
+    add: 'Add service', edit: 'Edit', duplicate: 'Duplicate', copySuffix: 'copy', fetchOne: 'Fetch icon', fetchMissing: 'Fetch missing', fetchAll: 'Refetch all',
     running: 'Fetching…', done: 'Done', total: 'Total', cached: 'Cached', missing: 'Missing',
     active: 'Active', inactive: 'Inactive', activate: 'Activate', deactivate: 'Deactivate', builtin: 'Built-in', custom: 'Custom',
     name: 'Name', domain: 'Domain', website: 'Website', category: 'Category', slug: 'Slug', status: 'Status', source: 'Source',
@@ -330,7 +330,7 @@ const ru = {
   },
   iconLib: {
     title: 'Библиотека иконок', subtitle: 'Управление встроенным списком сервисов и кэшем иконок',
-    add: 'Добавить сервис', edit: 'Изменить', fetchOne: 'Загрузить иконку', fetchMissing: 'Загрузить недостающие', fetchAll: 'Загрузить все заново',
+    add: 'Добавить сервис', edit: 'Изменить', duplicate: 'Копировать', copySuffix: 'копия', fetchOne: 'Загрузить иконку', fetchMissing: 'Загрузить недостающие', fetchAll: 'Загрузить все заново',
     running: 'Загрузка…', done: 'Готово', total: 'Всего', cached: 'В кэше', missing: 'Нет',
     active: 'Активен', inactive: 'Отключён', activate: 'Включить', deactivate: 'Отключить', builtin: 'Встроенный', custom: 'Свой',
     name: 'Название', domain: 'Домен', website: 'Сайт', category: 'Категория', slug: 'Slug', status: 'Статус', source: 'Источник',

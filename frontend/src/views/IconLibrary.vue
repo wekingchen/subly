@@ -87,6 +87,7 @@
               <td><span class="tag" :class="svc.is_active ? 'ok' : 'off'">{{ svc.is_active ? t('iconLib.active') : t('iconLib.inactive') }}</span></td>
               <td class="acts">
                 <button class="btn sm ghost" @click="openEdit(svc)">{{ t('iconLib.edit') }}</button>
+                <button class="btn sm ghost" @click="duplicate(svc)">{{ t('iconLib.duplicate') }}</button>
                 <button class="btn sm ghost" @click="fetchOne(svc)">{{ t('iconLib.fetchOne') }}</button>
                 <button v-if="svc.is_active" class="btn sm danger" @click="deactivate(svc)">{{ t('iconLib.deactivate') }}</button>
                 <button v-else class="btn sm ghost" @click="restore(svc)">{{ t('iconLib.activate') }}</button>
@@ -184,6 +185,20 @@ async function load() {
 
 function openNew() { editing.value = null; formErr.value = ''; form.value = blank(); showForm.value = true }
 function openEdit(svc) { editing.value = svc; formErr.value = ''; form.value = { ...svc }; showForm.value = true }
+function duplicate(svc) {
+  editing.value = null
+  formErr.value = ''
+  form.value = {
+    name: `${svc.name} (${t('iconLib.copySuffix')})`,
+    domain: svc.domain,
+    website: svc.website || '',
+    category: svc.category,
+    slug: '',
+    is_active: true,
+    sort: svc.sort || 0
+  }
+  showForm.value = true
+}
 
 async function save() {
   if (!form.value.name) return (formErr.value = t('iconLib.nameReq'))
