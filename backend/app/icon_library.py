@@ -3,6 +3,7 @@
 图标按需从公共 favicon 服务下载并缓存到本地 data/icons/library/，
 之后由本地静态目录提供，不依赖外网。
 """
+from sqlalchemy import func, select
 
 # 分类 key -> 显示标签（用于「按分类浏览」服务库）
 CATEGORY_LABELS = [
@@ -214,6 +215,19 @@ def _slug(domain: str) -> str:
     return domain.replace(".", "_").replace("/", "_")
 
 
+def slug_for_domain(domain: str) -> str:
+    """对外公开的 slug 生成规则（与 _slug 一致，供 seed/admin 复用）。"""
+    return _slug(domain)
+
+
+def _strip_icon_ext(slug: str) -> str:
+    safe = (slug or "").strip()
+    for ext in (".png", ".svg", ".ico", ".webp", ".jpg", ".jpeg"):
+        if safe.endswith(ext):
+            return safe[: -len(ext)]
+    return safe
+
+
 _CAT_LABEL_MAP = dict(CATEGORY_LABELS)
 
 
@@ -222,55 +236,86 @@ def categories() -> list[dict]:
     return [{"key": k, "label": v} for k, v in CATEGORY_LABELS]
 
 
-def manifest() -> list[dict]:
-    """返回图标库清单（含本地图标访问路径与官方网站）。"""
-    out = []
-    for name, domain, cat in SERVICES:
-        slug = _slug(domain)
-        out.append(
-            {
-                "name": name,
-                "domain": domain,
-                "website": f"https://{domain}",
-                "category": cat,
-                "category_label": _CAT_LABEL_MAP.get(cat, cat),
-                "slug": slug,
-                # 前端通过该地址取图标（首次访问会触发本地缓存）
-                "icon": f"/api/icons/library/{slug}.png",
-            }
-        )
-    return out
+def category_label(key: str) -> str:
+    return _CAT_LABEL_MAP.get(key, key)
 
 
-def website_for_name(name: str) -> str | None:
-    """按服务名（精确/包含）匹配官方网站，用于创建订阅时自动补全。"""
+def _row_to_manifest(row) -> dict:
+    slug = row.slug
+    return {
+        "name": row.name,
+        "domain": row.domain,
+        "website": row.website or f"https://{row.domain}",
+        "category": row.category,
+        "category_label": _CAT_LABEL_MAP.get(row.category, row.category),
+        "slug": slug,
+        # 前端通过该地址取图标（首次访问会触发本地缓存）
+        "icon": f"/api/icons/library/{slug}.png",
+    }
+
+
+def manifest(db) -> list[dict]:
+    """返回图标库清单（仅启用项）。数据来源已迁移到 DB。"""
+    from app.models import IconLibraryService
+
+    rows = db.scalars(
+        select(IconLibraryService)
+        .where(IconLibraryService.is_active.is_(True))
+        .order_by(IconLibraryService.sort, IconLibraryService.id)
+    ).all()
+    return [_row_to_manifest(r) for r in rows]
+
+
+def website_for_name(db, name: str) -> str | None:
+    """按服务名（精确/包含）匹配官方网站，用于创建订阅时自动补全。只查启用项。"""
     if not name:
         return None
+    from app.models import IconLibraryService
+
     q = name.strip().lower()
-    for n, domain, _ in SERVICES:
-        if n.lower() == q:
-            return f"https://{domain}"
-    for n, domain, _ in SERVICES:
-        if q and (q in n.lower() or n.lower() in q):
-            return f"https://{domain}"
+    row = db.scalar(
+        select(IconLibraryService)
+        .where(IconLibraryService.is_active.is_(True))
+        .where(func.lower(IconLibraryService.name) == q)
+    )
+    if row:
+        return row.website or f"https://{row.domain}"
+    rows = db.scalars(
+        select(IconLibraryService)
+        .where(IconLibraryService.is_active.is_(True))
+        .order_by(IconLibraryService.sort, IconLibraryService.id)
+    ).all()
+    for r in rows:
+        name_l = (r.name or "").lower()
+        if q and (q in name_l or name_l in q):
+            return r.website or f"https://{r.domain}"
     return None
 
 
-def service_for_slug(slug: str) -> dict | None:
-    """按图标 slug 查找服务信息，供后端下载和 fallback 使用。"""
-    safe = (slug or "").strip()
-    for ext in (".png", ".svg", ".ico", ".webp", ".jpg", ".jpeg"):
-        if safe.endswith(ext):
-            safe = safe[: -len(ext)]
-            break
-    target = safe
-    for name, domain, cat in SERVICES:
-        cur = _slug(domain)
-        if cur == target:
-            return {"name": name, "domain": domain, "category": cat, "slug": cur}
-    return None
+def service_for_slug(db, slug: str, include_inactive: bool = True) -> dict | None:
+    """按图标 slug 查找服务信息，供后端下载和 fallback 使用。
+
+    默认包含停用项，确保旧订阅保存的图标 URL 仍能解析。
+    """
+    from app.models import IconLibraryService
+
+    target = _strip_icon_ext(slug)
+    stmt = select(IconLibraryService).where(IconLibraryService.slug == target)
+    if not include_inactive:
+        stmt = stmt.where(IconLibraryService.is_active.is_(True))
+    row = db.scalar(stmt)
+    if not row:
+        return None
+    return {
+        "name": row.name,
+        "domain": row.domain,
+        "category": row.category,
+        "slug": row.slug,
+        "website": row.website or f"https://{row.domain}",
+    }
 
 
-def domain_for_slug(slug: str) -> str | None:
-    service = service_for_slug(slug)
+def domain_for_slug(db, slug: str) -> str | None:
+    service = service_for_slug(db, slug)
     return service["domain"] if service else None
+

@@ -14,9 +14,11 @@ import httpx
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
+from sqlalchemy.orm import Session
 
 from app import icon_library
 from app.config import settings
+from app.database import get_db
 from app.deps import get_current_user
 from app.models import User
 
@@ -554,22 +556,65 @@ def _fetch_library_icon(base: str, domain: str) -> tuple[bytes, str, str, str] |
     return None
 
 
-def _write_icon_cache(base: str, content: bytes, ext: str) -> str:
-    os.makedirs(LIBRARY_DIR, exist_ok=True)
-    path = os.path.join(LIBRARY_DIR, f"{base}{ext}")
-    tmp_path = f"{path}.{uuid.uuid4().hex}.tmp"
+
+
+def library_icon_cache_info(slug: str) -> dict:
+    """返回图标库缓存状态，供管理页和预热任务复用。"""
+    base = _library_base_slug(slug)
+    for ext in _CACHE_EXTS:
+        path = os.path.join(LIBRARY_DIR, f"{base}{ext}")
+        if os.path.isfile(path):
+            return {"cached": True, "ext": ext, "path": path}
+    return {"cached": False, "ext": None, "path": None}
+
+
+def fetch_library_icon_to_cache(
+    slug: str,
+    domain: str,
+    label: str | None = None,
+    force: bool = False,
+) -> dict:
+    """确保服务图标已写入本地缓存。
+
+    返回结构用于管理页预热进度：status=success/skipped/failed，source 表示 cache/direct/html/...
+    或跳过原因。不构造 HTTP Response，避免预热任务复制路由层逻辑。
+    """
+    base = _library_base_slug(slug)
+    cache = library_icon_cache_info(base)
+    if cache["cached"] and not force:
+        return {"status": "skipped", "source": "cache", "ext": cache["ext"], "error": None}
+    if not settings.icon_fetch_enabled:
+        return {"status": "skipped", "source": "disabled", "ext": None, "error": "icon_fetch_disabled"}
+    if _failed_recently(base):
+        return {"status": "skipped", "source": "failed_recently", "ext": None, "error": "failed_recently"}
+    if _breaker_open():
+        return {"status": "skipped", "source": "breaker", "ext": None, "error": "breaker_open"}
+
+    wait_s = max(2.0, min(8.0, float(settings.icon_fetch_timeout_s or 2.0) * 3))
+    if not _FETCH_SEMAPHORE.acquire(timeout=wait_s):
+        return {"status": "skipped", "source": "rate_limited", "ext": None, "error": "rate_limited"}
     try:
-        with open(tmp_path, "wb") as f:
-            f.write(content)
-        os.replace(tmp_path, path)
-    except OSError:
-        try:
-            if os.path.exists(tmp_path):
-                os.remove(tmp_path)
-        except OSError:
-            pass
-        raise
-    return path
+        fetched = _fetch_library_icon(base, domain)
+    finally:
+        _FETCH_SEMAPHORE.release()
+
+    if not fetched:
+        _record_failure(base)
+        return {"status": "failed", "source": "fallback", "ext": None, "error": "fetch_failed"}
+
+    content, _mime_type, ext, provider = fetched
+    try:
+        _write_icon_cache(base, content, ext)
+    except OSError as e:
+        _record_failure(base)
+        logger.warning(
+            "event=icon_favicon_cache_write_failed slug=%s error_type=%s",
+            base, type(e).__name__,
+        )
+        return {"status": "failed", "source": provider, "ext": ext, "error": "cache_write_failed"}
+
+    _clear_slug_failure(base)
+    return {"status": "success", "source": provider, "ext": ext, "error": None}
 
 
 class IconUrlIn(BaseModel):
@@ -625,13 +670,13 @@ def import_from_url(payload: IconUrlIn, user: User = Depends(get_current_user)):
 
 
 @router.get("/library")
-def list_library(user: User = Depends(get_current_user)):
+def list_library(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """内置常见商家图标库清单（也用于服务名联想）。"""
-    return icon_library.manifest()
+    return icon_library.manifest(db)
 
 
 @router.get("/library/{slug}")
-def library_icon(slug: str):
+def library_icon(slug: str, db: Session = Depends(get_db)):
     """返回某个商家图标；本地无缓存时从 favicon 来源下载后缓存。
 
     生产环境里外部 favicon 可能不可达。失败、熔断或并发限流时返回可见 SVG
@@ -642,7 +687,7 @@ def library_icon(slug: str):
     if cached:
         return cached
 
-    service = icon_library.service_for_slug(base)
+    service = icon_library.service_for_slug(db, base)
     if not service:
         raise HTTPException(404, "未知图标")
 

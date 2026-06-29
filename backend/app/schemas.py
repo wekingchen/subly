@@ -261,3 +261,64 @@ class AdminUserUpdate(BaseModel):
     is_active: bool | None = None
     is_approved: bool | None = None
     password: str | None = None
+
+
+# ---------- Icon library service (admin) ----------
+class IconServiceIn(BaseModel):
+    name: str
+    domain: str
+    website: str | None = None
+    category: str = "other"
+    slug: str | None = None
+    is_active: bool = True
+    sort: int = 0
+
+
+class IconServiceUpdate(BaseModel):
+    name: str | None = None
+    domain: str | None = None
+    website: str | None = None
+    category: str | None = None
+    slug: str | None = None
+    is_active: bool | None = None
+    sort: int | None = None
+
+
+class IconServiceOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    name: str
+    domain: str
+    website: str | None
+    category: str
+    category_label: str = ""
+    slug: str
+    is_active: bool
+    sort: int
+    source: str
+    created_at: datetime
+    updated_at: datetime | None = None
+    icon: str = ""
+    cached: bool = False
+    cached_ext: str | None = None
+
+
+class IconPrewarmIn(BaseModel):
+    mode: str = "missing"        # missing | all | selected
+    ids: list[int] | None = None
+    force: bool = False
+
+
+class IconPrewarmStatusOut(BaseModel):
+    id: str
+    status: str                   # queued | running | completed | failed
+    total: int = 0
+    done: int = 0
+    success: int = 0
+    failed: int = 0
+    skipped: int = 0
+    current: dict | None = None
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    items: list[dict] = []
+

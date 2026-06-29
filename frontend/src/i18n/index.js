@@ -2,7 +2,7 @@ import { createI18n } from 'vue-i18n'
 
 const zh = {
   app: { title: '省心订阅 Subly', tagline: '订阅 / 续费 / 保号，一个都不漏' },
-  nav: { dashboard: '仪表盘', subscriptions: '订阅管理', calendar: '日历', reports: '报表分析', notifications: '通知中心', logs: '实时日志', settings: '设置', users: '用户管理', logout: '退出' },
+  nav: { dashboard: '仪表盘', subscriptions: '订阅管理', calendar: '日历', reports: '报表分析', notifications: '通知中心', logs: '实时日志', settings: '设置', iconLibrary: '图标库管理', users: '用户管理', logout: '退出' },
   notify: { title: '通知中心', runScan: '立即扫描提醒', empty: '暂无通知记录', sent: '已发送', failed: '失败', daysBefore: '提前天数' },
   rtlog: { title: '实时日志', live: '实时', paused: '已暂停', action: '操作', user: '用户', detail: '详情', time: '时间', empty: '暂无日志', auto: '自动刷新' },
   account: { title: '账号与密码', username: '用户名', email: '邮箱', saveAccount: '保存账号', changePwd: '修改密码', oldPwd: '原密码', newPwd: '新密码', pwdOk: '密码已修改', accountOk: '账号已更新' },
@@ -94,12 +94,32 @@ const zh = {
     replaceConfirm: '将先清空每个用户的全部订阅，再从整站备份导入。确定继续？',
     exportOk: '整站备份已下载（{n} 个用户）', importOk: '已恢复 {users} 个用户（新建 {created} 个），共导入 {n} 个订阅'
   },
+  iconLib: {
+    title: '图标库管理', subtitle: '管理内置服务列表与图标库缓存',
+    add: '新增服务', edit: '编辑', fetchOne: '抓取图标', fetchMissing: '预热缺失图标', fetchAll: '全部重新抓取',
+    running: '正在抓取…', done: '完成', total: '总数', cached: '已缓存', missing: '未缓存',
+    active: '启用', inactive: '已停用', activate: '启用', deactivate: '停用', builtin: '内置', custom: '自定义',
+    name: '名称', domain: '域名', website: '官网', category: '分类', slug: 'Slug', status: '状态', source: '来源',
+    sort: '排序', icon: '图标', actions: '操作',
+    searchPh: '搜索名称 / 域名 / slug…', filterAll: '全部', filterCached: '已缓存', filterMissing: '未缓存',
+    filterActive: '启用', filterInactive: '已停用',
+    confirmDeactivate: '确认停用该服务？（旧订阅图标仍可显示）',
+    confirmFetchAll: '将对所有服务重新抓取图标，可能耗时较长。继续？',
+    formTitleNew: '新增服务', formTitleEdit: '编辑服务', namePh: '如 Netflix', domainPh: '如 netflix.com',
+    websitePh: '留空用 https://域名', categoryPh: '选择分类', slugPh: '留空自动生成', slugWarn: '修改 slug 会影响旧订阅图标地址',
+    save: '保存', cancel: '取消', saveOk: '已保存', deleteOk: '已停用', activateOk: '已启用',
+    fetchOk: '已抓取', fetchFail: '抓取失败', progress: '进度', success: '成功', failed: '失败', skipped: '跳过',
+    current: '当前', noJobs: '暂无抓取任务', details: '明细', provider: '来源', errReason: '原因',
+    nameReq: '请填写名称', domainReq: '请填写域名', slugExists: 'slug 已存在', okCount: '成功 {ok}', failCount: '失败 {fail}',
+    overview: '概览', cachedCount: '{n} 已缓存', missingCount: '{n} 未缓存', activeCount: '{n} 启用', inactiveCount: '{n} 停用',
+    exportList: '导出列表', refresh: '刷新', batch: '批量', selectAll: '全选', batchFetch: '抓取所选'
+  },
   common: { loading: '加载中...', save: '保存', actions: '操作', status: '状态', date: '日期', confirm: '确认', cancel: '取消', close: '关闭' }
 }
 
 const en = {
   app: { title: 'Subly', tagline: 'Never miss a renewal again' },
-  nav: { dashboard: 'Dashboard', subscriptions: 'Subscriptions', calendar: 'Calendar', reports: 'Reports', notifications: 'Notifications', logs: 'Live Logs', settings: 'Settings', users: 'Users', logout: 'Logout' },
+  nav: { dashboard: 'Dashboard', subscriptions: 'Subscriptions', calendar: 'Calendar', reports: 'Reports', notifications: 'Notifications', logs: 'Live Logs', settings: 'Settings', iconLibrary: 'Icon Library', users: 'Users', logout: 'Logout' },
   notify: { title: 'Notification Center', runScan: 'Run scan now', empty: 'No notifications yet', sent: 'Sent', failed: 'Failed', daysBefore: 'Days before' },
   rtlog: { title: 'Live Logs', live: 'Live', paused: 'Paused', action: 'Action', user: 'User', detail: 'Detail', time: 'Time', empty: 'No logs', auto: 'Auto refresh' },
   account: { title: 'Account & Password', username: 'Username', email: 'Email', saveAccount: 'Save account', changePwd: 'Change password', oldPwd: 'Old password', newPwd: 'New password', pwdOk: 'Password changed', accountOk: 'Account updated' },
@@ -191,12 +211,32 @@ const en = {
     replaceConfirm: 'This clears every user\'s subscriptions before importing from the full backup. Continue?',
     exportOk: 'Full backup downloaded ({n} users)', importOk: 'Restored {users} users ({created} created), imported {n} subscriptions'
   },
+  iconLib: {
+    title: 'Icon Library', subtitle: 'Manage the built-in service list and icon cache',
+    add: 'Add service', edit: 'Edit', fetchOne: 'Fetch icon', fetchMissing: 'Fetch missing', fetchAll: 'Refetch all',
+    running: 'Fetching…', done: 'Done', total: 'Total', cached: 'Cached', missing: 'Missing',
+    active: 'Active', inactive: 'Inactive', activate: 'Activate', deactivate: 'Deactivate', builtin: 'Built-in', custom: 'Custom',
+    name: 'Name', domain: 'Domain', website: 'Website', category: 'Category', slug: 'Slug', status: 'Status', source: 'Source',
+    sort: 'Sort', icon: 'Icon', actions: 'Actions',
+    searchPh: 'Search name / domain / slug…', filterAll: 'All', filterCached: 'Cached', filterMissing: 'Missing',
+    filterActive: 'Active', filterInactive: 'Inactive',
+    confirmDeactivate: 'Deactivate this service? (existing subscription icons still display)',
+    confirmFetchAll: 'This refetches icons for all services and may take a while. Continue?',
+    formTitleNew: 'New service', formTitleEdit: 'Edit service', namePh: 'e.g. Netflix', domainPh: 'e.g. netflix.com',
+    websitePh: 'Blank uses https://domain', categoryPh: 'Choose category', slugPh: 'Blank to auto-generate', slugWarn: 'Changing slug affects existing icon URLs',
+    save: 'Save', cancel: 'Cancel', saveOk: 'Saved', deleteOk: 'Deactivated', activateOk: 'Activated',
+    fetchOk: 'Fetched', fetchFail: 'Fetch failed', progress: 'Progress', success: 'Success', failed: 'Failed', skipped: 'Skipped',
+    current: 'Current', noJobs: 'No fetch jobs', details: 'Details', provider: 'Source', errReason: 'Reason',
+    nameReq: 'Name required', domainReq: 'Domain required', slugExists: 'Slug already exists', okCount: '{ok} ok', failCount: '{fail} failed',
+    overview: 'Overview', cachedCount: '{n} cached', missingCount: '{n} missing', activeCount: '{n} active', inactiveCount: '{n} inactive',
+    exportList: 'Export', refresh: 'Refresh', batch: 'Batch', selectAll: 'Select all', batchFetch: 'Fetch selected'
+  },
   common: { loading: 'Loading...', save: 'Save', actions: 'Actions', status: 'Status', date: 'Date', confirm: 'Confirm', cancel: 'Cancel', close: 'Close' }
 }
 
 const ru = {
   app: { title: 'Subly', tagline: 'Не пропустите ни одного продления' },
-  nav: { dashboard: 'Панель', subscriptions: 'Подписки', calendar: 'Календарь', reports: 'Отчёты', notifications: 'Уведомления', logs: 'Логи', settings: 'Настройки', users: 'Пользователи', logout: 'Выход' },
+  nav: { dashboard: 'Панель', subscriptions: 'Подписки', calendar: 'Календарь', reports: 'Отчёты', notifications: 'Уведомления', logs: 'Логи', settings: 'Настройки', iconLibrary: 'Библиотека иконок', users: 'Пользователи', logout: 'Выход' },
   notify: { title: 'Центр уведомлений', runScan: 'Запустить проверку', empty: 'Нет уведомлений', sent: 'Отправлено', failed: 'Ошибка', daysBefore: 'За дней' },
   rtlog: { title: 'Логи в реальном времени', live: 'Онлайн', paused: 'Пауза', action: 'Действие', user: 'Польз.', detail: 'Детали', time: 'Время', empty: 'Нет логов', auto: 'Автообновление' },
   account: { title: 'Аккаунт и пароль', username: 'Логин', email: 'Эл. почта', saveAccount: 'Сохранить', changePwd: 'Сменить пароль', oldPwd: 'Старый пароль', newPwd: 'Новый пароль', pwdOk: 'Пароль изменён', accountOk: 'Аккаунт обновлён' },
@@ -287,6 +327,26 @@ const ru = {
     importConfirm: 'Будут восстановлены данные всех участников из полной копии (отсутствующие аккаунты создаются заново). Продолжить?',
     replaceConfirm: 'Подписки каждого пользователя будут удалены перед импортом из полной копии. Продолжить?',
     exportOk: 'Полная копия скачана (пользователей: {n})', importOk: 'Восстановлено пользователей: {users} (создано: {created}), импортировано подписок: {n}'
+  },
+  iconLib: {
+    title: 'Библиотека иконок', subtitle: 'Управление встроенным списком сервисов и кэшем иконок',
+    add: 'Добавить сервис', edit: 'Изменить', fetchOne: 'Загрузить иконку', fetchMissing: 'Загрузить недостающие', fetchAll: 'Загрузить все заново',
+    running: 'Загрузка…', done: 'Готово', total: 'Всего', cached: 'В кэше', missing: 'Нет',
+    active: 'Активен', inactive: 'Отключён', activate: 'Включить', deactivate: 'Отключить', builtin: 'Встроенный', custom: 'Свой',
+    name: 'Название', domain: 'Домен', website: 'Сайт', category: 'Категория', slug: 'Slug', status: 'Статус', source: 'Источник',
+    sort: 'Сортировка', icon: 'Иконка', actions: 'Действия',
+    searchPh: 'Поиск по названию / домену / slug…', filterAll: 'Все', filterCached: 'В кэше', filterMissing: 'Нет',
+    filterActive: 'Активны', filterInactive: 'Отключены',
+    confirmDeactivate: 'Отключить сервис? (иконки существующих подписок сохранятся)',
+    confirmFetchAll: 'Это заново загрузит иконки всех сервисов — может занять время. Продолжить?',
+    formTitleNew: 'Новый сервис', formTitleEdit: 'Изменить сервис', namePh: 'напр. Netflix', domainPh: 'напр. netflix.com',
+    websitePh: 'Пусто = https://домен', categoryPh: 'Выберите категорию', slugPh: 'Пусто = авто', slugWarn: 'Смена slug меняет адреса иконок подписок',
+    save: 'Сохранить', cancel: 'Отмена', saveOk: 'Сохранено', deleteOk: 'Отключено', activateOk: 'Включено',
+    fetchOk: 'Загружено', fetchFail: 'Ошибка', progress: 'Прогресс', success: 'Успешно', failed: 'Ошибки', skipped: 'Пропущено',
+    current: 'Текущий', noJobs: 'Нет задач', details: 'Подробности', provider: 'Источник', errReason: 'Причина',
+    nameReq: 'Введите название', domainReq: 'Введите домен', slugExists: 'slug занят', okCount: 'Ок {ok}', failCount: 'Ошибок {fail}',
+    overview: 'Сводка', cachedCount: '{n} в кэше', missingCount: '{n} нет', activeCount: '{n} активны', inactiveCount: '{n} отключены',
+    exportList: 'Экспорт', refresh: 'Обновить', batch: 'Пакет', selectAll: 'Выбрать все', batchFetch: 'Загрузить выбранные'
   },
   common: { loading: 'Загрузка...', save: 'Сохранить', actions: 'Действия', status: 'Статус', date: 'Дата', confirm: 'Подтвердить', cancel: 'Отмена', close: 'Закрыть' }
 }

@@ -58,7 +58,10 @@ const navItems = computed(() => {
     { to: '/logs', key: 'logs', label: 'nav.logs' },
     { to: '/settings', key: 'settings', label: 'nav.settings' }
   ]
-  if (auth.user?.is_admin) base.push({ to: '/users', key: 'users', label: 'nav.users' })
+  if (auth.user?.is_admin) {
+    base.push({ to: '/icon-library', key: 'iconLibrary', label: 'nav.iconLibrary' })
+    base.push({ to: '/users', key: 'users', label: 'nav.users' })
+  }
   return base
 })
 

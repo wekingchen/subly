@@ -86,7 +86,7 @@ def create_sub(
     auto_url_filled = False
     # 附加信息：常用订阅名自动补全官方网站
     if not data.get("url"):
-        site = icon_library.website_for_name(data.get("name", ""))
+        site = icon_library.website_for_name(db, data.get("name", ""))
         if site:
             data["url"] = site
             auto_url_filled = True

@@ -86,6 +86,25 @@ class PaymentMethod(Base):
     is_system: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
+
+
+class IconLibraryService(Base):
+    __tablename__ = "icon_library_services"
+    __table_args__ = (UniqueConstraint("slug", name="uq_icon_library_service_slug"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(128))
+    domain: Mapped[str] = mapped_column(String(255))
+    website: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    category: Mapped[str] = mapped_column(String(64), default="other")
+    slug: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    sort: Mapped[int] = mapped_column(Integer, default=0)
+    source: Mapped[str] = mapped_column(String(32), default="custom")  # builtin | custom
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, onupdate=func.now())
+
+
 class Currency(Base):
     __tablename__ = "currencies"
 

@@ -14,6 +14,7 @@ const routes = [
       { path: 'notifications', component: () => import('../views/Notifications.vue') },
       { path: 'logs', component: () => import('../views/Logs.vue') },
       { path: 'settings', component: () => import('../views/Settings.vue') },
+      { path: 'icon-library', component: () => import('../views/IconLibrary.vue') },
       { path: 'users', component: () => import('../views/Users.vue') }
     ]
   }
