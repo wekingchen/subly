@@ -194,7 +194,7 @@ const radarHero = computed(() => {
   return t('dashboard.radarHero', { n: radarTotal.value, amount: fmt(amount) })
 })
 function statusOf(s) {
-  if (s.billing_type !== 'recurring' || !s.next_renewal_date) return 'ok'
+  if (s.billing_type !== 'recurring' || !s.next_renewal_date) return 'oneTime'
   const d = daysLeft(s)
   if (d < 0) return 'overdue'
   if (d <= 7) return 'soon'
@@ -215,7 +215,7 @@ const catGroups = computed(() => {
   return order.map((key) => {
     const c = cats.value.find((x) => String(x.id) === key)
     const items = byCat[key].slice().sort((a, b) => {
-      const rank = { overdue: 0, soon: 1, ok: 2 }
+      const rank = { overdue: 0, soon: 1, ok: 2, oneTime: 3 }
       return rank[statusOf(a)] - rank[statusOf(b)]
     })
     return {
@@ -334,6 +334,7 @@ h3 { margin-top: 0; }
 .cc-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--success); flex-shrink: 0; }
 .cc-item.soon .cc-dot { background: var(--warning); }
 .cc-item.overdue .cc-dot { background: var(--danger); }
+.cc-item.oneTime .cc-dot { background: var(--text-soft); opacity: .4; }
 .cc-n { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .cc-d { font-size: 12px; color: var(--text-soft); white-space: nowrap; }
 .cc-item.overdue .cc-d { color: var(--danger); font-weight: 600; }

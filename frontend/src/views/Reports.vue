@@ -91,7 +91,7 @@
           <div class="tbl-wrap">
           <table>
             <tbody>
-              <tr v-for="s in upcoming" :key="s.id">
+              <tr v-for="s in upcoming" :key="s.id" class="status-row" :class="statusOf(s)">
                 <td><span class="nm"><ServiceIcon :src="s.icon" :name="s.name" :fallback="emojiOf(s)" class="nm-ico" /><span class="nm-txt"><b>{{ s.name }}</b><i class="nm-sub">{{ s.plan ? s.plan + ' · ' : '' }}{{ catName(s.category_id) }}</i><i v-if="s.remark" class="nm-remark">📝 {{ s.remark }}</i></span></span></td>
                 <td class="muted">{{ s.next_renewal_date }}</td>
                 <td>{{ s.amount.toFixed(2) }} {{ s.currency }}</td>
@@ -106,7 +106,7 @@
           <div class="tbl-wrap">
           <table>
             <tbody>
-              <tr v-for="s in expired" :key="s.id">
+              <tr v-for="s in expired" :key="s.id" class="status-row overdue">
                 <td><span class="nm"><ServiceIcon :src="s.icon" :name="s.name" :fallback="emojiOf(s)" class="nm-ico" /><span class="nm-txt"><b>{{ s.name }}</b><i class="nm-sub">{{ s.plan ? s.plan + ' · ' : '' }}{{ catName(s.category_id) }}</i><i v-if="s.remark" class="nm-remark">📝 {{ s.remark }}</i></span></span></td>
                 <td class="danger">{{ s.next_renewal_date }}</td>
                 <td>{{ s.amount.toFixed(2) }} {{ s.currency }}</td>
@@ -226,6 +226,17 @@ function emojiOf(s) { return s.icon && !isImg(s.icon) ? s.icon : '🔖' }
 const PALETTE = ['#5b5bd6', '#06b6d4', '#16a34a', '#f59e0b', '#ef4444', '#a855f7', '#0ea5e9', '#ec4899', '#14b8a6', '#f97316', '#8b5cf6', '#22c55e']
 function color(i) { return PALETTE[i % PALETTE.length] }
 function isImg(v) { return typeof v === 'string' && (v.startsWith('/') || v.startsWith('http')) }
+function daysLeft(s) {
+  if (!s.next_renewal_date) return null
+  return Math.ceil((new Date(s.next_renewal_date) - new Date()) / 86400000)
+}
+function statusOf(s) {
+  const d = daysLeft(s)
+  if (d === null) return 'ok'
+  if (d < 0) return 'overdue'
+  if (d <= 7) return 'soon'
+  return 'ok'
+}
 
 const segments = computed(() => (insights.value.breakdown || []).filter((b) => b.percent > 0))
 const donutStyle = computed(() => {
@@ -291,6 +302,11 @@ h1 { margin-top: 0; }
 .sect h3 { margin-top: 0; display: flex; justify-content: space-between; align-items: baseline; gap: 8px; flex-wrap: wrap; }
 .total { font-size: 13px; font-weight: 500; }
 .danger { color: var(--danger); }
+.status-row { position: relative; }
+.status-row td:first-child { border-left: 3px solid transparent; }
+.status-row.soon td:first-child { border-left-color: var(--warning); }
+.status-row.overdue td:first-child { border-left-color: var(--danger); }
+.status-row.ok td:first-child { border-left-color: color-mix(in srgb, var(--success) 55%, transparent); }
 
 /* 名称单元格：图标 + 名称 + 套餐/分类副标题，便于定位订阅 */
 .rk { width: 28px; color: var(--text-soft); font-weight: 600; }

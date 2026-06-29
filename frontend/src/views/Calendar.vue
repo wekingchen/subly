@@ -65,7 +65,21 @@ const month = ref(now.getMonth())
 const subs = ref([])
 
 const PALETTE = ['#5b5bd6', '#06b6d4', '#16a34a', '#f59e0b', '#ef4444', '#a855f7', '#0ea5e9', '#ec4899']
+const STATUS_COLORS = { overdue: '#ef4444', soon: '#f59e0b' }
+function daysLeft(s) {
+  if (!s.next_renewal_date) return null
+  return Math.ceil((new Date(s.next_renewal_date) - new Date()) / 86400000)
+}
+function statusOf(s) {
+  const d = daysLeft(s)
+  if (d === null) return 'ok'
+  if (d < 0) return 'overdue'
+  if (d <= 7) return 'soon'
+  return 'ok'
+}
 function evColor(s) {
+  const st = statusOf(s)
+  if (STATUS_COLORS[st]) return STATUS_COLORS[st]
   let h = 0
   for (const ch of (s.name || '')) h = (h * 31 + ch.charCodeAt(0)) >>> 0
   return PALETTE[h % PALETTE.length]

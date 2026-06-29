@@ -466,6 +466,13 @@ function isSoon(s) {
   const d = daysLeft(s)
   return d >= 0 && d <= 7
 }
+function statusOf(s) {
+  if (s.billing_type !== 'recurring' || !s.next_renewal_date) return 'oneTime'
+  const d = daysLeft(s)
+  if (d < 0) return 'overdue'
+  if (d <= 7) return 'soon'
+  return 'ok'
+}
 
 /* ---------- 客户端续费日计算（与后端 billing.add_cycle 对齐） ---------- */
 function addMonths(d, months) {
@@ -863,6 +870,7 @@ h1 { margin-top: 0; }
 .status-strip.ok { background: var(--success); opacity: .35; }
 .status-strip.soon { background: var(--warning); opacity: .85; }
 .status-strip.overdue { background: var(--danger); }
+.status-strip.oneTime { background: var(--text-soft); opacity: .22; }
 /* 悬停动感：上浮 + 轻微放大 + 渐变高光描边 + 顶部光带扫过 */
 .sub-card::after { content: ''; position: absolute; top: 0; left: -60%; width: 40%; height: 100%;
   background: linear-gradient(100deg, transparent, color-mix(in srgb, var(--primary) 14%, transparent), transparent);
