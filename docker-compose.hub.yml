@@ -1,0 +1,29 @@
+# 一键部署：直接拉取已发布的镜像运行（无需构建、无需源码）
+#
+#   docker compose -f docker-compose.hub.yml up -d
+#
+# 内置 SQLite，零配置：首次启动会自动在 /app/data 卷里创建数据库文件。
+# NAS（群晖/威联通/飞牛/Unraid 等）图形界面也可直接粘贴本文件内容创建项目。
+services:
+  app:
+    # 改成你自己发布的镜像名（构建并推送后替换这里）
+    image: yourname/subly:latest
+    container_name: subly
+    restart: unless-stopped
+    environment:
+      JWT_SECRET: please-change-this-to-a-random-secret   # 务必改成随机串：openssl rand -hex 32
+      TZ: Asia/Shanghai
+      ADMIN_USERNAME: admin
+      ADMIN_PASSWORD: admin123          # 首次初始化后请在网页里改密码
+      ADMIN_EMAIL: admin@example.com
+      REMINDER_SCAN_TIME: "09:00"       # 每天扫描到期订阅、发送提醒的时间
+      EXCHANGE_API_BASE: USD
+      EXCHANGE_API_URL: https://open.er-api.com/v6/latest/
+      TELEGRAM_BOT_TOKEN: ""            # 可留空，后续在网页「设置」里配置
+    volumes:
+      - subly_data:/app/data          # 持久化：SQLite 数据库文件 + 上传的图标
+    ports:
+      - "8842:8000"                     # 浏览器访问 http://<服务器IP>:8842
+
+volumes:
+  subly_data:

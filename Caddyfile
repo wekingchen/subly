@@ -1,0 +1,12 @@
+# 把 your-domain.com 改成你的域名，Caddy 会自动申请并续期 HTTPS 证书。
+# 本地测试可改为 :80 { ... }，去掉域名即用 HTTP。
+
+your-domain.com {
+    encode gzip
+    reverse_proxy app:8000
+}
+
+# 本地无域名测试时改用下面这段（注释掉上面的块）：
+# :80 {
+#     reverse_proxy app:8000
+# }
