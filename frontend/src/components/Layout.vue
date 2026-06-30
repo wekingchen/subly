@@ -15,21 +15,20 @@
         <div class="brand"><span class="brand-mark">⌁</span><span>Subly</span></div>
         <div class="brand-tag"><span class="signal-dot"></span>{{ t('nav.brandTag') }}</div>
       </div>
-      <nav @click="closeDrawer">
-        <router-link v-for="it in navItems" :key="it.to" :to="it.to" class="nav-card">
-          <span class="nav-ico" v-html="icon(it.key)"></span>
-          <span class="nav-label">{{ t(it.label) }}</span>
-          <span class="nav-arrow">›</span>
-        </router-link>
+      <nav class="nav-list" :aria-label="t('nav.menu')" @click="closeDrawer">
+        <section v-for="group in navGroups" :key="group.title" class="nav-group">
+          <div class="nav-group-title">{{ t(group.title) }}</div>
+          <router-link v-for="it in group.items" :key="it.to" :to="it.to" class="nav-card">
+            <span class="nav-ico" v-html="icon(it.key)"></span>
+            <span class="nav-label">{{ t(it.label) }}</span>
+            <span class="nav-arrow">›</span>
+          </router-link>
+        </section>
       </nav>
       <div class="spacer"></div>
       <div class="user" v-if="auth.user">
         <div class="uname">{{ auth.user.username }}</div>
         <a href="#" @click.prevent="logout">🚪 {{ t('nav.logout') }}</a>
-      </div>
-      <div class="credit">
-        <a href="https://t.me/Aiden_SU" target="_blank" rel="noopener">✈️ TG @Aiden_SU</a>
-        <a href="mailto:aidensu8182@gmail.com">✉️ aidensu8182@gmail.com</a>
       </div>
     </aside>
 
@@ -73,21 +72,36 @@ onBeforeUnmount(() => {
   document.body.classList.remove('modal-open')
 })
 
-const navItems = computed(() => {
-  const base = [
-    { to: '/dashboard', key: 'dashboard', label: 'nav.dashboard' },
-    { to: '/subscriptions', key: 'subscriptions', label: 'nav.subscriptions' },
-    { to: '/calendar', key: 'calendar', label: 'nav.calendar' },
-    { to: '/reports', key: 'reports', label: 'nav.reports' },
-    { to: '/notifications', key: 'notifications', label: 'nav.notifications' },
-    { to: '/logs', key: 'logs', label: 'nav.logs' },
-    { to: '/settings', key: 'settings', label: 'nav.settings' }
+const navGroups = computed(() => {
+  const groups = [
+    {
+      title: 'nav.groupWorkspace',
+      items: [
+        { to: '/dashboard', key: 'dashboard', label: 'nav.dashboard' },
+        { to: '/subscriptions', key: 'subscriptions', label: 'nav.subscriptions' },
+        { to: '/calendar', key: 'calendar', label: 'nav.calendar' },
+        { to: '/reports', key: 'reports', label: 'nav.reports' }
+      ]
+    },
+    {
+      title: 'nav.groupSystem',
+      items: [
+        { to: '/notifications', key: 'notifications', label: 'nav.notifications' },
+        { to: '/logs', key: 'logs', label: 'nav.logs' },
+        { to: '/settings', key: 'settings', label: 'nav.settings' }
+      ]
+    }
   ]
   if (auth.user?.is_admin) {
-    base.push({ to: '/icon-library', key: 'iconLibrary', label: 'nav.iconLibrary' })
-    base.push({ to: '/users', key: 'users', label: 'nav.users' })
+    groups.push({
+      title: 'nav.groupAdmin',
+      items: [
+        { to: '/icon-library', key: 'iconLibrary', label: 'nav.iconLibrary' },
+        { to: '/users', key: 'users', label: 'nav.users' }
+      ]
+    })
   }
-  return base
+  return groups
 })
 
 function logout() {
@@ -109,8 +123,16 @@ function logout() {
   box-shadow: 0 0 22px color-mix(in srgb, var(--signal-cyan) 42%, transparent); }
 .brand-tag { margin-top: 7px; display: flex; align-items: center; gap: 7px; color: var(--text-soft); font-size: 11px;
   text-transform: uppercase; letter-spacing: .12em; }
-nav { display: flex; flex-direction: column; gap: 6px; }
-.nav-card { position: relative; display: flex; align-items: center; gap: 10px; padding: 9px 11px 9px 12px; border-radius: 11px;
+.nav-list { display: flex; flex-direction: column; gap: 16px; }
+.nav-group { display: flex; flex-direction: column; gap: 6px; }
+.nav-group + .nav-group { padding-top: 2px; }
+.nav-group-title { display: flex; align-items: center; gap: 8px; padding: 0 8px 2px 12px;
+  color: var(--text-soft); font-size: 11px; font-weight: 800; letter-spacing: .16em; }
+.nav-group-title::before { content: ''; width: 16px; height: 1px; border-radius: 999px;
+  background: linear-gradient(90deg, var(--signal-cyan), transparent);
+  box-shadow: 0 0 10px color-mix(in srgb, var(--signal-cyan) 45%, transparent); }
+.nav-card { position: relative; display: grid; grid-template-columns: 30px minmax(0, 1fr) 12px; align-items: center; gap: 10px;
+  min-height: 44px; padding: 7px 11px 7px 12px; border-radius: 11px;
   color: var(--text); font-size: 14px; border: 1px solid transparent; background: transparent;
   transition: transform .15s ease, background .15s ease, box-shadow .2s ease, border-color .15s ease, color .15s ease; }
 .nav-card::before { content: ''; width: 3px; height: 0; border-radius: 999px; position: absolute; left: 0; top: 50%; transform: translateY(-50%);
@@ -119,7 +141,7 @@ nav { display: flex; flex-direction: column; gap: 6px; }
   justify-content: center; background: var(--surface-2); border: 1px solid var(--border);
   flex-shrink: 0; transition: transform .2s ease, color .15s ease, border-color .15s ease; color: var(--text-soft); }
 .nav-ico :deep(svg) { width: 17px; height: 17px; }
-.nav-label { flex: 1; font-weight: 600; }
+.nav-label { min-width: 0; font-weight: 650; letter-spacing: .02em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .nav-arrow { color: var(--text-soft); opacity: 0; transform: translateX(-4px); transition: all .2s ease; }
 .nav-card:hover { transform: translateX(3px); background: color-mix(in srgb, var(--primary) 9%, transparent); border-color: color-mix(in srgb, var(--primary) 24%, transparent); }
 .nav-card:hover .nav-ico { transform: scale(1.06); color: var(--primary); border-color: color-mix(in srgb, var(--primary) 32%, var(--border)); }
@@ -131,13 +153,8 @@ nav { display: flex; flex-direction: column; gap: 6px; }
 .nav-card.router-link-active .nav-arrow { opacity: 1; transform: translateX(0); color: var(--primary); }
 .spacer { flex: 1; }
 .user { font-size: 13px; color: var(--text-soft); border-top: 1px solid var(--border); padding-top: 12px; }
-.user .uname { font-weight: 700; color: var(--text); }
-.user a { display: block; margin-top: 6px; }
-.credit { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border);
-  display: flex; flex-direction: column; gap: 5px; }
-.credit a { font-size: 12px; color: var(--text-soft); display: flex; align-items: center; gap: 5px;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; transition: color .15s ease; }
-.credit a:hover { color: var(--primary); }
+.user .uname { font-weight: 800; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.user a { display: inline-flex; align-items: center; gap: 4px; margin-top: 8px; }
 .content { flex: 1; padding: 26px 32px; max-width: 1200px; width: 100%; }
 
 /* 顶部栏 + 抽屉遮罩仅移动端出现 */
@@ -159,6 +176,8 @@ nav { display: flex; flex-direction: column; gap: 6px; }
     transform: translateX(-110%); transition: transform .25s ease; box-shadow: var(--shadow-lg);
     overflow-y: auto; -webkit-overflow-scrolling: touch; padding-bottom: calc(18px + env(safe-area-inset-bottom)); }
   .sidebar.open { transform: translateX(0); }
+  .nav-list { gap: 14px; }
+  .nav-card { min-height: 46px; }
   .content { padding: 16px 14px; min-width: 0; }
 }
 </style>
