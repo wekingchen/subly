@@ -99,54 +99,48 @@
       </div>
     </template>
 
-    <div v-if="showForm" class="modal-mask" @click.self="showForm = false">
-      <div class="modal">
-        <button class="modal-x" :aria-label="t('common.close')" @click="showForm = false">×</button>
-        <h3>{{ editing ? t('iconLib.formTitleEdit') : t('iconLib.formTitleNew') }}</h3>
-        <p v-if="formErr" class="err">{{ formErr }}</p>
-        <label>{{ t('iconLib.name') }}</label>
-        <input v-model.trim="form.name" :placeholder="t('iconLib.namePh')" />
-        <label>{{ t('iconLib.domain') }}</label>
-        <input v-model.trim="form.domain" :placeholder="t('iconLib.domainPh')" />
-        <label>{{ t('iconLib.website') }}</label>
-        <input v-model.trim="form.website" :placeholder="t('iconLib.websitePh')" />
-        <label>{{ t('iconLib.category') }}</label>
-        <select v-model="form.category">
-          <option v-for="c in categories" :key="c.key" :value="c.key">{{ c.label }}</option>
-        </select>
-        <label>{{ t('iconLib.slug') }}</label>
-        <input v-model.trim="form.slug" :placeholder="t('iconLib.slugPh')" />
-        <p class="muted small">{{ t('iconLib.slugWarn') }}</p>
-        <div class="row">
-          <label style="flex:1">{{ t('iconLib.sort') }}<input v-model.number="form.sort" type="number" /></label>
-          <label class="check"><input v-model="form.is_active" type="checkbox" /> {{ t('iconLib.active') }}</label>
-        </div>
-        <div class="modal-foot">
-          <button class="btn" @click="save">{{ t('iconLib.save') }}</button>
-          <button class="btn ghost" @click="showForm = false">{{ t('iconLib.cancel') }}</button>
-        </div>
+    <AppModal v-model="showForm" :title="editing ? t('iconLib.formTitleEdit') : t('iconLib.formTitleNew')" :close-label="t('common.close')">
+      <p v-if="formErr" class="err">{{ formErr }}</p>
+      <label>{{ t('iconLib.name') }}</label>
+      <input v-model.trim="form.name" :placeholder="t('iconLib.namePh')" />
+      <label>{{ t('iconLib.domain') }}</label>
+      <input v-model.trim="form.domain" :placeholder="t('iconLib.domainPh')" />
+      <label>{{ t('iconLib.website') }}</label>
+      <input v-model.trim="form.website" :placeholder="t('iconLib.websitePh')" />
+      <label>{{ t('iconLib.category') }}</label>
+      <select v-model="form.category">
+        <option v-for="c in categories" :key="c.key" :value="c.key">{{ c.label }}</option>
+      </select>
+      <label>{{ t('iconLib.slug') }}</label>
+      <input v-model.trim="form.slug" :placeholder="t('iconLib.slugPh')" />
+      <p class="muted small">{{ t('iconLib.slugWarn') }}</p>
+      <div class="row">
+        <label style="flex:1">{{ t('iconLib.sort') }}<input v-model.number="form.sort" type="number" /></label>
+        <label class="check"><input v-model="form.is_active" type="checkbox" /> {{ t('iconLib.active') }}</label>
       </div>
-    </div>
+      <template #footer>
+        <button class="btn" @click="save">{{ t('iconLib.save') }}</button>
+        <button class="btn ghost" @click="showForm = false">{{ t('iconLib.cancel') }}</button>
+      </template>
+    </AppModal>
 
-    <div v-if="confirmState" class="modal-mask" @click.self="confirmState = null">
-      <div class="modal" style="width:400px">
-        <button class="modal-x" :aria-label="t('common.close')" @click="confirmState = null">×</button>
-        <h3>{{ confirmState.title }}</h3>
-        <p style="font-size:14px;line-height:1.6">{{ confirmState.message }}</p>
-        <div class="modal-foot">
-          <button class="btn ghost" @click="confirmState = null">{{ t('iconLib.cancel') }}</button>
-          <button class="btn danger" @click="confirmState.onConfirm">{{ t('common.confirm') }}</button>
-        </div>
-      </div>
-    </div>
+    <AppModal v-model="confirmDialogOpen" :title="confirm.state.value?.title || ''" width="400px" :close-label="t('common.close')" @close="confirm.reset">
+      <p style="font-size:14px;line-height:1.6">{{ confirm.state.value?.message }}</p>
+      <template #footer>
+        <button class="btn ghost" @click="confirm.reset">{{ t('iconLib.cancel') }}</button>
+        <button class="btn danger" @click="confirm.confirm">{{ t('common.confirm') }}</button>
+      </template>
+    </AppModal>
   </div>
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import api from '../api'
 import ServiceIcon from '../components/ServiceIcon.vue'
+import AppModal from '../components/AppModal.vue'
+import { useConfirm } from '../composables/useConfirm'
 
 const { t } = useI18n()
 const loading = ref(true)
@@ -161,12 +155,12 @@ const editing = ref(null)
 const formErr = ref('')
 const form = ref({})
 const job = ref(null)
-const confirmState = ref(null)
-let pollTimer = null
-
-watch([showForm, confirmState], () => {
-  document.body.classList.toggle('modal-open', !!(showForm.value || confirmState.value))
+const confirm = useConfirm()
+const confirmDialogOpen = computed({
+  get: () => !!confirm.state.value?.open,
+  set: (v) => { if (!v) confirm.reset() }
 })
+let pollTimer = null
 
 const activeCount = computed(() => items.value.filter((x) => x.is_active).length)
 const inactiveCount = computed(() => items.value.length - activeCount.value)
@@ -233,15 +227,15 @@ async function save() {
 }
 
 async function deactivate(svc) {
-  confirmState.value = {
+  confirm.open({
     title: t('iconLib.deactivate'),
     message: t('iconLib.confirmDeactivate'),
+    danger: true,
     onConfirm: async () => {
       await api.delete(`/api/admin/icon-services/${svc.id}`)
-      confirmState.value = null
       await load()
     }
-  }
+  })
 }
 async function restore(svc) { await api.post(`/api/admin/icon-services/${svc.id}/restore`); await load() }
 async function fetchOne(svc) { await api.post(`/api/admin/icon-services/${svc.id}/prewarm`, null, { params: { force: true } }); await load() }
@@ -251,14 +245,14 @@ async function startPrewarm(mode, force = false) {
     const { data } = await api.post('/api/admin/icon-services/prewarm', { mode, force })
     job.value = data
     startPoll(data.id)
-    confirmState.value = null
   }
   if (mode === 'all') {
-    confirmState.value = {
+    confirm.open({
       title: t('iconLib.fetchAll'),
       message: t('iconLib.confirmFetchAll'),
+      danger: true,
       onConfirm: run
-    }
+    })
     return
   }
   await run()
@@ -279,7 +273,6 @@ function startPoll(id) {
 onMounted(load)
 onBeforeUnmount(() => {
   if (pollTimer) clearInterval(pollTimer)
-  document.body.classList.remove('modal-open')
 })
 </script>
 

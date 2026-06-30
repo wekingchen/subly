@@ -67,58 +67,47 @@
       <p v-if="err" class="err">{{ err }}</p>
     </div>
 
-    <div v-if="showForm" class="modal-mask" @click.self="showForm = false">
-      <div class="modal" style="width:420px">
-        <button class="modal-x" :aria-label="t('common.close')" @click="showForm = false">×</button>
-        <h3>{{ t('admin.createUser') }}</h3>
-        <label>{{ t('admin.username') }}</label>
-        <input v-model="form.username" />
-        <label>{{ t('admin.email') }}</label>
-        <input v-model="form.email" type="email" />
-        <label>{{ t('admin.password') }}</label>
-        <input v-model="form.password" type="password" />
-        <label class="rb" style="margin-top:10px">
-          <input type="checkbox" v-model="form.is_admin" /> {{ t('admin.admin') }}
-        </label>
-        <p v-if="formErr" class="err">{{ formErr }}</p>
-        <div class="modal-foot">
-          <button class="btn ghost" @click="showForm = false">{{ t('admin.cancel') }}</button>
-          <button class="btn" @click="create">{{ t('admin.create') }}</button>
-        </div>
-      </div>
-    </div>
+    <AppModal v-model="showForm" :title="t('admin.createUser')" width="420px" :close-label="t('common.close')">
+      <label>{{ t('admin.username') }}</label>
+      <input v-model="form.username" />
+      <label>{{ t('admin.email') }}</label>
+      <input v-model="form.email" type="email" />
+      <label>{{ t('admin.password') }}</label>
+      <input v-model="form.password" type="password" />
+      <label class="rb" style="margin-top:10px">
+        <input type="checkbox" v-model="form.is_admin" /> {{ t('admin.admin') }}
+      </label>
+      <p v-if="formErr" class="err">{{ formErr }}</p>
+      <template #footer>
+        <button class="btn ghost" @click="showForm = false">{{ t('admin.cancel') }}</button>
+        <button class="btn" @click="create">{{ t('admin.create') }}</button>
+      </template>
+    </AppModal>
 
-    <div v-if="pwdTarget" class="modal-mask" @click.self="pwdTarget = null">
-      <div class="modal" style="width:420px">
-        <button class="modal-x" :aria-label="t('common.close')" @click="pwdTarget = null">×</button>
-        <h3>{{ t('admin.resetPwd') }}</h3>
-        <p style="font-size:14px;line-height:1.6">{{ t('admin.resetPwdPrompt') }} · {{ pwdTarget.username }}</p>
-        <input v-model="pwdValue" type="password" :placeholder="t('admin.newPwdPh')" @keyup.enter="confirmResetPwd" />
-        <div class="modal-foot">
-          <button class="btn ghost" @click="pwdTarget = null">{{ t('admin.cancel') }}</button>
-          <button class="btn" :disabled="!pwdValue" @click="confirmResetPwd">{{ t('common.confirm') }}</button>
-        </div>
-      </div>
-    </div>
+    <AppModal v-model="pwdOpen" :title="t('admin.resetPwd')" width="420px" :close-label="t('common.close')">
+      <p style="font-size:14px;line-height:1.6">{{ t('admin.resetPwdPrompt') }} · {{ pwdTarget?.username }}</p>
+      <input v-model="pwdValue" type="password" :placeholder="t('admin.newPwdPh')" @keyup.enter="confirmResetPwd" />
+      <template #footer>
+        <button class="btn ghost" @click="pwdTarget = null">{{ t('admin.cancel') }}</button>
+        <button class="btn" :disabled="!pwdValue" @click="confirmResetPwd">{{ t('common.confirm') }}</button>
+      </template>
+    </AppModal>
 
-    <div v-if="delTarget" class="modal-mask" @click.self="delTarget = null">
-      <div class="modal" style="width:420px">
-        <button class="modal-x" :aria-label="t('common.close')" @click="delTarget = null">×</button>
-        <h3>🗑️ {{ t('admin.deleteTitle') }}</h3>
-        <p style="font-size:14px;line-height:1.6">{{ t('admin.confirmDelete') }} · {{ delTarget.username }}</p>
-        <div class="modal-foot">
-          <button class="btn ghost" @click="delTarget = null">{{ t('admin.cancel') }}</button>
-          <button class="btn danger" @click="confirmDelete">{{ t('common.confirm') }}</button>
-        </div>
-      </div>
-    </div>
+    <AppModal v-model="delOpen" :title="`🗑️ ${t('admin.deleteTitle')}`" width="420px" :close-label="t('common.close')">
+      <p style="font-size:14px;line-height:1.6">{{ t('admin.confirmDelete') }} · {{ delTarget?.username }}</p>
+      <template #footer>
+        <button class="btn ghost" @click="delTarget = null">{{ t('admin.cancel') }}</button>
+        <button class="btn danger" @click="confirmDelete">{{ t('common.confirm') }}</button>
+      </template>
+    </AppModal>
   </div>
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import api from '../api'
+import AppModal from '../components/AppModal.vue'
 
 const { t } = useI18n()
 const users = ref([])
@@ -131,12 +120,14 @@ const form = ref({ username: '', email: '', password: '', is_admin: false })
 const pwdTarget = ref(null)
 const pwdValue = ref('')
 const delTarget = ref(null)
-
-watch([showForm, pwdTarget, delTarget], () => {
-  const open = showForm.value || pwdTarget.value || delTarget.value
-  document.body.classList.toggle('modal-open', !!open)
+const pwdOpen = computed({
+  get: () => pwdTarget.value !== null,
+  set: (v) => { if (!v) pwdTarget.value = null }
 })
-onBeforeUnmount(() => document.body.classList.remove('modal-open'))
+const delOpen = computed({
+  get: () => delTarget.value !== null,
+  set: (v) => { if (!v) delTarget.value = null }
+})
 
 function fmt(s) { return s ? new Date(s).toLocaleDateString() : '' }
 
