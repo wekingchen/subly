@@ -25,12 +25,12 @@ CATEGORY_LABELS = [
     ("other", "其它 / Other"),
 ]
 
-# (显示名, 域名, 分类key)
+# (显示名, 域名, 分类key或分类key列表；列表第一项为主分类)
 SERVICES = [
     # 流媒体 streaming
     ("Netflix", "netflix.com", "streaming"),
     ("Disney+", "disneyplus.com", "streaming"),
-    ("YouTube Premium", "youtube.com", "streaming"),
+    ("YouTube Premium", "youtube.com", ["streaming", "music"]),
     ("HBO Max", "max.com", "streaming"),
     ("Prime Video", "primevideo.com", "streaming"),
     ("Hulu", "hulu.com", "streaming"),
@@ -62,13 +62,13 @@ SERVICES = [
     ("Google Gemini", "gemini.google.com", "ai"),
     ("Perplexity", "perplexity.ai", "ai"),
     ("Midjourney", "midjourney.com", "ai"),
-    ("GitHub Copilot", "github.com", "ai"),
-    ("Cursor", "cursor.com", "ai"),
+    ("GitHub Copilot", "github.com", ["ai", "software"]),
+    ("Cursor", "cursor.com", ["ai", "software"]),
     ("Grok", "x.ai", "ai"),
     ("Poe", "poe.com", "ai"),
     ("Mistral AI", "mistral.ai", "ai"),
     ("DeepSeek", "deepseek.com", "ai"),
-    ("Suno", "suno.com", "ai"),
+    ("Suno", "suno.com", ["ai", "music"]),
     ("ElevenLabs", "elevenlabs.io", "ai"),
     ("Runway", "runwayml.com", "ai"),
     ("文心一言", "yiyan.baidu.com", "ai"),
@@ -77,13 +77,13 @@ SERVICES = [
     # 游戏 gaming
     ("Steam", "steampowered.com", "gaming"),
     ("Epic Games", "epicgames.com", "gaming"),
-    ("PlayStation Plus", "playstation.com", "gaming"),
-    ("Xbox Game Pass", "xbox.com", "gaming"),
-    ("Nintendo Switch Online", "nintendo.com", "gaming"),
+    ("PlayStation Plus", "playstation.com", ["gaming", "membership"]),
+    ("Xbox Game Pass", "xbox.com", ["gaming", "membership"]),
+    ("Nintendo Switch Online", "nintendo.com", ["gaming", "membership"]),
     ("EA Play", "ea.com", "gaming"),
     ("Ubisoft+", "ubisoft.com", "gaming"),
     ("GeForce NOW", "nvidia.com", "gaming"),
-    ("Apple Arcade", "apple.com", "gaming"),
+    ("Apple Arcade", "apple.com", ["gaming", "membership"]),
     # VPS / 云（含主流大厂与 LowEnd 低价商家）
     ("AWS", "aws.amazon.com", "vps"),
     ("Google Cloud", "cloud.google.com", "vps"),
@@ -158,18 +158,18 @@ SERVICES = [
     ("中国联通", "10010.com", "carrier"),
     ("中国电信", "189.cn", "carrier"),
     # 云存储 cloud
-    ("Google One", "one.google.com", "cloud"),
-    ("iCloud+", "icloud.com", "cloud"),
-    ("Dropbox", "dropbox.com", "cloud"),
-    ("OneDrive", "onedrive.live.com", "cloud"),
+    ("Google One", "one.google.com", ["cloud", "membership"]),
+    ("iCloud+", "icloud.com", ["cloud", "membership"]),
+    ("Dropbox", "dropbox.com", ["cloud", "software"]),
+    ("OneDrive", "onedrive.live.com", ["cloud", "software"]),
     ("MEGA", "mega.nz", "cloud"),
     ("pCloud", "pcloud.com", "cloud"),
     ("Backblaze", "backblaze.com", "cloud"),
-    ("Box", "box.com", "cloud"),
+    ("Box", "box.com", ["cloud", "software"]),
     ("百度网盘", "pan.baidu.com", "cloud"),
     # 软件 software
-    ("Microsoft 365", "microsoft.com", "software"),
-    ("Adobe Creative Cloud", "adobe.com", "software"),
+    ("Microsoft 365", "microsoft.com", ["software", "cloud"]),
+    ("Adobe Creative Cloud", "adobe.com", ["software", "cloud"]),
     ("Notion", "notion.so", "software"),
     ("1Password", "1password.com", "software"),
     ("Bitwarden", "bitwarden.com", "software"),
@@ -181,9 +181,9 @@ SERVICES = [
     ("Setapp", "setapp.com", "software"),
     ("Todoist", "todoist.com", "software"),
     # 域名 domain
-    ("Cloudflare", "cloudflare.com", "domain"),
-    ("Namecheap", "namecheap.com", "domain"),
-    ("GoDaddy", "godaddy.com", "domain"),
+    ("Cloudflare", "cloudflare.com", ["domain", "software"]),
+    ("Namecheap", "namecheap.com", ["domain", "vps"]),
+    ("GoDaddy", "godaddy.com", ["domain", "vps"]),
     ("Porkbun", "porkbun.com", "domain"),
     ("Dynadot", "dynadot.com", "domain"),
     ("Gandi", "gandi.net", "domain"),
@@ -196,18 +196,18 @@ SERVICES = [
     ("Brilliant", "brilliant.org", "education"),
     ("LinkedIn Learning", "linkedin.com", "education"),
     # 新闻 news
-    ("Medium", "medium.com", "news"),
-    ("The New York Times", "nytimes.com", "news"),
-    ("The Wall Street Journal", "wsj.com", "news"),
-    ("The Economist", "economist.com", "news"),
-    ("Bloomberg", "bloomberg.com", "news"),
+    ("Medium", "medium.com", ["news", "membership"]),
+    ("The New York Times", "nytimes.com", ["news", "membership"]),
+    ("The Wall Street Journal", "wsj.com", ["news", "membership"]),
+    ("The Economist", "economist.com", ["news", "membership"]),
+    ("Bloomberg", "bloomberg.com", ["news", "membership"]),
     # 健身 fitness
     ("Strava", "strava.com", "fitness"),
     ("Peloton", "onepeloton.com", "fitness"),
     ("MyFitnessPal", "myfitnesspal.com", "fitness"),
     ("Whoop", "whoop.com", "fitness"),
     # 会员 membership
-    ("Amazon Prime", "amazon.com", "membership"),
+    ("Amazon Prime", "amazon.com", ["membership", "streaming", "music"]),
     ("Costco", "costco.com", "membership"),
     ("Patreon", "patreon.com", "membership"),
     ("Sam's Club", "samsclub.com", "membership"),
@@ -234,6 +234,113 @@ def _strip_icon_ext(slug: str) -> str:
 _CAT_LABEL_MAP = dict(CATEGORY_LABELS)
 
 
+def valid_category_keys() -> set[str]:
+    return set(_CAT_LABEL_MAP)
+
+
+def _coerce_category_list(value) -> list:
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple)):
+        return list(value)
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+            if isinstance(parsed, list):
+                return parsed
+        except json.JSONDecodeError:
+            pass
+        return [value]
+    return [str(value)]
+
+
+def normalize_category_keys(category_keys=None, fallback=None, allow_unknown: bool = False) -> list[str]:
+    valid_keys = valid_category_keys()
+
+    def collect(value) -> list[str]:
+        out: list[str] = []
+        seen: set[str] = set()
+        for item in _coerce_category_list(value):
+            key = str(item or "").strip()
+            if not key or key in seen:
+                continue
+            if not allow_unknown and key not in valid_keys:
+                continue
+            seen.add(key)
+            out.append(key)
+        return out
+
+    keys = collect(category_keys)
+    if not keys and fallback is not None:
+        keys = collect(fallback)
+    return keys or ["other"]
+
+
+def builtin_services_by_slug() -> dict[str, dict]:
+    out: dict[str, dict] = {}
+    for sort, (name, domain, category_spec) in enumerate(SERVICES):
+        keys = normalize_category_keys(category_spec)
+        slug = slug_for_domain(domain)
+        out[slug] = {
+            "name": name,
+            "domain": domain,
+            "category": keys[0],
+            "category_keys": keys,
+            "sort": sort,
+        }
+    return out
+
+
+def _category_value_empty(value) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            return True
+        try:
+            parsed = json.loads(raw)
+            return parsed in (None, [])
+        except json.JSONDecodeError:
+            return False
+    if isinstance(value, (list, tuple)):
+        return not value
+    return False
+
+
+def backfill_builtin_category_keys(db) -> int:
+    """把仍保持旧版单分类的内置服务安全补齐为 canonical 多分类。"""
+    from app.models import IconLibraryService
+
+    builtin = builtin_services_by_slug()
+    rows = db.scalars(
+        select(IconLibraryService).where(IconLibraryService.source == "builtin")
+    ).all()
+    updated = 0
+    for row in rows:
+        info = builtin.get(row.slug)
+        if not info:
+            continue
+        canonical_keys = info["category_keys"]
+        primary = canonical_keys[0]
+        current_keys = normalize_category_keys(row.category_keys, row.category, allow_unknown=True)
+        current_primary = str(row.category or "").strip()
+        if current_keys == canonical_keys:
+            if current_primary != primary and not getattr(row, "updated_at", None):
+                row.category = primary
+                updated += 1
+            continue
+        if current_primary and current_primary != primary:
+            continue
+        if getattr(row, "updated_at", None):
+            continue
+        if _category_value_empty(row.category_keys) or current_keys == [primary]:
+            row.category = primary
+            row.category_keys = list(canonical_keys)
+            updated += 1
+    return updated
+
+
 def categories() -> list[dict]:
     """返回服务库分类清单（用于「按分类浏览」服务）。"""
     return [{"key": k, "label": v} for k, v in CATEGORY_LABELS]
@@ -244,24 +351,11 @@ def category_label(key: str) -> str:
 
 
 def category_keys_for_row(row) -> list[str]:
-    value = getattr(row, "category_keys", None)
-    if isinstance(value, str):
-        try:
-            value = json.loads(value)
-        except json.JSONDecodeError:
-            value = [value]
-    if not isinstance(value, list):
-        value = []
-
-    keys: list[str] = []
-    seen: set[str] = set()
-    for item in value or [getattr(row, "category", None) or "other"]:
-        key = str(item or "").strip()
-        if not key or key in seen:
-            continue
-        seen.add(key)
-        keys.append(key)
-    return keys or ["other"]
+    return normalize_category_keys(
+        getattr(row, "category_keys", None),
+        getattr(row, "category", None) or "other",
+        allow_unknown=True,
+    )
 
 
 def _row_to_manifest(row) -> dict:

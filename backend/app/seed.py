@@ -76,23 +76,25 @@ def seed_all(db: Session) -> None:
 
     # 服务图标库：幂等导入内置服务（仅插入缺失 slug，不覆盖管理员改动）
     existing_slugs = set(db.scalars(select(IconLibraryService.slug)).all())
-    for i, (name, domain, cat) in enumerate(icon_library.SERVICES):
+    for i, (name, domain, category_spec) in enumerate(icon_library.SERVICES):
         slug = icon_library.slug_for_domain(domain)
         if slug in existing_slugs:
             continue
+        keys = icon_library.normalize_category_keys(category_spec)
         db.add(
             IconLibraryService(
                 name=name,
                 domain=domain,
                 website=None,
-                category=cat,
-                category_keys=[cat],
+                category=keys[0],
+                category_keys=keys,
                 slug=slug,
                 is_active=True,
                 sort=i,
                 source="builtin",
             )
         )
+    icon_library.backfill_builtin_category_keys(db)
 
     # 首个管理员
     if settings.admin_username and settings.admin_password:

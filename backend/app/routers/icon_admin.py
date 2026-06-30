@@ -1,5 +1,4 @@
 """管理员：服务图标库 CRUD + 图标预热任务。"""
-import json
 import threading
 import time
 import uuid
@@ -7,7 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app import activity, icon_library
@@ -51,41 +50,8 @@ def re_safe(value: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.\-]", "", value).replace("/", "_")
 
 
-def _coerce_category_list(value) -> list[str]:
-    if value is None:
-        return []
-    if isinstance(value, list):
-        return value
-    if isinstance(value, str):
-        try:
-            parsed = json.loads(value)
-            if isinstance(parsed, list):
-                return parsed
-        except json.JSONDecodeError:
-            pass
-        return [value]
-    return [str(value)]
-
-
-def _normalize_category_keys(category_keys=None, fallback: str | None = None) -> list[str]:
-    valid_keys = {c["key"] for c in icon_library.categories()} | {"other"}
-    source = _coerce_category_list(category_keys) if category_keys is not None else []
-    if not source and fallback is not None:
-        source = [fallback]
-
-    out: list[str] = []
-    seen: set[str] = set()
-    for item in source:
-        key = str(item or "").strip()
-        if not key or key in seen or key not in valid_keys:
-            continue
-        seen.add(key)
-        out.append(key)
-    return out or ["other"]
-
-
 def _effective_category_keys(row: IconLibraryService) -> list[str]:
-    return _normalize_category_keys(row.category_keys, row.category or "other")
+    return icon_library.normalize_category_keys(row.category_keys, row.category or "other", allow_unknown=True)
 
 
 def _to_out(row: IconLibraryService) -> IconServiceOut:
@@ -158,7 +124,7 @@ def create_service(
         slug = re_safe(domain)
     if db.scalar(select(IconLibraryService).where(IconLibraryService.slug == slug)):
         raise HTTPException(400, "slug 已存在，请换一个域名或 slug")
-    keys = _normalize_category_keys(payload.category_keys, payload.category)
+    keys = icon_library.normalize_category_keys(payload.category_keys, payload.category)
     row = IconLibraryService(
         name=payload.name.strip(),
         domain=domain,
@@ -219,7 +185,7 @@ def update_service(
             data["slug"] = new_slug
 
     if "category_keys" in data or "category" in data:
-        keys = _normalize_category_keys(
+        keys = icon_library.normalize_category_keys(
             data.get("category_keys") if "category_keys" in data else None,
             data.get("category") if "category" in data else None,
         )
