@@ -63,7 +63,7 @@ async def lifespan(app: FastAPI):
     scheduler.shutdown_scheduler()
 
 
-app = FastAPI(title="订阅保号通知系统 API", version="1.1.0", lifespan=lifespan)
+app = FastAPI(title="Subly API", version="2.1.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,

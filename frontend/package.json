@@ -1,6 +1,6 @@
 {
-  "name": "baohao-frontend",
-  "version": "1.0.0",
+  "name": "subly-frontend",
+  "version": "2.1.0",
   "private": true,
   "type": "module",
   "scripts": {

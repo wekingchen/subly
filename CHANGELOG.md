@@ -8,6 +8,14 @@
 
 ## [Unreleased]
 
+_当前 `main` 分支上尚未发布的新整理将记录在此。_
+
+---
+
+## [2.1.0] - 2026-07-01（Subly）
+
+> 在 2.0.0 内置 SQLite / Bark 双通道基础上，补齐多用户审核、管理页、备份恢复、实时日志、内置服务多分类与文档同步，并统一项目身份与版本号到 `2.1.0`。
+
 ### Added
 - 新增 Bark 推送 TTL 设置：用户可在「设置 → Bark 配置」填写非负整数秒数，测试推送与定时提醒都会透传；留空继续使用 Bark 默认值，`0` 会被保留并显式发送。
 - 新增注册审核与邮箱验证支持：可通过 `REQUIRE_ADMIN_APPROVAL` 控制新用户是否需要管理员审核；配置 `SMTP_*` 后注册流程可发送邮箱验证码。
@@ -17,9 +25,10 @@
 - 新增订阅扩展字段与场景：套餐名、个性备注、VPS IPv4 / IPv6、套餐包、家庭成员、日历显示开关、同分类排序、最近续费日、每订阅自定义提醒天数。
 - 新增内置服务管理能力：服务 CRUD、软删除 / 恢复、多分类 `category_keys`、服务图标预热任务。
 - 新增内置服务多分类数据整理：YouTube Premium、GitHub Copilot、Namecheap、Amazon Prime 等服务可同时归属多个分类。
-- Docker 镜像发布工作流支持手动运行时输入版本号（如 `1.0.0`），并校验 Docker tag 格式后同时发布 `latest` 与指定版本。
+- Docker 镜像发布工作流支持手动运行时输入版本号（如 `2.1.0`），并校验 Docker tag 格式后同时发布 `latest` 与指定版本。
 
 ### Changed
+- 统一项目身份与版本号：FastAPI 应用标题改为 `Subly API`，前端包名改为 `subly-frontend`，`main.py` / `system.py` / 前端版本号统一为 `2.1.0`。
 - 内置图标库改为多来源 favicon 下载：优先直连站点 `favicon.ico`、首页 icon link，再尝试公共 provider，并支持 PNG / ICO / WEBP / JPEG / SVG 多格式缓存。
 - 远端 SVG favicon 在缓存前严格消毒（移除脚本 / 事件属性 / 外链 / data URL 等风险内容），命中现代品牌站点的高清 SVG 图标。
 - 图标下载新增可配置开关与限制：`ICON_FETCH_ENABLED`、`ICON_FETCH_GOOGLE_ENABLED`、`ICON_FETCH_TIMEOUT_S`、`ICON_FETCH_MAX_BYTES`、`ICON_FETCH_CONCURRENCY`、`ICON_FETCH_SVG_ENABLED`。
@@ -162,10 +171,11 @@
 
 ## 版本历史
 
+- **2.1.0** (2026-07-01) - 多用户审核、管理页、备份恢复、实时日志、内置服务多分类与文档同步，统一项目身份与版本号。
 - **2.0.0** (2026-06-28) - Subly 转向内置 SQLite、自托管续费雷达与 Bark 双通道提醒。
 - **1.0.0** (2026-06-19) - 初始版本发布。
 - **开发中** (main 分支) - 开发版本。
 
 ---
 
-**最后更新**：2026-06-30
+**最后更新**：2026-07-01
