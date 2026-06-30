@@ -30,9 +30,9 @@
 
 ---
 
-## [2.0.0] - 2026-06-28（Fork：Subly）
+## [2.0.0] - 2026-06-28（Subly）
 
-> 基于 [suyijun8182/easysub](https://github.com/suyijun8182/easysub) v1.0.0 二次开发。
+> Subly 进入自托管续费雷达方向：内置 SQLite、中文单语言、Bark 通道与更完整的订阅管理体验。
 
 ### Changed
 - **数据库由外部 MySQL 8 改为内置 SQLite**：去掉网页安装向导，启动时零配置自动建库（`/app/data/subly.db`）
@@ -122,7 +122,7 @@
 - 环境变量配置
 
 ### Changed
-- 项目名称：「手机保号通知」→ 「省心订阅 EasySub」
+- 项目名称：「手机保号通知」→ 「省心订阅 Subly」
 - 数据库架构完全重设计，支持外部 MySQL
 
 ### Fixed

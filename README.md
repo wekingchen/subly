@@ -10,8 +10,7 @@
 docker run -d -p 8842:8000 -v subly_data:/app/data yourname/subly:latest
 ```
 
-> 本项目基于 [suyijun8182/easysub](https://github.com/suyijun8182/easysub)（MIT 协议）二次开发：
-> 把数据库从外部 MySQL 换成内置 SQLite（零配置），并新增 Bark 推送通道。
+> Subly 面向个人与小团队的自托管续费雷达：把订阅、域名、VPS、保号套餐与提醒通道集中到一个 SQLite 本地账本中管理。
 
 </div>
 
@@ -165,13 +164,12 @@ docker compose -f docker-compose.hub.yml pull && docker compose -f docker-compos
 
 欢迎 Issue 与 PR！Fork → 建分支 → 提交 → 发起 Pull Request，详见 [CONTRIBUTING.md](./CONTRIBUTING.md)。
 
-> 注：原仓库的 GitHub Actions / Docker Hub 自动发布配置是绑定原作者账号的，fork 后请按需改成你自己的镜像仓库地址。
+> 如需发布自己的镜像，请在仓库 Secrets 中配置 Docker Hub / GHCR 凭据，并将镜像名替换为自己的命名空间。
 
 ## 📝 许可
 
-[MIT License](./LICENSE)（沿用上游许可）
+[MIT License](./LICENSE)
 
 ## 🙏 致谢
 
-本项目基于 [suyijun8182/easysub](https://github.com/suyijun8182/easysub) 二次开发，感谢原作者。
-原项目联系方式：Telegram [@Aiden_SU](https://t.me/Aiden_SU) · 📧 aidensu8182@gmail.com
+感谢开源社区在自托管订阅管理、通知推送与 NAS 部署实践中的启发与基础贡献。

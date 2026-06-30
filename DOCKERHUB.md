@@ -4,7 +4,7 @@ Self-hosted subscription / renewal manager with built-in **SQLite** (zero-config
 
 自托管的订阅 / 续费 / 保号管理系统，内置 **SQLite** 零配置，**Telegram + Bark** 双通道提醒，防止忘记导致过期。
 
-- **Source / 源码**: `<your-repo-url>` — based on [suyijun8182/easysub](https://github.com/suyijun8182/easysub) (MIT)
+- **Source / 源码**: `<your-repo-url>`
 
 > Built-in SQLite, no external database needed. First boot auto-creates the DB file in `/app/data`.
 > 内置 SQLite，无需外部数据库。首次启动自动在 `/app/data` 里建库。
@@ -79,4 +79,4 @@ Multi-user (JWT, admin/user roles) · recurring & one-time subscriptions · Chin
 
 ## License
 
-MIT · Based on [suyijun8182/easysub](https://github.com/suyijun8182/easysub)
+MIT License

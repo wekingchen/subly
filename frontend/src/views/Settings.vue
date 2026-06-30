@@ -1,11 +1,37 @@
 <template>
-  <div>
-    <h1>{{ t('settings.title') }}</h1>
+  <div class="settings-page">
+    <section class="settings-hero card radar-grid-bg">
+      <div class="hero-copy">
+        <div class="hero-kicker"><span class="signal-dot"></span> 控制台校准</div>
+        <h1>{{ t('settings.title') }}</h1>
+        <p class="muted">管理偏好、提醒通道、数据备份与系统状态，让续费雷达保持在可控参数内。</p>
+      </div>
+      <div class="hero-metrics">
+        <div class="metric-card">
+          <span>{{ t('settings.theme') }}</span>
+          <b>{{ currentThemeLabel }}</b>
+        </div>
+        <div class="metric-card">
+          <span>{{ t('settings.baseCurrency') }}</span>
+          <b class="mono-data">{{ baseCurrency }}</b>
+        </div>
+        <div class="metric-card">
+          <span>通知通道</span>
+          <b class="mono-data">{{ enabledChannels }}/2</b>
+        </div>
+      </div>
+    </section>
 
     <div class="grid two">
       <!-- 外观与偏好 -->
-      <div class="card sect">
-        <h3>🎨 {{ t('settings.theme') }}</h3>
+      <div class="card sect panel-card">
+        <div class="panel-head">
+          <div>
+            <div class="panel-title"><span class="panel-signal"></span>{{ t('settings.theme') }}</div>
+            <p class="muted">调整控制台外观与统计基准货币。</p>
+          </div>
+          <span class="tag mono-data">{{ baseCurrency }}</span>
+        </div>
         <label>{{ t('settings.theme') }}</label>
         <div class="theme-picker">
           <button v-for="th in themes" :key="th.v" class="th" :class="{ on: theme === th.v }"
@@ -19,180 +45,222 @@
       </div>
 
       <!-- 账号与密码 -->
-      <div class="card sect">
-        <h3>👤 {{ t('account.title') }}</h3>
-        <label>{{ t('account.username') }}</label>
-        <input v-model="acc.username" />
-        <label>{{ t('account.email') }}</label>
-        <input v-model="acc.email" type="email" />
-        <button class="btn ghost sm" style="margin-top:10px" @click="saveAccount">{{ t('account.saveAccount') }}</button>
+      <div class="card sect panel-card">
+        <div class="panel-head">
+          <div>
+            <div class="panel-title"><span class="panel-signal"></span>{{ t('account.title') }}</div>
+            <p class="muted">维护登录身份与访问凭据。</p>
+          </div>
+          <span class="tag">Profile</span>
+        </div>
+        <div class="form-grid">
+          <div class="field">
+            <label>{{ t('account.username') }}</label>
+            <input v-model="acc.username" />
+          </div>
+          <div class="field">
+            <label>{{ t('account.email') }}</label>
+            <input v-model="acc.email" type="email" />
+          </div>
+        </div>
+        <div class="actions-row">
+          <button class="btn ghost sm" @click="saveAccount">{{ t('account.saveAccount') }}</button>
+        </div>
         <hr />
-        <label>{{ t('account.oldPwd') }}</label>
-        <input v-model="pwd.old_password" type="password" />
-        <label>{{ t('account.newPwd') }}</label>
-        <input v-model="pwd.new_password" type="password" />
-        <button class="btn ghost sm" style="margin-top:10px" @click="changePwd">{{ t('account.changePwd') }}</button>
-        <p v-if="accMsg" :class="accOk ? 'ok' : 'err'">{{ accMsg }}</p>
+        <div class="form-grid">
+          <div class="field">
+            <label>{{ t('account.oldPwd') }}</label>
+            <input v-model="pwd.old_password" type="password" />
+          </div>
+          <div class="field">
+            <label>{{ t('account.newPwd') }}</label>
+            <input v-model="pwd.new_password" type="password" />
+          </div>
+        </div>
+        <div class="actions-row">
+          <button class="btn ghost sm" @click="changePwd">{{ t('account.changePwd') }}</button>
+        </div>
+        <p v-if="accMsg" class="feedback" :class="accOk ? 'ok' : 'err'">{{ accMsg }}</p>
       </div>
     </div>
 
     <!-- 常用货币当日汇率 -->
-    <div class="card sect">
-      <div class="tg-head">
-        <h3>💱 {{ t('settings.rateTable') }}（{{ rates.base }}）</h3>
+    <div class="card sect panel-card">
+      <div class="panel-head">
+        <div>
+          <div class="panel-title"><span class="panel-signal"></span>{{ t('settings.rateTable') }}（{{ rates.base }}）</div>
+          <p class="muted">
+            {{ t('settings.rateTip', { base: rates.base }) }}
+            <span v-if="rates.updated_at"> · {{ t('settings.updatedAt') }} {{ fmtTime(rates.updated_at) }}</span>
+          </p>
+        </div>
         <button class="btn ghost sm" @click="refreshRates">↻ {{ t('settings.refreshRates') }}</button>
       </div>
-      <p class="muted" style="font-size:13px;margin-top:0">
-        {{ t('settings.rateTip', { base: rates.base }) }}
-        <span v-if="rates.updated_at"> · {{ t('settings.updatedAt') }} {{ fmtTime(rates.updated_at) }}</span>
-        <span v-if="rateMsg" class="ok"> · {{ rateMsg }}</span>
-      </p>
+      <p v-if="rateMsg" class="feedback ok">{{ rateMsg }}</p>
       <div v-if="rates.items.length" class="rate-grid">
         <div v-for="r in rates.items" :key="r.code" class="rate">
           <div class="rate-code">{{ r.symbol }} {{ r.code }}</div>
-          <div class="rate-val">1 = {{ r.per_unit_in_base }} <span class="muted">{{ rates.base }}</span></div>
+          <div class="rate-val mono-data">1 = {{ r.per_unit_in_base }} <span class="muted">{{ rates.base }}</span></div>
         </div>
       </div>
-      <p v-else class="muted">{{ t('settings.noRates') }}</p>
+      <p v-else class="muted empty-text">{{ t('settings.noRates') }}</p>
     </div>
 
     <!-- Telegram -->
-    <div class="card sect">
-      <div class="tg-head">
-        <h3>📲 {{ t('settings.telegram') }}</h3>
+    <div class="card sect panel-card channel-card">
+      <div class="panel-head">
+        <div>
+          <div class="panel-title"><span class="panel-signal"></span>{{ t('settings.telegram') }}</div>
+          <p class="muted">通过 Telegram Bot API 发送续费提醒，支持反代与 HTTP 代理。</p>
+        </div>
         <label class="switch">
           <input type="checkbox" v-model="tg.enabled" @change="saveTg" />
           <span>{{ t('settings.tgEnabled') }}</span>
         </label>
       </div>
-      <p class="muted" style="font-size:13px">
-        1. 在 Telegram 找 @BotFather 创建机器人，拿到 Bot Token 填到下面。<br />
-        2. 给你的机器人发一条消息，点「{{ t('settings.getUpdates') }}」自动获取 Chat ID。
-      </p>
-      <div class="row">
-        <div style="flex:2">
+      <div class="hint-box">
+        <span class="mono-data">01</span>
+        <p>在 Telegram 找 @BotFather 创建机器人，拿到 Bot Token 填到下面。</p>
+        <span class="mono-data">02</span>
+        <p>给你的机器人发一条消息，点「{{ t('settings.getUpdates') }}」自动获取 Chat ID。</p>
+      </div>
+      <div class="form-grid wide">
+        <div class="field span-2">
           <label>{{ t('settings.botToken') }}</label>
           <input v-model="tg.bot_token" placeholder="8954101204:AAGx00hzpMjR..." />
         </div>
-        <div style="flex:1">
+        <div class="field">
           <label>{{ t('settings.chatId') }}</label>
           <input v-model="tg.chat_id" placeholder="123456789" />
         </div>
-        <div style="flex:1">
+        <div class="field">
           <label>{{ t('settings.adminId') }}</label>
           <input v-model="tg.admin_id" placeholder="123456789" />
         </div>
-      </div>
-      <div class="row">
-        <div style="flex:1">
+        <div class="field">
           <label>{{ t('settings.apiBase') }}</label>
           <input v-model="tg.api_base" placeholder="https://api.telegram.org" />
         </div>
-        <div style="flex:1">
+        <div class="field">
           <label>{{ t('settings.proxy') }}</label>
           <input v-model="tg.proxy" placeholder="http://127.0.0.1:7890" />
         </div>
       </div>
-      <div class="row" style="margin-top:12px">
+      <div class="actions-row wrap">
         <button class="btn" @click="saveTg">{{ t('settings.save') }}</button>
         <button class="btn ghost" @click="getUpdates">{{ t('settings.getUpdates') }}</button>
         <button class="btn ghost" @click="checkBot">{{ t('settings.checkBot') }}</button>
         <button class="btn ghost" @click="testSend">{{ t('settings.testSend') }}</button>
       </div>
-      <p v-if="tgMsg" :class="tgOk ? 'ok' : 'err'">{{ tgMsg }}</p>
+      <p v-if="tgMsg" class="feedback" :class="tgOk ? 'ok' : 'err'">{{ tgMsg }}</p>
     </div>
 
     <!-- Bark -->
-    <div class="card sect">
-      <div class="tg-head">
-        <h3>🔔 {{ t('settings.bark') }}</h3>
+    <div class="card sect panel-card channel-card">
+      <div class="panel-head">
+        <div>
+          <div class="panel-title"><span class="panel-signal"></span>{{ t('settings.bark') }}</div>
+          <p class="muted">iOS 推送通道，可与 Telegram 同时启用并独立记录。</p>
+        </div>
         <label class="switch">
           <input type="checkbox" v-model="bk.enabled" @change="saveBark" />
           <span>{{ t('settings.barkEnabled') }}</span>
         </label>
       </div>
-      <p class="muted" style="font-size:13px">
-        {{ t('settings.barkTip') }}
-      </p>
-      <div class="row">
-        <div style="flex:2">
+      <p class="muted tip-text">{{ t('settings.barkTip') }}</p>
+      <div class="form-grid wide">
+        <div class="field span-2">
           <label>{{ t('settings.barkKey') }}</label>
           <input v-model="bk.device_key" placeholder="xxxxxxxxxxxxxxxxxxxxxx" />
         </div>
-        <div style="flex:1">
+        <div class="field">
           <label>{{ t('settings.barkServer') }}</label>
           <input v-model="bk.server" placeholder="https://api.day.app" />
         </div>
-      </div>
-      <div class="row">
-        <div style="flex:1">
+        <div class="field">
           <label>{{ t('settings.barkSound') }}</label>
           <input v-model="bk.sound" placeholder="（可选）" />
         </div>
-        <div style="flex:1">
+        <div class="field">
           <label>{{ t('settings.barkGroup') }}</label>
           <input v-model="bk.group" placeholder="Subly" />
         </div>
-        <div style="flex:1">
+        <div class="field">
           <label>{{ t('settings.barkTtl') }}</label>
           <input v-model="bk.ttl" type="text" inputmode="numeric" pattern="\d*" :placeholder="t('settings.barkTtlPh')" />
         </div>
       </div>
-      <div class="row" style="margin-top:12px">
+      <div class="actions-row wrap">
         <button class="btn" @click="saveBark">{{ t('settings.save') }}</button>
         <button class="btn ghost" @click="testBark">{{ t('settings.testSend') }}</button>
       </div>
-      <p v-if="bkMsg" :class="bkOk ? 'ok' : 'err'">{{ bkMsg }}</p>
+      <p v-if="bkMsg" class="feedback" :class="bkOk ? 'ok' : 'err'">{{ bkMsg }}</p>
     </div>
 
-    <!-- 数据备份与恢复 -->
-    <div class="card sect">
-      <h3>💾 {{ t('backup.title') }}</h3>
-      <p class="muted" style="font-size:13px;margin-top:0">{{ t('backup.tip') }}</p>
-      <div class="row" style="align-items:center;gap:12px">
-        <button class="btn ghost" @click="exportData">⬇️ {{ t('backup.export') }}</button>
-        <label class="btn ghost" style="width:auto;margin:0">⬆️ {{ t('backup.import') }}
-          <input type="file" accept="application/json,.json" hidden @change="importData" />
-        </label>
-        <label class="switch"><input type="checkbox" v-model="importReplace" /> <span>{{ t('backup.replace') }}</span></label>
+    <div class="grid two">
+      <!-- 数据备份与恢复 -->
+      <div class="card sect panel-card data-card">
+        <div class="panel-head compact">
+          <div>
+            <div class="panel-title"><span class="panel-signal"></span>{{ t('backup.title') }}</div>
+            <p class="muted">{{ t('backup.tip') }}</p>
+          </div>
+        </div>
+        <div class="actions-row wrap">
+          <button class="btn ghost" @click="exportData">⬇️ {{ t('backup.export') }}</button>
+          <label class="btn ghost file-btn">⬆️ {{ t('backup.import') }}
+            <input type="file" accept="application/json,.json" hidden @change="importData" />
+          </label>
+        </div>
+        <label class="switch replace-switch"><input type="checkbox" v-model="importReplace" /> <span>{{ t('backup.replace') }}</span></label>
+        <p v-if="backupMsg" class="feedback" :class="backupOk ? 'ok' : 'err'">{{ backupMsg }}</p>
       </div>
-      <p v-if="backupMsg" :class="backupOk ? 'ok' : 'err'">{{ backupMsg }}</p>
-    </div>
 
-    <!-- 管理员：整站备份与恢复 -->
-    <div class="card sect" v-if="auth.user?.is_admin">
-      <h3>🗄️ {{ t('backupAll.title') }}</h3>
-      <p class="muted" style="font-size:13px;margin-top:0">{{ t('backupAll.tip') }}</p>
-      <div class="row" style="align-items:center;gap:12px">
-        <button class="btn ghost" @click="exportAll">⬇️ {{ t('backupAll.export') }}</button>
-        <label class="btn ghost" style="width:auto;margin:0">⬆️ {{ t('backupAll.import') }}
-          <input type="file" accept="application/json,.json" hidden @change="importAll" />
-        </label>
-        <label class="switch"><input type="checkbox" v-model="importAllReplace" /> <span>{{ t('backupAll.replace') }}</span></label>
+      <!-- 管理员：整站备份与恢复 -->
+      <div class="card sect panel-card data-card admin-data" v-if="auth.user?.is_admin">
+        <div class="panel-head compact">
+          <div>
+            <div class="panel-title"><span class="panel-signal warn"></span>{{ t('backupAll.title') }}</div>
+            <p class="muted">{{ t('backupAll.tip') }}</p>
+          </div>
+        </div>
+        <div class="actions-row wrap">
+          <button class="btn ghost" @click="exportAll">⬇️ {{ t('backupAll.export') }}</button>
+          <label class="btn ghost file-btn">⬆️ {{ t('backupAll.import') }}
+            <input type="file" accept="application/json,.json" hidden @change="importAll" />
+          </label>
+        </div>
+        <label class="switch replace-switch"><input type="checkbox" v-model="importAllReplace" /> <span>{{ t('backupAll.replace') }}</span></label>
+        <p v-if="backupAllMsg" class="feedback" :class="backupAllOk ? 'ok' : 'err'">{{ backupAllMsg }}</p>
       </div>
-      <p v-if="backupAllMsg" :class="backupAllOk ? 'ok' : 'err'">{{ backupAllMsg }}</p>
     </div>
 
     <!-- 系统信息 -->
-    <div class="card sect">
-      <h3>ℹ️ {{ t('sys.title') }}</h3>
+    <div class="card sect panel-card">
+      <div class="panel-head">
+        <div>
+          <div class="panel-title"><span class="panel-signal"></span>{{ t('sys.title') }}</div>
+          <p class="muted">当前实例、数据库与提醒扫描参数。</p>
+        </div>
+        <span v-if="sys?.db_configured" class="tag status-ok">{{ t('sys.configured') }}</span>
+      </div>
       <div class="sys-grid" v-if="sys">
-        <div class="si"><span class="muted">{{ t('sys.version') }}</span><b>{{ sys.version }}</b></div>
+        <div class="si"><span class="muted">{{ t('sys.version') }}</span><b class="mono-data">{{ sys.version }}</b></div>
         <div class="si"><span class="muted">{{ t('sys.dbStatus') }}</span>
           <b class="ok" v-if="sys.db_configured">● {{ t('sys.configured') }}</b><b v-else>—</b></div>
-        <div class="si"><span class="muted">{{ t('sys.serverTime') }}</span><b>{{ sys.server_time }}</b></div>
-        <div class="si"><span class="muted">{{ t('sys.timezone') }}</span><b>{{ sys.timezone }}</b></div>
-        <div class="si"><span class="muted">{{ t('sys.scanTime') }}</span><b>{{ sys.reminder_scan_time }}</b></div>
-        <div class="si"><span class="muted">{{ t('sys.yourSubs') }}</span><b>{{ sys.your_subscriptions }}</b></div>
-        <div class="si" v-if="sys.total_users != null"><span class="muted">{{ t('sys.totalUsers') }}</span><b>{{ sys.total_users }}</b></div>
-        <div class="si" v-if="sys.total_subscriptions != null"><span class="muted">{{ t('sys.totalSubs') }}</span><b>{{ sys.total_subscriptions }}</b></div>
+        <div class="si"><span class="muted">{{ t('sys.serverTime') }}</span><b class="mono-data">{{ sys.server_time }}</b></div>
+        <div class="si"><span class="muted">{{ t('sys.timezone') }}</span><b class="mono-data">{{ sys.timezone }}</b></div>
+        <div class="si"><span class="muted">{{ t('sys.scanTime') }}</span><b class="mono-data">{{ sys.reminder_scan_time }}</b></div>
+        <div class="si"><span class="muted">{{ t('sys.yourSubs') }}</span><b class="mono-data">{{ sys.your_subscriptions }}</b></div>
+        <div class="si" v-if="sys.total_users != null"><span class="muted">{{ t('sys.totalUsers') }}</span><b class="mono-data">{{ sys.total_users }}</b></div>
+        <div class="si" v-if="sys.total_subscriptions != null"><span class="muted">{{ t('sys.totalSubs') }}</span><b class="mono-data">{{ sys.total_subscriptions }}</b></div>
       </div>
     </div>
   </div>
 </template>
 
 <script setup>
-import { onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import api from '../api'
 import { useAuth } from '../stores/auth'
@@ -247,6 +315,12 @@ const importReplace = ref(false)
 const backupAllMsg = ref('')
 const backupAllOk = ref(false)
 const importAllReplace = ref(false)
+
+const currentThemeLabel = computed(() => {
+  const item = themes.find((x) => x.v === theme.value)
+  return item ? t('settings.theme' + item.k) : theme.value
+})
+const enabledChannels = computed(() => Number(Boolean(tg.enabled)) + Number(Boolean(bk.enabled)))
 
 async function exportData() {
   backupMsg.value = ''
@@ -452,31 +526,78 @@ onMounted(async () => {
 </script>
 
 <style scoped>
-h1 { margin-top: 0; }
-.two { grid-template-columns: 1fr 1fr; margin-bottom: 16px; }
-.sect { margin-bottom: 16px; }
-.sect h3 { margin-top: 0; }
+.settings-page { display: flex; flex-direction: column; gap: 16px; }
+.settings-hero { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 24px; align-items: end;
+  padding: 24px; background: linear-gradient(135deg, color-mix(in srgb, var(--surface) 88%, var(--radar-panel)), var(--surface)); }
+.settings-hero > * { position: relative; z-index: 1; }
+.hero-kicker { display: flex; align-items: center; gap: 8px; color: var(--text-soft); font-size: 12px; font-weight: 800; letter-spacing: .14em; text-transform: uppercase; }
+h1 { margin: 8px 0 8px; }
+.hero-copy p { margin: 0; max-width: 640px; line-height: 1.7; }
+.hero-metrics { display: grid; grid-template-columns: repeat(3, minmax(96px, 1fr)); gap: 10px; min-width: 360px; }
+.metric-card { padding: 12px; border-radius: 14px; border: 1px solid color-mix(in srgb, var(--signal-cyan) 22%, var(--border));
+  background: color-mix(in srgb, var(--surface-2) 78%, transparent); }
+.metric-card span { display: block; color: var(--text-soft); font-size: 12px; margin-bottom: 5px; }
+.metric-card b { font-size: 16px; }
+.two { grid-template-columns: 1fr 1fr; }
+.sect { margin: 0; }
+.panel-card { position: relative; overflow: hidden; }
+.panel-card::after { content: ''; position: absolute; inset: auto 18px 0; height: 1px;
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--signal-cyan) 32%, transparent), transparent); pointer-events: none; }
+.panel-head { display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 12px; margin-bottom: 14px; }
+.panel-head.compact { margin-bottom: 12px; }
+.panel-head p { margin: 5px 0 0; font-size: 13px; line-height: 1.6; max-width: 760px; }
+.panel-title { display: flex; align-items: center; gap: 9px; font-size: 16px; font-weight: 850; letter-spacing: -.02em; }
+.panel-signal { width: 9px; height: 9px; border-radius: 999px; background: var(--signal-cyan);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--signal-cyan) 13%, transparent), 0 0 18px color-mix(in srgb, var(--signal-cyan) 45%, transparent); }
+.panel-signal.warn { background: var(--warning); box-shadow: 0 0 0 4px color-mix(in srgb, var(--warning) 15%, transparent), 0 0 18px color-mix(in srgb, var(--warning) 38%, transparent); }
+.form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 12px; }
+.form-grid.wide { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.field.span-2 { grid-column: span 2; }
 hr { border: none; border-top: 1px solid var(--border); margin: 16px 0; }
-.ok { color: var(--success); font-size: 13px; }
-.err { color: var(--danger); font-size: 13px; word-break: break-all; }
-.tg-head { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; }
-.switch { display: flex; align-items: center; gap: 6px; min-height: 44px; font-size: 13px; color: var(--text-soft); cursor: pointer; width: auto; margin: 0; }
+.feedback { margin: 10px 0 0; font-size: 13px; line-height: 1.5; }
+.ok { color: var(--success); }
+.err { color: var(--danger); word-break: break-all; }
+.actions-row { display: flex; align-items: center; gap: 10px; margin-top: 12px; }
+.actions-row.wrap { flex-wrap: wrap; }
+.switch { display: inline-flex; align-items: center; gap: 7px; min-height: 38px; font-size: 13px; color: var(--text-soft); cursor: pointer; width: auto; margin: 0; }
 .switch input { width: auto; }
-.theme-picker { display: flex; gap: 10px; margin: 6px 0 4px; }
+.replace-switch { margin-top: 12px; align-items: flex-start; }
+.theme-picker { display: flex; gap: 10px; margin: 6px 0 8px; }
 .th { width: 40px; height: 40px; border-radius: 50%; border: 2px solid var(--border); cursor: pointer; padding: 0; }
 .th.on { border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-soft); }
 .rate-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 10px; }
-.rate { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; background: var(--surface-2);
+.rate { border: 1px solid var(--border); border-radius: 12px; padding: 11px 12px; background: var(--surface-2);
   transition: transform .15s ease, border-color .15s ease; }
 .rate:hover { transform: translateY(-2px); border-color: var(--primary); }
-.rate-code { font-weight: 600; font-size: 14px; }
-.rate-val { font-size: 13px; color: var(--text); margin-top: 3px; }
+.rate-code { font-weight: 750; font-size: 14px; }
+.rate-val { font-size: 13px; color: var(--text); margin-top: 4px; }
+.hint-box { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 8px 10px; padding: 12px;
+  border: 1px solid var(--border); border-radius: 13px; background: color-mix(in srgb, var(--surface-2) 82%, transparent); margin-bottom: 12px; }
+.hint-box span { color: var(--signal-cyan); font-size: 12px; }
+.hint-box p { margin: 0; color: var(--text-soft); font-size: 13px; line-height: 1.5; }
+.tip-text { margin-top: 0; font-size: 13px; line-height: 1.6; }
+.file-btn { width: auto; margin: 0; }
+.data-card { min-height: 100%; }
+.admin-data { border-color: color-mix(in srgb, var(--warning) 35%, var(--border)); }
+.status-ok { background: color-mix(in srgb, var(--success) 16%, transparent); color: var(--success); }
 .sys-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px; }
-.si { display: flex; flex-direction: column; gap: 3px; padding: 12px; background: var(--surface-2); border-radius: 10px; font-size: 14px; }
+.si { display: flex; flex-direction: column; gap: 5px; padding: 13px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 12px; font-size: 14px; }
 .si .muted { font-size: 12px; }
-@media (max-width: 720px) {
+.empty-text { margin-bottom: 0; }
+@media (max-width: 920px) {
+  .settings-hero { grid-template-columns: 1fr; }
+  .hero-metrics { min-width: 0; }
   .two { grid-template-columns: 1fr; }
-  .tg-head .row { width: 100%; }
-  .tg-head .row .btn { flex: 1 1 calc(50% - 8px); }
+  .form-grid.wide { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 720px) {
+  .settings-page { gap: 14px; }
+  .settings-hero { padding: 18px; }
+  .hero-metrics { grid-template-columns: 1fr; }
+  .form-grid, .form-grid.wide { grid-template-columns: 1fr; }
+  .field.span-2 { grid-column: auto; }
+  .panel-head { align-items: stretch; }
+  .panel-head .btn, .actions-row .btn, .actions-row .file-btn { flex: 1 1 100%; justify-content: center; text-align: center; }
+  .actions-row { align-items: stretch; }
 }
 </style>
