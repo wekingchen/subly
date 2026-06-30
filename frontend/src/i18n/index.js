@@ -33,6 +33,7 @@ const zh = {
     monthSpend: '本月支出', yearSpend: '年度支出', active: '生效订阅', upcoming: '即将到期', recent: '最近订阅',
     none: '暂无数据', perMonth: '/月', daysLeft: '剩 {n} 天', today: '今天到期',
     overdue: '已过期', byCategory: '分类占比', avgMonth: '平均月支出', expiringSoon: '即将到期', viewAll: '查看全部',
+    commandCenter: '控制台',
     greeting: '你好，{name} 👋', subtitle: '这是你的订阅总览', catOverview: '分类总览（全部订阅）',
     radarTitle: '续费雷达', radarHero: '未来 30 天有 {n} 项续费，预计 {amount}',
     radarOverdue: '已过期', radar3: '3 天内', radar7: '7 天内', radar30: '30 天内'
@@ -59,6 +60,7 @@ const zh = {
     renewNext: '续费后下次到期：', renewOk: '已续费，下次到期 {date}', confirm: '确认续费',
     expiredTag: '已过期', soonTag: '即将到期', uncategorized: '未分类', dragHint: '拖动卡片可排序，拖动分类标题可调整分类顺序',
     moveUp: '上移', moveDown: '下移', moreIcons: '显示更多图标',
+    statusOverdue: '已过期', statusSoon: '即将到期', statusSafe: '安全', statusLifetime: '永久', lifetime: '永久买断',
     deleteTitle: '删除订阅', deletePwdTip: '为防止误删，请输入你的登录密码以确认删除「{name}」', pwdPh: '登录密码',
     remark: '个性化备注', remarkPh: '如：家庭主力机 / 香港 CN2（会显示在卡片上）',
     ipLabel: 'IP 地址（选填）', ipv4: 'IPv4', ipv6: 'IPv6'

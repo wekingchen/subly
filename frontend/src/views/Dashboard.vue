@@ -2,9 +2,10 @@
   <div>
     <div v-if="loading" class="muted">{{ t('common.loading') }}</div>
     <template v-else>
-      <!-- 欢迎 hero -->
-      <div class="hero card">
+      <!-- Command Center hero -->
+      <div class="hero card" :class="heroStatus">
         <div>
+          <div class="hero-kicker"><span class="signal-dot" :class="heroStatus"></span>{{ t('dashboard.commandCenter') }}</div>
           <div class="hi">{{ t('dashboard.greeting', { name: auth.user?.username || '' }) }}</div>
           <div class="sub muted">{{ radarHero }}</div>
         </div>
@@ -19,9 +20,9 @@
         </div>
         <div class="radar-bars">
           <router-link v-for="b in radarBars" :key="b.key" :to="b.to" class="radar-bar" :class="b.key">
-            <span class="rb-count">{{ b.count }}</span>
+            <span class="rb-count mono-data">{{ b.count }}</span>
             <span class="rb-label">{{ b.label }}</span>
-            <span class="rb-amt muted">{{ fmt(b.amount) }}</span>
+            <span class="rb-amt mono-data muted">{{ fmt(b.amount) }}</span>
             <span class="rb-track"><span class="rb-fill" :style="{ width: b.fill + '%' }"></span></span>
           </router-link>
         </div>
@@ -31,19 +32,19 @@
       <div class="grid stats">
         <div class="card stat s1">
           <div class="badge" v-html="icon('wallet')"></div>
-          <div><div class="muted">{{ t('dashboard.monthSpend') }}</div><div class="big">{{ fmt(data.month_spend) }}</div></div>
+          <div><div class="muted">{{ t('dashboard.monthSpend') }}</div><div class="big mono-data">{{ fmt(data.month_spend) }}</div></div>
         </div>
         <div class="card stat s2">
           <div class="badge" v-html="icon('trending')"></div>
-          <div><div class="muted">{{ t('dashboard.yearSpend') }}</div><div class="big">{{ fmt(data.year_spend) }}</div></div>
+          <div><div class="muted">{{ t('dashboard.yearSpend') }}</div><div class="big mono-data">{{ fmt(data.year_spend) }}</div></div>
         </div>
         <div class="card stat s3">
           <div class="badge" v-html="icon('package')"></div>
-          <div><div class="muted">{{ t('dashboard.active') }}</div><div class="big">{{ data.active_count }}</div></div>
+          <div><div class="muted">{{ t('dashboard.active') }}</div><div class="big mono-data">{{ data.active_count }}</div></div>
         </div>
         <div class="card stat s4" :class="{ alert: expiredCount > 0 }">
           <div class="badge" v-html="icon('alert')"></div>
-          <div><div class="muted">{{ t('dashboard.overdue') }}</div><div class="big">{{ expiredCount }}</div></div>
+          <div><div class="muted">{{ t('dashboard.overdue') }}</div><div class="big mono-data">{{ expiredCount }}</div></div>
         </div>
       </div>
 
@@ -55,14 +56,15 @@
             <router-link to="/calendar" class="more">{{ t('dashboard.viewAll') }} →</router-link>
           </div>
           <p v-if="!data.upcoming.length" class="muted">{{ t('dashboard.none') }}</p>
-          <div v-for="s in data.upcoming" :key="s.id" class="line">
+          <div v-for="s in data.upcoming" :key="s.id" class="line event-line" :class="statusOf(s)">
+            <span class="event-signal"></span>
             <span class="l-name">
               <ServiceIcon :src="s.icon" :name="s.name" :fallback="emojiOf(s)" class="mini-ico" />
               <span class="l-txt">{{ s.name }}</span>
             </span>
             <span class="l-right">
               <span class="tag" :class="dueClass(s)">{{ dueText(s) }}</span>
-              <b>{{ fmt(s.amount_in_base) }}</b>
+              <b class="mono-data">{{ fmt(s.amount_in_base) }}</b>
             </span>
           </div>
         </div>
@@ -153,11 +155,13 @@ function daysLeft(s) {
 function dueText(s) {
   const d = daysLeft(s)
   if (d === null) return ''
-  return d <= 0 ? t('dashboard.today') : t('dashboard.daysLeft', { n: d })
+  if (d < 0) return t('dashboard.overdue')
+  return d === 0 ? t('dashboard.today') : t('dashboard.daysLeft', { n: d })
 }
 function dueClass(s) {
   const d = daysLeft(s)
-  return d !== null && d <= 3 ? 'warn' : ''
+  if (d === null) return ''
+  return d < 0 ? 'danger' : d <= 3 ? 'warn' : ''
 }
 function radarBucket(s) {
   if (s.billing_type !== 'recurring' || !s.next_renewal_date || s.show_in_calendar === false) return null
@@ -187,6 +191,11 @@ const radarTotal = computed(() => radarRaw.value.reduce((n, b) => n + b.count, 0
 const radarBars = computed(() => {
   const max = Math.max(1, ...radarRaw.value.map((b) => b.count))
   return radarRaw.value.map((b) => ({ ...b, fill: Math.round((b.count / max) * 100) }))
+})
+const heroStatus = computed(() => {
+  if (radarRaw.value.find((b) => b.key === 'overdue')?.count) return 'overdue'
+  if (radarRaw.value.find((b) => b.key === 'd3')?.count || radarRaw.value.find((b) => b.key === 'd7')?.count) return 'soon'
+  return 'ok'
 })
 const radarHero = computed(() => {
   if (!radarTotal.value) return t('dashboard.subtitle')
@@ -258,9 +267,15 @@ onMounted(async () => {
 
 <style scoped>
 .hero { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 16px;
-  background: linear-gradient(120deg, var(--primary-soft), var(--surface)); }
-.hi { font-size: 20px; font-weight: 700; }
-.sub { font-size: 14px; margin-top: 2px; }
+  background: linear-gradient(120deg, color-mix(in srgb, var(--signal-cyan) 10%, var(--surface)), var(--surface)); }
+.hero.overdue { background: linear-gradient(120deg, color-mix(in srgb, var(--danger) 12%, var(--surface)), var(--surface)); }
+.hero.soon { background: linear-gradient(120deg, color-mix(in srgb, var(--warning) 12%, var(--surface)), var(--surface)); }
+.hero-kicker { display: flex; align-items: center; gap: 8px; font-size: 11px; text-transform: uppercase; letter-spacing: .18em; color: var(--text-soft); margin-bottom: 6px; }
+.hero-kicker .signal-dot { width: 8px; height: 8px; }
+.hero-kicker .signal-dot.overdue { background: var(--danger); box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 18%, transparent), 0 0 14px color-mix(in srgb, var(--danger) 55%, transparent); }
+.hero-kicker .signal-dot.soon { background: var(--warning); box-shadow: 0 0 0 3px color-mix(in srgb, var(--warning) 18%, transparent), 0 0 14px color-mix(in srgb, var(--warning) 55%, transparent); }
+.hi { font-size: 20px; font-weight: 800; letter-spacing: -.02em; }
+.sub { font-size: 14px; margin-top: 4px; }
 
 /* 续费雷达 */
 .radar { margin-bottom: 16px; }
@@ -274,7 +289,7 @@ onMounted(async () => {
 .rb-amt { font-size: 12px; }
 .rb-track { height: 6px; border-radius: 999px; background: color-mix(in srgb, var(--border) 60%, transparent); overflow: hidden; margin-top: 4px; }
 .rb-fill { display: block; height: 100%; border-radius: 999px; }
-.radar-bar.overdue { border-color: color-mix(in srgb, var(--danger) 50%, var(--border)); }
+.radar-bar.overdue { border-color: color-mix(in srgb, var(--danger) 50%, var(--border)); animation: pulse-danger 2s ease-in-out infinite; }
 .radar-bar.overdue .rb-count { color: var(--danger); }
 .radar-bar.overdue .rb-fill { background: var(--danger); }
 .radar-bar.d3 { border-color: color-mix(in srgb, var(--warning) 50%, var(--border)); }
@@ -284,6 +299,8 @@ onMounted(async () => {
 .radar-bar.d7 .rb-fill { background: var(--primary); }
 .radar-bar.d30 .rb-count { color: var(--text-soft); }
 .radar-bar.d30 .rb-fill { background: color-mix(in srgb, var(--primary) 40%, var(--border)); }
+@keyframes pulse-danger { 0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--danger) 40%, transparent); } 50% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--danger) 12%, transparent); } }
+@media (prefers-reduced-motion: reduce) { .radar-bar.overdue { animation: none; } }
 
 .stats { grid-template-columns: repeat(4, 1fr); margin-bottom: 16px; }
 .stat { display: flex; align-items: center; gap: 14px; }
@@ -305,6 +322,12 @@ h3 { margin-top: 0; }
 .line { display: flex; justify-content: space-between; align-items: center; padding: 9px 0;
   border-bottom: 1px solid var(--border); font-size: 14px; }
 .line:last-child { border-bottom: none; }
+.event-line { gap: 8px; border-radius: 10px; padding: 8px 6px; }
+.event-line.soon { background: color-mix(in srgb, var(--warning) 8%, transparent); }
+.event-line.overdue { background: color-mix(in srgb, var(--danger) 8%, transparent); }
+.event-signal { width: 8px; height: 8px; border-radius: 999px; background: var(--success); flex-shrink: 0; }
+.event-line.soon .event-signal { background: var(--warning); box-shadow: 0 0 0 3px color-mix(in srgb, var(--warning) 14%, transparent); }
+.event-line.overdue .event-signal { background: var(--danger); box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 14%, transparent); }
 .l-name { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .l-txt { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .l-right { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
@@ -315,6 +338,7 @@ h3 { margin-top: 0; }
   font-size: 15px; flex-shrink: 0; }
 .mini-emoji.sm { font-size: 14px; }
 .tag.warn { background: #fef3c7; color: #b45309; }
+.tag.danger { background: #fee2e2; color: #b91c1c; }
 
 .donut-wrap { display: flex; align-items: center; gap: 18px; margin-top: 8px; }
 .donut { width: 120px; height: 120px; border-radius: 50%; flex-shrink: 0;

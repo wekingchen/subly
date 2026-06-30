@@ -51,14 +51,20 @@
               <div class="sc-name">{{ s.name }}</div>
               <div class="muted sc-plan" v-if="s.plan">{{ s.plan }}</div>
             </div>
-            <span class="tag" :class="s.billing_type">
-              {{ s.billing_type === 'recurring' ? t('sub.recurring') : t('sub.oneTime') }}
-            </span>
+            <span class="sc-chip" :class="statusOf(s)">{{ statusChip(s) }}</span>
           </div>
 
-          <div class="sc-amount">
+          <div class="sc-amount mono-data">
             {{ s.amount.toFixed(2) }} <span class="muted cur">{{ s.currency }}</span>
             <span v-if="s.billing_type === 'recurring'" class="muted cycle">/ {{ cycleText(s) }}</span>
+          </div>
+
+          <div class="sc-due" :class="statusOf(s)" v-if="s.billing_type === 'recurring' && s.next_renewal_date">
+            <span class="due mono-data">{{ s.next_renewal_date }}</span>
+            <span class="sc-due-text">{{ dueText(s) }}</span>
+          </div>
+          <div class="sc-due oneTime" v-else-if="s.billing_type === 'one_time'">
+            <span class="sc-due-text">{{ t('sub.lifetime') }}</span>
           </div>
 
           <div v-if="isExpired(s)" class="expired-banner">⚠️ {{ t('sub.expiredTag') }}</div>
@@ -67,10 +73,6 @@
           <div v-if="s.remark" class="sc-remark">📝 {{ s.remark }}</div>
 
           <div class="sc-rows">
-            <div v-if="s.next_renewal_date" class="sc-row">
-              <span class="muted">📅 {{ t('sub.nextRenewal') }}</span>
-              <span class="due" :class="dueClass(s)">{{ s.next_renewal_date }} · {{ dueText(s) }}</span>
-            </div>
             <div class="sc-row" v-if="s.ipv4">
               <span class="muted">🌐 IPv4</span><span class="mono">{{ s.ipv4 }}</span>
             </div>
@@ -473,6 +475,13 @@ function statusOf(s) {
   if (d <= 7) return 'soon'
   return 'ok'
 }
+function statusChip(s) {
+  const st = statusOf(s)
+  if (st === 'overdue') return t('sub.statusOverdue')
+  if (st === 'soon') return t('sub.statusSoon') + ' · ' + Math.abs(daysLeft(s)) + 'D'
+  if (st === 'oneTime') return t('sub.statusLifetime')
+  return t('sub.statusSafe')
+}
 
 /* ---------- 客户端续费日计算（与后端 billing.add_cycle 对齐） ---------- */
 function addMonths(d, months) {
@@ -865,6 +874,21 @@ h1 { margin-top: 0; }
 .status-strip.soon { background: var(--warning); opacity: .85; }
 .status-strip.overdue { background: var(--danger); }
 .status-strip.oneTime { background: var(--text-soft); opacity: .22; }
+/* 状态 chip */
+.sc-chip { font-size: 11px; font-weight: 700; letter-spacing: .04em; padding: 3px 8px; border-radius: 999px;
+  white-space: nowrap; flex-shrink: 0; }
+.sc-chip.ok { background: color-mix(in srgb, var(--success) 16%, transparent); color: var(--success); }
+.sc-chip.soon { background: color-mix(in srgb, var(--warning) 18%, transparent); color: var(--warning); }
+.sc-chip.overdue { background: color-mix(in srgb, var(--danger) 18%, transparent); color: var(--danger); }
+.sc-chip.oneTime { background: color-mix(in srgb, var(--text-soft) 16%, transparent); color: var(--text-soft); }
+/* 续费日主视觉行 */
+.sc-due { display: flex; align-items: center; gap: 8px; margin: 6px 0 10px; font-size: 14px; }
+.sc-due .due { font-weight: 700; }
+.sc-due-text { font-size: 12px; color: var(--text-soft); }
+.sc-due.ok .due { color: var(--text); }
+.sc-due.soon .due, .sc-due.soon .sc-due-text { color: var(--warning); }
+.sc-due.overdue .due, .sc-due.overdue .sc-due-text { color: var(--danger); }
+.sc-due.oneTime .sc-due-text { color: var(--text-soft); font-style: italic; }
 /* 悬停动感：上浮 + 轻微放大 + 渐变高光描边 + 顶部光带扫过 */
 .sub-card::after { content: ''; position: absolute; top: 0; left: -60%; width: 40%; height: 100%;
   background: linear-gradient(100deg, transparent, color-mix(in srgb, var(--primary) 14%, transparent), transparent);
