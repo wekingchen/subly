@@ -3,8 +3,8 @@
 #
 # 用法：在项目目录执行  ./update.sh
 # 作用：拉取最新代码 → 仅重建 app 镜像（复用未变更的层）→ 重启 app 容器 → 清理悬空镜像
-# 数据安全：你的订阅数据在【外部 MySQL】，连接配置与图标在命名卷 app_data 中，
-#          本脚本不使用 `down -v`，不会触碰这些数据。
+# 数据安全：订阅数据保存在 /app/data 对应的数据卷中，包含 SQLite 数据库、上传图标与内置图标库缓存；
+#          本脚本不使用 `down -v`，不会触碰这些持久化数据。
 set -e
 
 cd "$(dirname "$0")"
@@ -26,5 +26,5 @@ docker compose ps
 echo "==> 4/4 清理悬空镜像，释放磁盘"
 docker image prune -f >/dev/null 2>&1 || true
 
-echo "✅ 升级完成。数据与数据库连接均已保留。"
+echo "✅ 升级完成。/app/data 数据卷已保留。"
 echo "   查看日志： docker compose logs -f app"

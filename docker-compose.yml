@@ -6,7 +6,7 @@ services:
     restart: unless-stopped
     env_file: .env
     volumes:
-      - app_data:/app/data        # SQLite 数据库文件 + 上传图标持久化
+      - app_data:/app/data        # SQLite 数据库文件 + 上传图标 + 内置图标库缓存持久化
     expose:
       - "8000"
 

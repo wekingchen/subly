@@ -1,6 +1,6 @@
 # 各厂家 NAS 安装教程（Subly 省心订阅）
 
-> 内置 **SQLite**，零配置：拉镜像、填几个环境变量、启动即可用，不需要另外准备数据库，也没有安装向导。
+> Subly 内置 **SQLite**，零配置：拉镜像、填环境变量、映射 `/app/data`、启动即可用，不需要另外准备数据库，也没有安装向导。
 
 镜像地址（任选其一，记得换成你自己发布的镜像）：
 
@@ -14,17 +14,44 @@
 ## 通用前置条件
 
 1. NAS 已安装 **Docker / Container** 套件。
-2. 关键环境变量（创建容器时填）：
+2. 准备一个持久化目录映射到容器内 `/app/data`。
+3. 准备以下环境变量。
+
+### 必填 / 常用环境变量
 
 | 变量 | 说明 | 示例 |
 |------|------|------|
 | `JWT_SECRET` | 登录令牌密钥，**必须改成随机串** | `openssl rand -hex 32` 生成 |
-| `ADMIN_USERNAME` | 初始管理员账号 | `admin` |
-| `ADMIN_PASSWORD` | 初始管理员密码（首次初始化后请改） | `admin123` |
-| `ADMIN_EMAIL` | 管理员邮箱 | `admin@example.com` |
+| `ADMIN_USERNAME` | 首次初始化管理员账号 | `admin` |
+| `ADMIN_PASSWORD` | 首次初始化管理员密码（登录后请修改） | `admin123` |
+| `ADMIN_EMAIL` | 首次初始化管理员邮箱 | `admin@example.com` |
 | `TZ` | 时区 | `Asia/Shanghai` |
-| `REMINDER_SCAN_TIME` | 每天提醒扫描时间 | `09:00` |
-| `TELEGRAM_BOT_TOKEN` | 可留空，后续网页里配 | |
+| `REMINDER_SCAN_TIME` | 每天扫描到期订阅、发送提醒的时间 | `09:00` |
+| `REQUIRE_ADMIN_APPROVAL` | 新用户注册后是否需要管理员审核 | `true` |
+| `TELEGRAM_BOT_TOKEN` | 可留空，后续网页「设置」里配置 | |
+
+### 邮箱验证 / SMTP（可选）
+
+配置 SMTP 后，注册流程可以发送邮箱验证码；不配置时仍可通过管理员审核来管理新用户。
+
+| 变量 | 说明 | 示例 |
+|------|------|------|
+| `SMTP_HOST` | SMTP 主机 | `smtp.example.com` |
+| `SMTP_PORT` | SMTP 端口 | `587` |
+| `SMTP_USER` | SMTP 用户名 | `noreply@example.com` |
+| `SMTP_PASSWORD` | SMTP 密码或授权码 | `请使用占位或自行填写` |
+| `SMTP_FROM` | 发件人地址；`SMTP_HOST` 与 `SMTP_FROM` 同时存在才视为启用 SMTP | `noreply@example.com` |
+| `SMTP_TLS` | `true` 使用 STARTTLS，`false` 使用 SMTP SSL | `true` |
+
+### 汇率、日志与图标库（可选）
+
+| 变量 | 说明 | 示例 |
+|------|------|------|
+| `EXCHANGE_API_BASE` | 汇率数据源基准货币 | `USD` |
+| `EXCHANGE_API_URL` | 汇率 API 地址 | `https://open.er-api.com/v6/latest/` |
+| `EXCHANGE_API_KEY` | 可选汇率 API key | 留空 |
+| `LOG_LEVEL` | 后端日志级别，输出到 stdout / 容器日志 | `INFO` |
+| `SLOW_REQUEST_MS` | 请求耗时超过该毫秒数时记录 `slow_request` | `1000` |
 | `ICON_FETCH_ENABLED` | 是否允许内置图标库联网下载 favicon | `true` |
 | `ICON_FETCH_GOOGLE_ENABLED` | 是否启用 Google favicon provider，网络不可达时可关 | `true` |
 | `ICON_FETCH_TIMEOUT_S` | 单次图标下载超时秒数 | `2.0` |
@@ -32,12 +59,14 @@
 | `ICON_FETCH_CONCURRENCY` | 冷缓存时 favicon 下载并发数 | `6` |
 | `ICON_FETCH_SVG_ENABLED` | 是否接受并消毒缓存远端 SVG favicon | `true` |
 
-> Bark 推送无需环境变量，登录后在网页「设置」里填 Device Key 即可；TTL 可留空使用 Bark 默认值，也可填写非负整数秒数。Telegram 也可以留空在网页里配。
+> Bark 推送无需环境变量，登录后在网页「设置」里填 Device Key、服务器、提示音、分组与 TTL 即可；Telegram 的 Chat ID、API 反代和 HTTP 代理也建议在网页「设置」里配置。
 
 - **端口**：容器内部 `8000`，映射到宿主任意端口（本文统一用 `8842`）。
-- **持久化目录**：把容器内 `/app/data` 映射到 NAS 的一个目录（存 SQLite 数据库文件、上传图标、内置图标库缓存）。**这个目录一定要做持久化映射，否则重建容器会丢数据。**
+- **持久化目录**：把容器内 `/app/data` 映射到 NAS 的一个目录。这里保存 SQLite 数据库文件、上传图标和内置图标库缓存。**这个目录一定要持久化，否则重建容器会丢数据。**
 
-完成创建后，浏览器访问 `http://<NAS局域网IP>:8842`，直接用上面设置的管理员账号登录即可。
+完成创建后，浏览器访问 `http://<NAS局域网IP>:8842`，直接用环境变量设置的管理员账号登录即可。
+
+API / Swagger 文档地址：`http://<NAS局域网IP>:8842/docs`。
 
 ---
 
@@ -49,7 +78,7 @@
 4. 在向导里设置：
    - **端口设置**：本地端口 `8842` → 容器端口 `8000`。
    - **存储空间**：添加文件夹，装载路径填 `/app/data`（如 `/docker/subly` → `/app/data`）。
-   - **环境**：逐条添加上表的变量（`JWT_SECRET`、`ADMIN_*`、`TZ` 等）。
+   - **环境**：逐条添加上表的变量（`JWT_SECRET`、`ADMIN_*`、`TZ`、`REQUIRE_ADMIN_APPROVAL` 等）。
 5. 启动后访问 `http://<群晖IP>:8842`，用管理员账号登录。
 
 > 也可用「项目（Project）」功能：上传本仓库的 `docker-compose.hub.yml`，新建项目直接部署。
@@ -122,12 +151,13 @@ docker run -d --name subly \
   -e ADMIN_PASSWORD=admin123 \
   -e ADMIN_EMAIL=admin@example.com \
   -e TZ=Asia/Shanghai \
+  -e REQUIRE_ADMIN_APPROVAL=true \
   -v subly_data:/app/data \
   --restart unless-stopped \
   <你的用户名>/subly:latest
 ```
 
-或使用仓库内 compose：
+如果需要 SMTP、日志、汇率或图标库高级配置，建议使用仓库内 compose 示例：
 
 ```bash
 docker compose -f docker-compose.hub.yml up -d
@@ -137,7 +167,7 @@ docker compose -f docker-compose.hub.yml up -d
 
 ## 升级到新版本
 
-数据都在容器的 `/app/data` 卷里（SQLite 文件），升级只换镜像，不会丢数据：
+数据都在容器的 `/app/data` 卷里，升级只换镜像，不会丢数据：
 
 ```bash
 docker compose -f docker-compose.hub.yml pull
@@ -146,24 +176,48 @@ docker compose -f docker-compose.hub.yml up -d
 
 NAS 图形界面：重新拉取 `latest`，再重建容器（保持 `/app/data` 映射不变）即可。
 
-> 建议升级前，先在网页 **设置 → 数据备份** 里导出一份备份；管理员还可用 **整站备份** 导出全部成员数据。重要数据建议再额外备份一份 `/app/data` 整个目录。
+> 建议升级前，先在网页 **设置 → 数据备份** 里导出一份当前用户备份；管理员还可用 **整站备份** 导出全部成员数据。重要数据建议再额外备份一份 `/app/data` 整个目录。
 
 ---
 
 ## 常见问题
 
 **Q：端口被占用？**
-- 把映射左边的 `8842` 改成别的端口（如 `9000`），访问就用新端口。
+- 把映射左边的 `8842` 改成别的端口（如 `9000`），访问就用新端口，例如 `http://<NAS局域网IP>:9000`。
 
 **Q：数据存在哪？**
-- 全部在容器的 `/app/data` 卷里：SQLite 数据库文件（`subly.db`）+ 上传的图标 + 内置图标库缓存。只要这个目录做了持久化映射，重建/升级容器都不会丢数据。
+- 全部在容器的 `/app/data` 卷里：SQLite 数据库文件（`subly.db`）+ 上传图标 + 内置图标库缓存。只要这个目录做了持久化映射，重建 / 升级容器都不会丢数据。
+
+**Q：注册后为什么不能马上登录？**
+- 默认 `REQUIRE_ADMIN_APPROVAL=true`，新用户注册后需要管理员在「用户管理」里审核通过。
+- 如果配置了 SMTP，注册时还需要完成邮箱验证码校验。
+- 管理员也可以在「用户管理」里启用 / 禁用账号、授予或撤销管理员权限。
+
+**Q：不想开放注册怎么办？**
+- 当前文档只建议把部署入口放在可信网络或反向代理后，并保留 `REQUIRE_ADMIN_APPROVAL=true`。这样即使有人注册，也必须管理员审核后才能使用。
 
 **Q：Telegram / Bark 收不到提醒？**
-- Telegram：确认 Bot Token 正确、已和机器人对话过拿到 Chat ID；国内访问需要在设置里配代理或 API 反代。
+- Telegram：确认 Bot Token 正确、已和机器人对话过拿到 Chat ID；国内访问需要在设置里配 HTTP 代理或 Telegram API 反代。
 - Bark：确认 Device Key 正确、iOS 上 Bark App 在线；自建 Bark 服务器要确认容器能访问到那个地址。TTL 只能填写非负整数秒数，留空表示使用 Bark 默认值。
 - 两者可以同时开启，互不影响，建议先在「设置」页点「发送测试」确认通道本身是通的。
+- 若自动提醒没有触发，检查订阅是否为启用状态、到期日与提前提醒天数是否匹配，以及 `REMINDER_SCAN_TIME` 与 `TZ` 是否符合预期。
 
 **Q：图标库没有真实图标或加载很慢？**
-- 内置图标库会按需下载 favicon 并缓存到 `/app/data/icons/library`；下载失败时会显示可见 fallback，不会再显示透明空白图标。
+- 内置图标库会按需下载 favicon 并缓存到 `/app/data/icons/library`；下载失败时会显示可见 fallback，不会显示透明空白图标。
 - 如果 NAS 所在网络无法访问 Google favicon provider，可添加环境变量 `ICON_FETCH_GOOGLE_ENABLED=false`。
 - 如果不希望容器联网下载图标，可添加环境变量 `ICON_FETCH_ENABLED=false`，系统会直接使用可见 fallback。
+- 远端 SVG favicon 默认会经过消毒后缓存；如需禁用，可设置 `ICON_FETCH_SVG_ENABLED=false`。
+
+**Q：在哪里查看日志排障？**
+- 网页「实时日志」可查看当前账号相关的活动记录；管理员可查看全站活动。
+- 容器日志可用 NAS 图形界面的日志页，或命令行查看：
+  ```bash
+  docker logs -f subly
+  # 或 compose 部署：
+  docker compose -f docker-compose.hub.yml logs -f app
+  ```
+- `SLOW_REQUEST_MS` 可帮助定位慢请求；后端日志会记录 method、path、status、duration、user_id、client 等请求概要，不记录请求体、密码、token 或 API key。
+
+**Q：Swagger / API 文档在哪？**
+- NAS / Docker 默认端口映射后访问 `http://<NAS局域网IP>:8842/docs`。
+- 如果你自己改了宿主端口，请把 `8842` 替换成实际端口。

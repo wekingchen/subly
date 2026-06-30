@@ -16,10 +16,20 @@ services:
       ADMIN_USERNAME: admin
       ADMIN_PASSWORD: admin123          # 首次初始化后请在网页里改密码
       ADMIN_EMAIL: admin@example.com
+      REQUIRE_ADMIN_APPROVAL: "true"    # 新用户注册后需管理员审核
       REMINDER_SCAN_TIME: "09:00"       # 每天扫描到期订阅、发送提醒的时间
+      LOG_LEVEL: INFO
+      SLOW_REQUEST_MS: "1000"
       EXCHANGE_API_BASE: USD
       EXCHANGE_API_URL: https://open.er-api.com/v6/latest/
+      EXCHANGE_API_KEY: ""
       TELEGRAM_BOT_TOKEN: ""            # 可留空，后续在网页「设置」里配置
+      # SMTP_HOST: ""                   # 配置 SMTP 后可启用注册邮箱验证码
+      # SMTP_PORT: "587"
+      # SMTP_USER: ""
+      # SMTP_PASSWORD: ""
+      # SMTP_FROM: ""
+      # SMTP_TLS: "true"
       ICON_FETCH_ENABLED: "true"         # 是否允许内置图标库联网下载 favicon
       ICON_FETCH_GOOGLE_ENABLED: "true"  # Google favicon 不可达时可改为 false
       # ICON_FETCH_TIMEOUT_S: "2.0"      # 单次图标下载超时秒数
