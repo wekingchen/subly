@@ -65,14 +65,19 @@ const zh = {
     remark: '个性化备注', remarkPh: '如：家庭主力机 / 香港 CN2（会显示在卡片上）',
     ipLabel: 'IP 地址（选填）', ipv4: 'IPv4', ipv6: 'IPv6'
   },
-  calendar: { title: '续费日历', noEvents: '本月无续费', today: '今天', prevMonth: '上个月', nextMonth: '下个月', more: '还有 {n} 项' },
+  calendar: {
+    title: '续费日历', noEvents: '本月无续费', today: '今天', prevMonth: '上个月', nextMonth: '下个月', more: '还有 {n} 项',
+    trajectory: '续费航迹', monthSignal: '本月信号', monthSummary: '本月 {n} 个续费信号，预计 {amount}', monthSafe: '本月暂无可见续费风险'
+  },
   reports: {
     title: '报表分析', overview: '总览', insights: '支出洞察', categoryDetail: '分类明细', recentPayments: '近期付款',
     ranking: '支出排行', oneTime: '永久购买', upcoming: '即将续费', expired: '已过期',
     category: '分类', monthly: '月支出', percent: '占比', total: '月支出合计', empty: '暂无数据',
     monthlyTotal: '每月合计', yearlyTotal: '每年合计', byCategory: '分类支出占比', spendTrend: '支出概览',
     recurringSubs: '循环订阅', permanentBuy: '永久购买', count: '数量', amount: '金额', date: '日期', type: '类型',
-    permanentTotal: '永久购买总额', recurringMonthly: '循环订阅月支出', noData: '暂无可视化数据'
+    permanentTotal: '永久购买总额', recurringMonthly: '循环订阅月支出', noData: '暂无可视化数据',
+    finRadar: '财务雷达', reportSubtitle: '支出结构、续费风险与近期付款信号', riskRadar: '续费压力', riskTotal: '风险信号',
+    categorySignal: '分类信号', paymentSignal: '付款信号'
   },
   settings: {
     title: '设置', language: '语言', theme: '主题', baseCurrency: '基准货币', telegram: 'Telegram 通知',
