@@ -97,6 +97,7 @@ class IconLibraryService(Base):
     domain: Mapped[str] = mapped_column(String(255))
     website: Mapped[str | None] = mapped_column(String(512), nullable=True)
     category: Mapped[str] = mapped_column(String(64), default="other")
+    category_keys: Mapped[list | None] = mapped_column(JSON, nullable=True)
     slug: Mapped[str] = mapped_column(String(255), unique=True, index=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     sort: Mapped[int] = mapped_column(Integer, default=0)

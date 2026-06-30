@@ -82,12 +82,15 @@
               <td><ServiceIcon :src="svc.icon" :name="svc.name" class="svc-ico" loading="lazy" decoding="async" /></td>
               <td><b>{{ svc.name }}</b><div class="muted small">{{ svc.source === 'builtin' ? t('iconLib.builtin') : t('iconLib.custom') }}</div></td>
               <td><a :href="svc.website || `https://${svc.domain}`" target="_blank" rel="noopener">{{ svc.domain }}</a></td>
-              <td><span class="tag">{{ svc.category_label || svc.category }}</span></td>
+              <td>
+                <div class="cat-tags">
+                  <span v-for="label in serviceCategoryLabels(svc)" :key="label" class="tag">{{ label }}</span>
+                </div>
+              </td>
               <td><code>{{ svc.slug }}</code><div class="muted small">{{ svc.cached ? `${t('iconLib.cached')} ${svc.cached_ext || ''}` : t('iconLib.missing') }}</div></td>
               <td><span class="tag" :class="svc.is_active ? 'ok' : 'off'">{{ svc.is_active ? t('iconLib.active') : t('iconLib.inactive') }}</span></td>
               <td class="acts">
                 <button class="btn sm ghost" @click="openEdit(svc)">{{ t('iconLib.edit') }}</button>
-                <button class="btn sm ghost" @click="duplicate(svc)">{{ t('iconLib.duplicate') }}</button>
                 <button class="btn sm ghost" @click="fetchOne(svc)">{{ t('iconLib.fetchOne') }}</button>
                 <button v-if="svc.is_active" class="btn sm danger" @click="deactivate(svc)">{{ t('iconLib.deactivate') }}</button>
                 <button v-else class="btn sm ghost" @click="restore(svc)">{{ t('iconLib.activate') }}</button>
@@ -108,9 +111,13 @@
       <label>{{ t('iconLib.website') }}</label>
       <input v-model.trim="form.website" :placeholder="t('iconLib.websitePh')" />
       <label>{{ t('iconLib.category') }}</label>
-      <select v-model="form.category">
-        <option v-for="c in categories" :key="c.key" :value="c.key">{{ c.label }}</option>
-      </select>
+      <div class="category-checks">
+        <label v-for="c in categories" :key="c.key" class="category-check">
+          <input v-model="form.category_keys" type="checkbox" :value="c.key" />
+          <span>{{ c.label }}</span>
+        </label>
+      </div>
+      <p class="muted small">{{ t('iconLib.categoryMultiHint') }}</p>
       <label>{{ t('iconLib.slug') }}</label>
       <input v-model.trim="form.slug" :placeholder="t('iconLib.slugPh')" />
       <p class="muted small">{{ t('iconLib.slugWarn') }}</p>
@@ -174,14 +181,33 @@ const shown = computed(() => {
   if (activeFilter.value === 'inactive') out = out.filter((x) => !x.is_active)
   if (cacheFilter.value === 'cached') out = out.filter((x) => x.cached)
   if (cacheFilter.value === 'missing') out = out.filter((x) => !x.cached)
-  if (categoryFilter.value) out = out.filter((x) => x.category === categoryFilter.value)
+  if (categoryFilter.value) out = out.filter((x) => serviceCategoryKeys(x).includes(categoryFilter.value))
   const s = q.value.toLowerCase()
   if (s) out = out.filter((x) => x.name.toLowerCase().includes(s) || x.domain.toLowerCase().includes(s) || x.slug.toLowerCase().includes(s))
   return out
 })
 
+function serviceCategoryKeys(svc) {
+  const keys = Array.isArray(svc?.category_keys) ? svc.category_keys : []
+  const clean = keys.map((x) => String(x || '').trim()).filter(Boolean)
+  return clean.length ? clean : [svc?.category || 'other']
+}
+
+function serviceCategoryLabels(svc) {
+  const labels = Array.isArray(svc?.category_labels) ? svc.category_labels : []
+  const clean = labels.map((x) => String(x || '').trim()).filter(Boolean)
+  if (clean.length) return clean
+  return serviceCategoryKeys(svc).map((key) => categories.value.find((c) => c.key === key)?.label || svc?.category_label || key)
+}
+
+function selectedCategoryKeys() {
+  const keys = Array.isArray(form.value.category_keys) ? form.value.category_keys : serviceCategoryKeys(form.value)
+  return keys.map((x) => String(x || '').trim()).filter(Boolean)
+}
+
 function blank() {
-  return { name: '', domain: '', website: '', category: categories.value[0]?.key || 'other', slug: '', is_active: true, sort: 0 }
+  const category = categories.value[0]?.key || 'other'
+  return { name: '', domain: '', website: '', category, category_keys: [category], slug: '', is_active: true, sort: 0 }
 }
 
 async function load() {
@@ -196,26 +222,19 @@ async function load() {
 }
 
 function openNew() { editing.value = null; formErr.value = ''; form.value = blank(); showForm.value = true }
-function openEdit(svc) { editing.value = svc; formErr.value = ''; form.value = { ...svc }; showForm.value = true }
-function duplicate(svc) {
-  editing.value = null
+function openEdit(svc) {
+  editing.value = svc
   formErr.value = ''
-  form.value = {
-    name: `${svc.name} (${t('iconLib.copySuffix')})`,
-    domain: svc.domain,
-    website: svc.website || '',
-    category: svc.category,
-    slug: '',
-    is_active: true,
-    sort: svc.sort || 0
-  }
+  form.value = { ...svc, category_keys: serviceCategoryKeys(svc) }
   showForm.value = true
 }
 
 async function save() {
   if (!form.value.name) return (formErr.value = t('iconLib.nameReq'))
   if (!form.value.domain) return (formErr.value = t('iconLib.domainReq'))
-  const payload = { ...form.value, website: form.value.website || null, slug: form.value.slug || null }
+  const keys = selectedCategoryKeys()
+  if (!keys.length) return (formErr.value = t('iconLib.categoryReq'))
+  const payload = { ...form.value, category: keys[0], category_keys: keys, website: form.value.website || null, slug: form.value.slug || null }
   try {
     if (editing.value) await api.patch(`/api/admin/icon-services/${editing.value.id}`, payload)
     else await api.post('/api/admin/icon-services', payload)
@@ -302,6 +321,10 @@ h1 { margin:0; }
 .svc-ico { width:30px; height:30px; border-radius:8px; border:1px solid var(--border); object-fit:contain; background:var(--surface-2); }
 .small { font-size:12px; }
 .acts { display:flex; gap:6px; flex-wrap:wrap; }
+.cat-tags { display:flex; gap:6px; flex-wrap:wrap; }
+.category-checks { display:grid; grid-template-columns:repeat(auto-fill, minmax(160px, 1fr)); gap:8px; margin-top:8px; }
+.category-check { display:flex !important; align-items:center; gap:8px; margin:0 !important; padding:8px 10px; border:1px solid var(--border); border-radius:10px; background:var(--surface-2); font-size:13px; }
+.category-check input { width:auto; }
 .tag.ok, .tag.success { background:#dcfce7; color:#166534; }
 .tag.off, .tag.failed { background:#fee2e2; color:#991b1b; }
 .tag.skipped { background:#fef3c7; color:#92400e; }

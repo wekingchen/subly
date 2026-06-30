@@ -2,7 +2,7 @@ import { createI18n } from 'vue-i18n'
 
 const zh = {
   app: { title: '省心订阅 Subly', tagline: '订阅 / 续费 / 保号，一个都不漏' },
-  nav: { dashboard: '仪表盘', subscriptions: '订阅管理', calendar: '日历', reports: '报表分析', notifications: '通知中心', logs: '实时日志', settings: '设置', iconLibrary: '图标库管理', users: '用户管理', logout: '退出', menu: '导航菜单', brandTag: '续费雷达' },
+  nav: { dashboard: '仪表盘', subscriptions: '订阅管理', calendar: '日历', reports: '报表分析', notifications: '通知中心', logs: '实时日志', settings: '设置', iconLibrary: '内置服务管理', users: '用户管理', logout: '退出', menu: '导航菜单', brandTag: '续费雷达' },
   notify: { title: '通知中心', runScan: '立即扫描提醒', empty: '暂无通知记录', sent: '已发送', failed: '失败', daysBefore: '提前天数' },
   rtlog: { title: '实时日志', live: '实时', paused: '已暂停', action: '操作', user: '用户', detail: '详情', time: '时间', empty: '暂无日志', auto: '自动刷新' },
   account: { title: '账号与密码', username: '用户名', email: '邮箱', saveAccount: '保存账号', changePwd: '修改密码', oldPwd: '原密码', newPwd: '新密码', pwdOk: '密码已修改', accountOk: '账号已更新' },
@@ -109,8 +109,8 @@ const zh = {
     exportOk: '整站备份已下载（{n} 个用户）', importOk: '已恢复 {users} 个用户（新建 {created} 个），共导入 {n} 个订阅'
   },
   iconLib: {
-    title: '图标库管理', subtitle: '管理内置服务列表与图标库缓存',
-    add: '新增服务', edit: '编辑', duplicate: '复制', copySuffix: '副本', fetchOne: '抓取图标', fetchMissing: '预热缺失图标', fetchAll: '全部重新抓取',
+    title: '内置服务管理', subtitle: '管理服务清单、分类与图标缓存',
+    add: '新增服务', edit: '编辑', fetchOne: '抓取图标', fetchMissing: '预热缺失图标', fetchAll: '全部重新抓取',
     running: '正在抓取…', done: '完成', total: '总数', cached: '已缓存', missing: '未缓存',
     active: '启用', inactive: '已停用', activate: '启用', deactivate: '停用', builtin: '内置', custom: '自定义',
     name: '名称', domain: '域名', website: '官网', category: '分类', slug: 'Slug', status: '状态', source: '来源',
@@ -120,11 +120,11 @@ const zh = {
     confirmDeactivate: '确认停用该服务？（旧订阅图标仍可显示）',
     confirmFetchAll: '将对所有服务重新抓取图标，可能耗时较长。继续？',
     formTitleNew: '新增服务', formTitleEdit: '编辑服务', namePh: '如 Netflix', domainPh: '如 netflix.com',
-    websitePh: '留空用 https://域名', categoryPh: '选择分类', slugPh: '留空自动生成', slugWarn: '修改 slug 会影响旧订阅图标地址',
+    websitePh: '留空用 https://域名', categoryPh: '选择分类', categoryMultiHint: '可选择多个分类；第一个分类会作为兼容主分类', slugPh: '留空自动生成', slugWarn: '修改 slug 会影响旧订阅图标地址',
     save: '保存', cancel: '取消', saveOk: '已保存', deleteOk: '已停用', activateOk: '已启用',
     fetchOk: '已抓取', fetchFail: '抓取失败', progress: '进度', success: '成功', failed: '失败', skipped: '跳过',
     current: '当前', noJobs: '暂无抓取任务', details: '明细', provider: '来源', errReason: '原因',
-    nameReq: '请填写名称', domainReq: '请填写域名', slugExists: 'slug 已存在', okCount: '成功 {ok}', failCount: '失败 {fail}',
+    nameReq: '请填写名称', domainReq: '请填写域名', categoryReq: '请至少选择一个分类', slugExists: 'slug 已存在', okCount: '成功 {ok}', failCount: '失败 {fail}',
     overview: '概览', cachedCount: '{n} 已缓存', missingCount: '{n} 未缓存', activeCount: '{n} 启用', inactiveCount: '{n} 停用',
     exportList: '导出列表', refresh: '刷新', batch: '批量', selectAll: '全选', batchFetch: '抓取所选'
   },

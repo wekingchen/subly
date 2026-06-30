@@ -267,6 +267,7 @@ class IconServiceIn(BaseModel):
     domain: str
     website: str | None = None
     category: str = "other"
+    category_keys: list[str] | None = None
     slug: str | None = None
     is_active: bool = True
     sort: int = 0
@@ -277,6 +278,7 @@ class IconServiceUpdate(BaseModel):
     domain: str | None = None
     website: str | None = None
     category: str | None = None
+    category_keys: list[str] | None = None
     slug: str | None = None
     is_active: bool | None = None
     sort: int | None = None
@@ -290,6 +292,8 @@ class IconServiceOut(BaseModel):
     website: str | None
     category: str
     category_label: str = ""
+    category_keys: list[str] = Field(default_factory=list)
+    category_labels: list[str] = Field(default_factory=list)
     slug: str
     is_active: bool
     sort: int

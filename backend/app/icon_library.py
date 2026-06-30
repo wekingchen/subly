@@ -3,6 +3,8 @@
 图标按需从公共 favicon 服务下载并缓存到本地 data/icons/library/，
 之后由本地静态目录提供，不依赖外网。
 """
+import json
+
 from sqlalchemy import func, select
 
 # 分类 key -> 显示标签（用于「按分类浏览」服务库）
@@ -20,6 +22,7 @@ CATEGORY_LABELS = [
     ("news", "新闻 / News"),
     ("fitness", "健身 / Fitness"),
     ("membership", "会员 / Membership"),
+    ("other", "其它 / Other"),
 ]
 
 # (显示名, 域名, 分类key)
@@ -240,14 +243,39 @@ def category_label(key: str) -> str:
     return _CAT_LABEL_MAP.get(key, key)
 
 
+def category_keys_for_row(row) -> list[str]:
+    value = getattr(row, "category_keys", None)
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except json.JSONDecodeError:
+            value = [value]
+    if not isinstance(value, list):
+        value = []
+
+    keys: list[str] = []
+    seen: set[str] = set()
+    for item in value or [getattr(row, "category", None) or "other"]:
+        key = str(item or "").strip()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        keys.append(key)
+    return keys or ["other"]
+
+
 def _row_to_manifest(row) -> dict:
     slug = row.slug
+    keys = category_keys_for_row(row)
+    primary = keys[0]
     return {
         "name": row.name,
         "domain": row.domain,
         "website": row.website or f"https://{row.domain}",
-        "category": row.category,
-        "category_label": _CAT_LABEL_MAP.get(row.category, row.category),
+        "category": primary,
+        "category_label": _CAT_LABEL_MAP.get(primary, primary),
+        "category_keys": keys,
+        "category_labels": [_CAT_LABEL_MAP.get(k, k) for k in keys],
         "slug": slug,
         # 前端通过该地址取图标（首次访问会触发本地缓存）
         "icon": f"/api/icons/library/{slug}.png",
@@ -306,10 +334,15 @@ def service_for_slug(db, slug: str, include_inactive: bool = True) -> dict | Non
     row = db.scalar(stmt)
     if not row:
         return None
+    keys = category_keys_for_row(row)
+    primary = keys[0]
     return {
         "name": row.name,
         "domain": row.domain,
-        "category": row.category,
+        "category": primary,
+        "category_label": _CAT_LABEL_MAP.get(primary, primary),
+        "category_keys": keys,
+        "category_labels": [_CAT_LABEL_MAP.get(k, k) for k in keys],
         "slug": row.slug,
         "website": row.website or f"https://{row.domain}",
     }

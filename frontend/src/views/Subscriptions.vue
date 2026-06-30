@@ -669,13 +669,22 @@ function onNameInput() {
 const CAT_KEYWORDS = {
   streaming: 'streaming', music: 'music', ai: 'ai', gaming: 'gaming', vps: 'vps',
   carrier: 'carrier', cloud: 'cloud', software: 'software', domain: 'domain',
-  education: 'education', news: 'news', fitness: 'fitness', membership: 'membership'
+  education: 'education', news: 'news', fitness: 'fitness', membership: 'membership', other: 'other'
 }
 function findCategoryByKey(key) {
   const kw = CAT_KEYWORDS[key]
   if (!kw) return null
   const hit = categories.value.find((c) => (c.name || '').toLowerCase().includes(kw))
   return hit ? hit.id : null
+}
+function serviceCategoryKeys(svc) {
+  const keys = Array.isArray(svc?.category_keys) ? svc.category_keys : []
+  const clean = keys.map((x) => String(x || '').trim()).filter(Boolean)
+  return clean.length ? clean : [svc?.category || 'other']
+}
+function serviceCategoryLabel(svc, key, index) {
+  const labels = Array.isArray(svc?.category_labels) ? svc.category_labels : []
+  return labels[index] || (svc?.category === key ? svc.category_label : '') || key
 }
 const isVpsCategory = computed(() => {
   const c = categories.value.find((x) => x.id === form.value.category_id)
@@ -688,9 +697,9 @@ function pickService(s) {
   form.value.icon = s.icon
   if (!form.value.url && s.website) form.value.url = s.website
   // 自动带出分类（按服务库分类映射到用户分类）
-  if (s.category) {
-    const cid = findCategoryByKey(s.category)
-    if (cid) form.value.category_id = cid
+  for (const key of serviceCategoryKeys(s)) {
+    const cid = findCategoryByKey(key)
+    if (cid) { form.value.category_id = cid; break }
   }
   suggestions.value = []
 }
@@ -713,9 +722,10 @@ const groupedLib = computed(() => {
   const groups = new Map()
   for (const s of iconLib.value) {
     if (q && !s.name.toLowerCase().includes(q)) continue
-    const key = s.category || 'other'
-    if (!groups.has(key)) groups.set(key, { key, label: s.category_label || key, items: [] })
-    groups.get(key).items.push(s)
+    serviceCategoryKeys(s).forEach((key, index) => {
+      if (!groups.has(key)) groups.set(key, { key, label: serviceCategoryLabel(s, key, index), items: [] })
+      groups.get(key).items.push(s)
+    })
   }
   return [...groups.values()]
 })

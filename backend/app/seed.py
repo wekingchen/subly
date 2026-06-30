@@ -69,8 +69,9 @@ def seed_all(db: Session) -> None:
         for code, name, symbol in CURRENCIES:
             db.add(Currency(code=code, name=name, symbol=symbol, is_custom=False))
 
-    if not db.scalar(select(Category).where(Category.is_system.is_(True)).limit(1)):
-        for i, (name, icon, color) in enumerate(CATEGORIES):
+    existing_category_names = set(db.scalars(select(Category.name).where(Category.is_system.is_(True))).all())
+    for i, (name, icon, color) in enumerate(CATEGORIES):
+        if name not in existing_category_names:
             db.add(Category(name=name, icon=icon, color=color, is_system=True, sort=i))
 
     # 服务图标库：幂等导入内置服务（仅插入缺失 slug，不覆盖管理员改动）
@@ -85,6 +86,7 @@ def seed_all(db: Session) -> None:
                 domain=domain,
                 website=None,
                 category=cat,
+                category_keys=[cat],
                 slug=slug,
                 is_active=True,
                 sort=i,

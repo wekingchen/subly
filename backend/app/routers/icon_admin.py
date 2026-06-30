@@ -1,4 +1,5 @@
 """管理员：服务图标库 CRUD + 图标预热任务。"""
+import json
 import threading
 import time
 import uuid
@@ -50,15 +51,56 @@ def re_safe(value: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.\-]", "", value).replace("/", "_")
 
 
+def _coerce_category_list(value) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+            if isinstance(parsed, list):
+                return parsed
+        except json.JSONDecodeError:
+            pass
+        return [value]
+    return [str(value)]
+
+
+def _normalize_category_keys(category_keys=None, fallback: str | None = None) -> list[str]:
+    valid_keys = {c["key"] for c in icon_library.categories()} | {"other"}
+    source = _coerce_category_list(category_keys) if category_keys is not None else []
+    if not source and fallback is not None:
+        source = [fallback]
+
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in source:
+        key = str(item or "").strip()
+        if not key or key in seen or key not in valid_keys:
+            continue
+        seen.add(key)
+        out.append(key)
+    return out or ["other"]
+
+
+def _effective_category_keys(row: IconLibraryService) -> list[str]:
+    return _normalize_category_keys(row.category_keys, row.category or "other")
+
+
 def _to_out(row: IconLibraryService) -> IconServiceOut:
     info = library_icon_cache_info(row.slug)
+    keys = _effective_category_keys(row)
+    primary = keys[0]
     return IconServiceOut(
         id=row.id,
         name=row.name,
         domain=row.domain,
         website=row.website,
-        category=row.category,
-        category_label=icon_library.category_label(row.category),
+        category=primary,
+        category_label=icon_library.category_label(primary),
+        category_keys=keys,
+        category_labels=[icon_library.category_label(k) for k in keys],
         slug=row.slug,
         is_active=row.is_active,
         sort=row.sort,
@@ -88,9 +130,9 @@ def list_services(
     stmt = select(IconLibraryService)
     if not include_inactive:
         stmt = stmt.where(IconLibraryService.is_active.is_(True))
-    if category:
-        stmt = stmt.where(IconLibraryService.category == category)
     rows = db.scalars(stmt.order_by(IconLibraryService.sort, IconLibraryService.id)).all()
+    if category:
+        rows = [r for r in rows if category in _effective_category_keys(r)]
     out = [_to_out(r) for r in rows]
     if q:
         needle = q.strip().lower()
@@ -116,11 +158,13 @@ def create_service(
         slug = re_safe(domain)
     if db.scalar(select(IconLibraryService).where(IconLibraryService.slug == slug)):
         raise HTTPException(400, "slug 已存在，请换一个域名或 slug")
+    keys = _normalize_category_keys(payload.category_keys, payload.category)
     row = IconLibraryService(
         name=payload.name.strip(),
         domain=domain,
         website=payload.website or None,
-        category=payload.category or "other",
+        category=keys[0],
+        category_keys=keys,
         slug=slug,
         is_active=payload.is_active,
         sort=payload.sort or 0,
@@ -173,6 +217,14 @@ def update_service(
             ):
                 raise HTTPException(400, "slug 已存在")
             data["slug"] = new_slug
+
+    if "category_keys" in data or "category" in data:
+        keys = _normalize_category_keys(
+            data.get("category_keys") if "category_keys" in data else None,
+            data.get("category") if "category" in data else None,
+        )
+        data["category_keys"] = keys
+        data["category"] = keys[0]
 
     for k, v in data.items():
         setattr(row, k, v)

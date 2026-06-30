@@ -4,6 +4,8 @@ SQLAlchemy 的 create_all 只会创建缺失的「表」，不会给已存在的
 项目升级时新增了字段，这里在启动时检查并按需 ALTER TABLE（SQLite 同样支持
 简单的 ADD COLUMN，只是没有 IF NOT EXISTS，所以要先用 PRAGMA 查询已有列）。
 """
+import json
+
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
@@ -29,6 +31,7 @@ _COLUMNS = [
     ("users", "bark_sound", "VARCHAR(64)"),
     ("users", "bark_group", "VARCHAR(64)"),
     ("users", "bark_ttl", "INTEGER"),
+    ("icon_library_services", "category_keys", "JSON"),
 ]
 
 
@@ -60,3 +63,19 @@ def run_migrations(engine: Engine) -> None:
                 print(f"[migrate] 已为 {table} 添加列 {column}")
             except Exception as e:  # noqa: BLE001
                 print(f"[migrate] 跳过 {table}.{column}：{e}")
+
+        try:
+            if _table_exists(conn, "icon_library_services") and _column_exists(conn, "icon_library_services", "category_keys"):
+                rows = conn.execute(
+                    text("SELECT id, category FROM icon_library_services WHERE category_keys IS NULL")
+                ).mappings().all()
+                for row in rows:
+                    key = (row["category"] or "other").strip() or "other"
+                    conn.execute(
+                        text("UPDATE icon_library_services SET category_keys = :keys WHERE id = :id"),
+                        {"keys": json.dumps([key], ensure_ascii=False), "id": row["id"]},
+                    )
+                if rows:
+                    print(f"[migrate] 已回填 {len(rows)} 条服务分类数组")
+        except Exception as e:  # noqa: BLE001
+            print(f"[migrate] 跳过 icon_library_services.category_keys 回填：{e}")
