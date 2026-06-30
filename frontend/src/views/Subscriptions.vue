@@ -51,11 +51,11 @@
               <div class="sc-name">{{ s.name }}</div>
               <div class="muted sc-plan" v-if="s.plan">{{ s.plan }}</div>
             </div>
-            <span class="sc-chip" :class="statusOf(s)">{{ statusChip(s) }}</span>
+            <StatusChip :status="statusOf(s)">{{ statusChip(s) }}</StatusChip>
           </div>
 
           <div class="sc-amount mono-data">
-            {{ s.amount.toFixed(2) }} <span class="muted cur">{{ s.currency }}</span>
+            <MoneyText :value="s.amount" :currency="s.currency" position="suffix" />
             <span v-if="s.billing_type === 'recurring'" class="muted cycle">/ {{ cycleText(s) }}</span>
           </div>
 
@@ -383,8 +383,12 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import api from '../api'
+import MoneyText from '../components/MoneyText.vue'
 import ServiceIcon from '../components/ServiceIcon.vue'
+import StatusChip from '../components/StatusChip.vue'
 import { useAuth } from '../stores/auth'
+import { daysLeft, parseLocalDate } from '../utils/date'
+import { isExpired, isSoon, renewalStatus } from '../utils/renewal'
 
 const { t } = useI18n()
 const auth = useAuth()
@@ -442,39 +446,13 @@ function cycleText(s) {
   const n = s.cycle_count > 1 ? s.cycle_count + ' ' : ''
   return n + t('sub.' + s.cycle)
 }
-function daysLeft(s) {
-  if (!s.next_renewal_date) return null
-  return Math.ceil((new Date(s.next_renewal_date) - new Date()) / 86400000)
-}
 function dueText(s) {
   const d = daysLeft(s)
   if (d === null) return ''
   if (d < 0) return t('sub.expiredTag')
   return d === 0 ? t('dashboard.today') : t('dashboard.daysLeft', { n: d })
 }
-function dueClass(s) {
-  const d = daysLeft(s)
-  if (d === null) return ''
-  if (d < 0) return 'overdue'
-  if (d <= 7) return 'soon'
-  return ''
-}
-function isExpired(s) {
-  if (s.billing_type !== 'recurring' || !s.next_renewal_date) return false
-  return daysLeft(s) < 0
-}
-function isSoon(s) {
-  if (s.billing_type !== 'recurring' || !s.next_renewal_date) return false
-  const d = daysLeft(s)
-  return d >= 0 && d <= 7
-}
-function statusOf(s) {
-  if (s.billing_type !== 'recurring' || !s.next_renewal_date) return 'oneTime'
-  const d = daysLeft(s)
-  if (d < 0) return 'overdue'
-  if (d <= 7) return 'soon'
-  return 'ok'
-}
+function statusOf(s) { return renewalStatus(s) }
 function statusChip(s) {
   const st = statusOf(s)
   if (st === 'overdue') return t('sub.statusOverdue')
@@ -494,7 +472,7 @@ function addMonths(d, months) {
 }
 function addCycle(dateStr, cycle, count) {
   const n = Math.max(1, count || 1)
-  const d = new Date(dateStr)
+  const d = parseLocalDate(dateStr) || new Date()
   if (cycle === 'day') { d.setDate(d.getDate() + n); return d }
   if (cycle === 'week') { d.setDate(d.getDate() + n * 7); return d }
   if (cycle === 'year') return addMonths(d, n * 12)
@@ -509,7 +487,7 @@ function blank() {
   return {
     id: null, name: '', plan: '', icon: '', amount: 0, currency: 'CNY',
     category_id: null, payment_method_id: null, bundle_id: null, billing_type: 'recurring',
-    cycle: 'month', cycle_count: 1, start_date: new Date().toISOString().slice(0, 10),
+    cycle: 'month', cycle_count: 1, start_date: toISO(new Date()),
     next_renewal_date: '', end_date: null, url: '', notes: '', remark: '', ipv4: '', ipv6: '',
     remind_days_before: '7,1', auto_renew: true, is_active: true,
     show_in_calendar: true, family_members: []
@@ -672,7 +650,7 @@ function openNew() {
 }
 function openEdit(s) {
   suppressAuto = true
-  form.value = { ...s, next_renewal_date: s.next_renewal_date || '', family_members: s.family_members || [] }
+  form.value = { ...s, next_renewal_date: s.next_renewal_date || '', family_members: [...(s.family_members || [])] }
   formErr.value = ''; suggestions.value = []
   bundleMode.value = s.bundle_id ? 'join' : 'none'
   newBundleName.value = ''
@@ -793,7 +771,7 @@ const previewToday = computed(() =>
 )
 const previewDue = computed(() => {
   if (!renewTarget.value) return ''
-  const base = renewTarget.value.next_renewal_date ? new Date(renewTarget.value.next_renewal_date) : new Date()
+  const base = renewTarget.value.next_renewal_date ? parseLocalDate(renewTarget.value.next_renewal_date) : new Date()
   return toISO(addCycle(base, renewTarget.value.cycle, renewTarget.value.cycle_count))
 })
 async function confirmRenew() {
@@ -874,13 +852,6 @@ h1 { margin-top: 0; }
 .status-strip.soon { background: var(--warning); opacity: .85; }
 .status-strip.overdue { background: var(--danger); }
 .status-strip.oneTime { background: var(--text-soft); opacity: .22; }
-/* 状态 chip */
-.sc-chip { font-size: 11px; font-weight: 700; letter-spacing: .04em; padding: 3px 8px; border-radius: 999px;
-  white-space: nowrap; flex-shrink: 0; }
-.sc-chip.ok { background: color-mix(in srgb, var(--success) 16%, transparent); color: var(--success); }
-.sc-chip.soon { background: color-mix(in srgb, var(--warning) 18%, transparent); color: var(--warning); }
-.sc-chip.overdue { background: color-mix(in srgb, var(--danger) 18%, transparent); color: var(--danger); }
-.sc-chip.oneTime { background: color-mix(in srgb, var(--text-soft) 16%, transparent); color: var(--text-soft); }
 /* 续费日主视觉行 */
 .sc-due { display: flex; align-items: center; gap: 8px; margin: 6px 0 10px; font-size: 14px; }
 .sc-due .due { font-weight: 700; }

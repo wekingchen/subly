@@ -5,7 +5,7 @@
       <!-- Command Center hero -->
       <div class="hero card" :class="heroStatus">
         <div>
-          <div class="hero-kicker"><span class="signal-dot" :class="heroStatus"></span>{{ t('dashboard.commandCenter') }}</div>
+          <div class="hero-kicker"><SignalDot :status="heroStatus" />{{ t('dashboard.commandCenter') }}</div>
           <div class="hi">{{ t('dashboard.greeting', { name: auth.user?.username || '' }) }}</div>
           <div class="sub muted">{{ radarHero }}</div>
         </div>
@@ -18,14 +18,7 @@
           <h3>{{ t('dashboard.radarTitle') }}</h3>
           <router-link to="/calendar" class="more">{{ t('dashboard.viewAll') }} →</router-link>
         </div>
-        <div class="radar-bars">
-          <router-link v-for="b in radarBars" :key="b.key" :to="b.to" class="radar-bar" :class="b.key">
-            <span class="rb-count mono-data">{{ b.count }}</span>
-            <span class="rb-label">{{ b.label }}</span>
-            <span class="rb-amt mono-data muted">{{ fmt(b.amount) }}</span>
-            <span class="rb-track"><span class="rb-fill" :style="{ width: b.fill + '%' }"></span></span>
-          </router-link>
-        </div>
+        <RadarBars :bars="radarBars" :currency="cur" />
       </div>
 
       <!-- KPI -->
@@ -126,9 +119,14 @@
 import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import api from '../api'
+import RadarBars from '../components/RadarBars.vue'
 import ServiceIcon from '../components/ServiceIcon.vue'
+import SignalDot from '../components/SignalDot.vue'
 import { useAuth } from '../stores/auth'
 import { icon } from '../icons'
+import { daysLeft } from '../utils/date'
+import { amountOf, formatMoney } from '../utils/money'
+import { radarBucket as renewalRadarBucket, renewalStatus } from '../utils/renewal'
 
 const { t } = useI18n()
 const auth = useAuth()
@@ -142,16 +140,10 @@ const cats = ref([])
 const PALETTE = ['#5b5bd6', '#06b6d4', '#16a34a', '#f59e0b', '#ef4444', '#a855f7', '#0ea5e9', '#ec4899']
 function color(i) { return PALETTE[i % PALETTE.length] }
 
-function fmt(v) {
-  const cur = auth.user?.base_currency || 'CNY'
-  return `${cur} ${Number(v || 0).toFixed(2)}`
-}
+const cur = computed(() => auth.user?.base_currency || 'CNY')
+function fmt(v) { return formatMoney(v, cur.value) }
 function isImg(v) { return typeof v === 'string' && (v.startsWith('/') || v.startsWith('http')) }
 function emojiOf(s) { return s.icon && !isImg(s.icon) ? s.icon : '🔖' }
-function daysLeft(s) {
-  if (!s.next_renewal_date) return null
-  return Math.ceil((new Date(s.next_renewal_date) - new Date()) / 86400000)
-}
 function dueText(s) {
   const d = daysLeft(s)
   if (d === null) return ''
@@ -163,15 +155,6 @@ function dueClass(s) {
   if (d === null) return ''
   return d < 0 ? 'danger' : d <= 3 ? 'warn' : ''
 }
-function radarBucket(s) {
-  if (s.billing_type !== 'recurring' || !s.next_renewal_date || s.show_in_calendar === false) return null
-  const d = daysLeft(s)
-  if (d === null || d > 30) return null
-  if (d < 0) return 'overdue'
-  if (d <= 3) return 'd3'
-  if (d <= 7) return 'd7'
-  return 'd30'
-}
 const radarRaw = computed(() => {
   const base = {
     overdue: { key: 'overdue', label: t('dashboard.radarOverdue'), count: 0, amount: 0, to: '/reports' },
@@ -180,10 +163,10 @@ const radarRaw = computed(() => {
     d30: { key: 'd30', label: t('dashboard.radar30'), count: 0, amount: 0, to: '/calendar' }
   }
   for (const s of allSubs.value) {
-    const key = radarBucket(s)
+    const key = renewalRadarBucket(s)
     if (!key) continue
     base[key].count += 1
-    base[key].amount += Number(s.amount_in_base || 0)
+    base[key].amount += amountOf(s)
   }
   return Object.values(base)
 })
@@ -202,13 +185,7 @@ const radarHero = computed(() => {
   const amount = radarRaw.value.reduce((n, b) => n + b.amount, 0)
   return t('dashboard.radarHero', { n: radarTotal.value, amount: fmt(amount) })
 })
-function statusOf(s) {
-  if (s.billing_type !== 'recurring' || !s.next_renewal_date) return 'oneTime'
-  const d = daysLeft(s)
-  if (d < 0) return 'overdue'
-  if (d <= 7) return 'soon'
-  return 'ok'
-}
+function statusOf(s) { return renewalStatus(s) }
 
 const catGroups = computed(() => {
   const byCat = {}

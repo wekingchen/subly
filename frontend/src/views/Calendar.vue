@@ -3,7 +3,7 @@
     <div class="cal-hero card radar-grid-bg" :class="heroStatus">
       <div class="cal-hero-main">
         <div class="hero-kicker">
-          <span class="signal-dot" :class="heroStatus"></span>{{ t('calendar.trajectory') }}
+          <SignalDot :status="heroStatus" />{{ t('calendar.trajectory') }}
         </div>
         <div class="title">
           <span class="month">{{ monthName }}</span>
@@ -17,14 +17,7 @@
           <button class="today-btn" @click="goToday">{{ t('calendar.today') }}</button>
           <button class="navbtn" :aria-label="t('calendar.nextMonth')" @click="move(1)">›</button>
         </div>
-        <div class="cal-radar-bars">
-          <div v-for="b in radarBars" :key="b.key" class="radar-bar" :class="[b.key, { active: b.count }]">
-            <span class="rb-count mono-data">{{ b.count }}</span>
-            <span class="rb-label">{{ b.label }}</span>
-            <span class="rb-amt mono-data muted">{{ fmt(b.amount) }}</span>
-            <span class="rb-track"><span class="rb-fill" :style="{ width: b.fill + '%' }"></span></span>
-          </div>
-        </div>
+        <RadarBars :bars="radarBars" :currency="cur" wrapper-class="cal-radar-bars" />
       </div>
     </div>
 
@@ -60,7 +53,7 @@
             <span class="ag-signal"></span>
             <ServiceIcon :src="ev.icon" :name="ev.name" :fallback="emojiOf(ev)" class="ag-ico" />
             <span class="ag-name">{{ ev.name }}</span>
-            <span v-if="ev.amount" class="ag-amt mono-data muted">{{ ev.amount }} {{ ev.currency }}</span>
+            <MoneyText v-if="ev.amount" class="ag-amt" :value="ev.amount" :currency="ev.currency" position="suffix" muted />
           </div>
         </div>
         <div v-if="!agendaDays.length" class="ag-empty muted">{{ t('calendar.noEvents') }}</div>
@@ -73,8 +66,14 @@
 import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import api from '../api'
+import MoneyText from '../components/MoneyText.vue'
+import RadarBars from '../components/RadarBars.vue'
 import ServiceIcon from '../components/ServiceIcon.vue'
+import SignalDot from '../components/SignalDot.vue'
 import { useAuth } from '../stores/auth'
+import { parseLocalDate } from '../utils/date'
+import { amountOf, formatMoney } from '../utils/money'
+import { groupRenewalStatus, radarBucket as renewalRadarBucket, renewalStatus } from '../utils/renewal'
 
 const { t } = useI18n()
 const auth = useAuth()
@@ -86,30 +85,9 @@ const subs = ref([])
 const PALETTE = ['#5b5bd6', '#06b6d4', '#16a34a', '#f59e0b', '#ef4444', '#a855f7', '#0ea5e9', '#ec4899']
 const STATUS_COLORS = { overdue: '#ef4444', soon: '#f59e0b' }
 const cur = computed(() => auth.user?.base_currency || 'CNY')
-function fmt(v) { return `${cur.value} ${Number(v || 0).toFixed(2)}` }
-function amountOf(s) { return Number(s.amount_in_base ?? s.amount ?? 0) }
-function parseLocalDate(v) {
-  const m = typeof v === 'string' && v.match(/^(\d{4})-(\d{2})-(\d{2})/)
-  if (m) return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]))
-  return new Date(v)
-}
-function daysLeft(s) {
-  if (!s.next_renewal_date) return null
-  return Math.ceil((parseLocalDate(s.next_renewal_date) - new Date()) / 86400000)
-}
-function statusOf(s) {
-  const d = daysLeft(s)
-  if (d === null) return 'ok'
-  if (d < 0) return 'overdue'
-  if (d <= 7) return 'soon'
-  return 'ok'
-}
-function groupStatus(events) {
-  if (!events.length) return ''
-  if (events.some((s) => statusOf(s) === 'overdue')) return 'overdue'
-  if (events.some((s) => statusOf(s) === 'soon')) return 'soon'
-  return 'ok'
-}
+function fmt(v) { return formatMoney(v, cur.value) }
+function statusOf(s) { return renewalStatus(s, { emptyStatus: 'ok' }) }
+function groupStatus(events) { return groupRenewalStatus(events, { emptyStatus: '' }) }
 function evColor(s) {
   const st = statusOf(s)
   if (STATUS_COLORS[st]) return STATUS_COLORS[st]
@@ -151,6 +129,7 @@ const cells = computed(() => {
     const events = subs.value.filter((s) => {
       if (!s.next_renewal_date || s.show_in_calendar === false) return false
       const dt = parseLocalDate(s.next_renewal_date)
+      if (!dt) return false
       return dt.getFullYear() === d.getFullYear() && dt.getMonth() === d.getMonth() && dt.getDate() === d.getDate()
     })
     arr.push({
@@ -166,15 +145,6 @@ const cells = computed(() => {
 })
 
 const visibleEvents = computed(() => cells.value.filter((c) => c.inMonth).flatMap((c) => c.events))
-function radarBucket(s) {
-  if (!s.next_renewal_date || s.show_in_calendar === false) return null
-  const d = daysLeft(s)
-  if (d === null || d > 30) return null
-  if (d < 0) return 'overdue'
-  if (d <= 3) return 'd3'
-  if (d <= 7) return 'd7'
-  return 'd30'
-}
 const radarRaw = computed(() => {
   const base = {
     overdue: { key: 'overdue', label: t('dashboard.radarOverdue'), count: 0, amount: 0 },
@@ -183,7 +153,7 @@ const radarRaw = computed(() => {
     d30: { key: 'd30', label: t('dashboard.radar30'), count: 0, amount: 0 }
   }
   for (const s of visibleEvents.value) {
-    const key = radarBucket(s)
+    const key = renewalRadarBucket(s)
     if (!key) continue
     base[key].count += 1
     base[key].amount += amountOf(s)

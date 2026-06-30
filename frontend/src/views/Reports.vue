@@ -3,7 +3,7 @@
     <div class="report-head card radar-grid-bg" :class="reportStatus">
       <div class="report-title">
         <div class="hero-kicker">
-          <span class="signal-dot" :class="reportStatus"></span>{{ t('reports.finRadar') }}
+          <SignalDot :status="reportStatus" />{{ t('reports.finRadar') }}
         </div>
         <h1>{{ t('reports.title') }}</h1>
         <p class="muted">{{ t('reports.reportSubtitle') }}</p>
@@ -11,7 +11,7 @@
       <div class="report-head-metrics">
         <div class="head-metric">
           <span>{{ t('reports.monthlyTotal') }}</span>
-          <strong class="mono-data">{{ cur }} {{ (insights.monthly_total || 0).toFixed(2) }}</strong>
+          <strong class="mono-data">{{ money(insights.monthly_total || 0) }}</strong>
         </div>
         <div class="head-metric">
           <span>{{ t('reports.recurringSubs') }}</span>
@@ -32,12 +32,12 @@
         <div class="card kpi k1">
           <span class="kpi-signal"></span>
           <div class="kpi-l">{{ t('reports.monthlyTotal') }}</div>
-          <div class="kpi-v mono-data">{{ cur }} {{ (insights.monthly_total || 0).toFixed(2) }}</div>
+          <div class="kpi-v mono-data">{{ money(insights.monthly_total || 0) }}</div>
         </div>
         <div class="card kpi k2">
           <span class="kpi-signal"></span>
           <div class="kpi-l">{{ t('reports.yearlyTotal') }}</div>
-          <div class="kpi-v mono-data">{{ cur }} {{ ((insights.monthly_total || 0) * 12).toFixed(2) }}</div>
+          <div class="kpi-v mono-data">{{ money((insights.monthly_total || 0) * 12) }}</div>
         </div>
         <div class="card kpi k3">
           <span class="kpi-signal"></span>
@@ -47,7 +47,7 @@
         <div class="card kpi k4">
           <span class="kpi-signal"></span>
           <div class="kpi-l">{{ t('reports.permanentTotal') }}</div>
-          <div class="kpi-v mono-data">{{ cur }} {{ (detail.one_time_total || 0).toFixed(2) }}</div>
+          <div class="kpi-v mono-data">{{ money(detail.one_time_total || 0) }}</div>
         </div>
       </div>
 
@@ -57,7 +57,7 @@
           <div v-if="segments.length" class="donut-wrap">
             <div class="donut" :style="donutStyle">
               <div class="donut-hole">
-                <div class="dh-v mono-data">{{ cur }} {{ (insights.monthly_total || 0).toFixed(0) }}</div>
+                <div class="dh-v mono-data">{{ money(insights.monthly_total || 0, cur, { decimals: 0 }) }}</div>
                 <div class="dh-l muted">{{ t('reports.monthly') }}</div>
               </div>
             </div>
@@ -80,7 +80,7 @@
               <div class="bar-track">
                 <div class="bar-fill" :style="{ width: barW(b) + '%', background: color(i) }"></div>
               </div>
-              <div class="bar-val mono-data">{{ cur }} {{ b.monthly.toFixed(2) }}</div>
+              <div class="bar-val mono-data">{{ money(b.monthly) }}</div>
             </div>
           </div>
           <p v-else class="muted">{{ t('reports.empty') }}</p>
@@ -93,19 +93,12 @@
       <div class="card report-radar radar-grid-bg" :class="reportStatus">
         <div class="radar-head">
           <div>
-            <div class="hero-kicker"><span class="signal-dot" :class="reportStatus"></span>{{ t('reports.riskRadar') }}</div>
+            <div class="hero-kicker"><SignalDot :status="reportStatus" />{{ t('reports.riskRadar') }}</div>
             <h3>{{ t('reports.riskRadar') }}</h3>
           </div>
           <span class="risk-total mono-data muted">{{ t('reports.riskTotal') }} · {{ riskTotal }}</span>
         </div>
-        <div class="radar-bars">
-          <div v-for="b in riskRadarBars" :key="b.key" class="radar-bar" :class="[b.key, { active: b.count }]">
-            <span class="rb-count mono-data">{{ b.count }}</span>
-            <span class="rb-label">{{ b.label }}</span>
-            <span class="rb-amt mono-data muted">{{ cur }} {{ b.amount.toFixed(2) }}</span>
-            <span class="rb-track"><span class="rb-fill" :style="{ width: b.fill + '%' }"></span></span>
-          </div>
-        </div>
+        <RadarBars :bars="riskRadarBars" :currency="cur" />
       </div>
 
       <div class="card sect">
@@ -118,7 +111,7 @@
                 <td class="rk mono-data">{{ i + 1 }}</td>
                 <td><span class="nm"><ServiceIcon :src="s.icon" :name="s.name" :fallback="emojiOf(s)" class="nm-ico" /><span class="nm-txt"><b>{{ s.name }}</b><i v-if="s.plan" class="nm-sub">{{ s.plan }}</i><i v-if="s.remark" class="nm-remark">📝 {{ s.remark }}</i></span></span></td>
                 <td class="muted">{{ catName(s.category_id) }}</td>
-                <td class="mono-data money-cell">{{ cur }} {{ (s.amount_in_base || 0).toFixed(2) }}</td>
+                <td class="mono-data money-cell">{{ money(s.amount_in_base || 0) }}</td>
               </tr>
               <tr v-if="!ranking.length"><td colspan="4" class="muted">{{ t('reports.empty') }}</td></tr>
             </tbody>
@@ -132,7 +125,7 @@
               <div class="ld-n">{{ s.name }}</div>
               <div class="muted ld-s">{{ catName(s.category_id) }}</div>
             </div>
-            <div class="ld-amt mono-data">{{ cur }} {{ (s.amount_in_base || 0).toFixed(2) }}<span class="muted">/ {{ t('reports.monthly') }}</span></div>
+            <div class="ld-amt mono-data">{{ money(s.amount_in_base || 0) }}<span class="muted">/ {{ t('reports.monthly') }}</span></div>
           </div>
           <p v-if="!ranking.length" class="muted">{{ t('reports.empty') }}</p>
         </div>
@@ -147,7 +140,7 @@
               <tr v-for="s in upcoming" :key="s.id" class="status-row" :class="statusOf(s)">
                 <td><span class="signal-cell"><span class="event-signal"></span><span class="nm"><ServiceIcon :src="s.icon" :name="s.name" :fallback="emojiOf(s)" class="nm-ico" /><span class="nm-txt"><b>{{ s.name }}</b><i class="nm-sub">{{ s.plan ? s.plan + ' · ' : '' }}{{ catName(s.category_id) }}</i><i v-if="s.remark" class="nm-remark">📝 {{ s.remark }}</i></span></span></span></td>
                 <td class="muted mono-data date-cell">{{ s.next_renewal_date }}</td>
-                <td class="mono-data money-cell">{{ s.amount.toFixed(2) }} {{ s.currency }}</td>
+                <td class="mono-data money-cell">{{ money(s.amount, s.currency, { position: 'suffix' }) }}</td>
               </tr>
               <tr v-if="!upcoming.length"><td colspan="3" class="muted">{{ t('reports.empty') }}</td></tr>
             </tbody>
@@ -161,7 +154,7 @@
                 <div class="ld-n">{{ s.name }}</div>
                 <div class="muted ld-s mono-data">{{ s.next_renewal_date }}</div>
               </div>
-              <div class="ld-amt mono-data">{{ s.amount.toFixed(2) }} {{ s.currency }}</div>
+              <div class="ld-amt mono-data">{{ money(s.amount, s.currency, { position: 'suffix' }) }}</div>
             </div>
             <p v-if="!upcoming.length" class="muted">{{ t('reports.empty') }}</p>
           </div>
@@ -174,7 +167,7 @@
               <tr v-for="s in expired" :key="s.id" class="status-row overdue">
                 <td><span class="signal-cell"><span class="event-signal"></span><span class="nm"><ServiceIcon :src="s.icon" :name="s.name" :fallback="emojiOf(s)" class="nm-ico" /><span class="nm-txt"><b>{{ s.name }}</b><i class="nm-sub">{{ s.plan ? s.plan + ' · ' : '' }}{{ catName(s.category_id) }}</i><i v-if="s.remark" class="nm-remark">📝 {{ s.remark }}</i></span></span></span></td>
                 <td class="danger mono-data date-cell">{{ s.next_renewal_date }}</td>
-                <td class="mono-data money-cell">{{ s.amount.toFixed(2) }} {{ s.currency }}</td>
+                <td class="mono-data money-cell">{{ money(s.amount, s.currency, { position: 'suffix' }) }}</td>
               </tr>
               <tr v-if="!expired.length"><td colspan="3" class="muted">{{ t('reports.empty') }}</td></tr>
             </tbody>
@@ -188,7 +181,7 @@
                 <div class="ld-n">{{ s.name }}</div>
                 <div class="muted ld-s mono-data">{{ s.next_renewal_date }}</div>
               </div>
-              <div class="ld-amt mono-data">{{ s.amount.toFixed(2) }} {{ s.currency }}</div>
+              <div class="ld-amt mono-data">{{ money(s.amount, s.currency, { position: 'suffix' }) }}</div>
             </div>
             <p v-if="!expired.length" class="muted">{{ t('reports.empty') }}</p>
           </div>
@@ -204,7 +197,7 @@
             <tr v-for="s in oneTime" :key="s.id" class="status-row oneTime">
               <td><span class="signal-cell"><span class="event-signal"></span><span class="nm"><ServiceIcon :src="s.icon" :name="s.name" :fallback="emojiOf(s)" class="nm-ico" /><span class="nm-txt"><b>{{ s.name }}</b><i v-if="s.plan" class="nm-sub">{{ s.plan }}</i><i v-if="s.remark" class="nm-remark">📝 {{ s.remark }}</i></span></span></span></td>
               <td class="muted">{{ catName(s.category_id) }}</td>
-              <td class="mono-data money-cell">{{ s.amount.toFixed(2) }} {{ s.currency }}</td>
+              <td class="mono-data money-cell">{{ money(s.amount, s.currency, { position: 'suffix' }) }}</td>
               <td class="muted mono-data date-cell">{{ s.start_date }}</td>
             </tr>
             <tr v-if="!oneTime.length"><td colspan="4" class="muted">{{ t('reports.empty') }}</td></tr>
@@ -219,7 +212,7 @@
               <div class="ld-n">{{ s.name }}</div>
               <div class="muted ld-s">{{ catName(s.category_id) }} · <span class="mono-data">{{ s.start_date }}</span></div>
             </div>
-            <div class="ld-amt mono-data">{{ s.amount.toFixed(2) }} {{ s.currency }}</div>
+            <div class="ld-amt mono-data">{{ money(s.amount, s.currency, { position: 'suffix' }) }}</div>
           </div>
           <p v-if="!oneTime.length" class="muted">{{ t('reports.empty') }}</p>
         </div>
@@ -231,14 +224,14 @@
       <div class="grid two">
         <div class="card sect signal-panel detail-recurring">
           <h3 class="panel-title"><span class="panel-signal"></span>{{ t('reports.recurringSubs') }}
-            <span class="muted total mono-data">{{ cur }} {{ (detail.recurring_monthly_total || 0).toFixed(2) }} / {{ t('reports.monthly') }}</span>
+            <span class="muted total mono-data">{{ money(detail.recurring_monthly_total || 0) }} / {{ t('reports.monthly') }}</span>
           </h3>
           <div class="tbl-wrap">
           <table>
             <thead><tr><th>{{ t('reports.category') }}</th><th>{{ t('reports.count') }}</th><th>{{ t('reports.monthly') }}</th></tr></thead>
             <tbody>
               <tr v-for="r in detail.recurring" :key="r.category">
-                <td>{{ r.category }}</td><td class="mono-data">{{ r.count }}</td><td class="mono-data money-cell">{{ cur }} {{ r.monthly.toFixed(2) }}</td>
+                <td>{{ r.category }}</td><td class="mono-data">{{ r.count }}</td><td class="mono-data money-cell">{{ money(r.monthly) }}</td>
               </tr>
               <tr v-if="!detail.recurring?.length"><td colspan="3" class="muted">{{ t('reports.empty') }}</td></tr>
             </tbody>
@@ -247,14 +240,14 @@
         </div>
         <div class="card sect signal-panel detail-lifetime">
           <h3 class="panel-title"><span class="panel-signal"></span>{{ t('reports.permanentBuy') }}
-            <span class="muted total mono-data">{{ cur }} {{ (detail.one_time_total || 0).toFixed(2) }}</span>
+            <span class="muted total mono-data">{{ money(detail.one_time_total || 0) }}</span>
           </h3>
           <div class="tbl-wrap">
           <table>
             <thead><tr><th>{{ t('reports.category') }}</th><th>{{ t('reports.count') }}</th><th>{{ t('reports.amount') }}</th></tr></thead>
             <tbody>
               <tr v-for="r in detail.one_time" :key="r.category">
-                <td>{{ r.category }}</td><td class="mono-data">{{ r.count }}</td><td class="mono-data money-cell">{{ cur }} {{ r.total.toFixed(2) }}</td>
+                <td>{{ r.category }}</td><td class="mono-data">{{ r.count }}</td><td class="mono-data money-cell">{{ money(r.total) }}</td>
               </tr>
               <tr v-if="!detail.one_time?.length"><td colspan="3" class="muted">{{ t('reports.empty') }}</td></tr>
             </tbody>
@@ -277,7 +270,7 @@
           <div class="muted pay-d"><span class="mono-data">{{ p.date }}</span> · {{ p.category || catName(null) }} · {{ p.billing_type === 'recurring' ? t('sub.recurring') : t('sub.oneTime') }}</div>
           <div v-if="p.remark" class="pay-d pay-remark">📝 {{ p.remark }}</div>
         </div>
-        <div class="pay-amt mono-data">{{ p.amount.toFixed(2) }} {{ p.currency }}</div>
+        <div class="pay-amt mono-data">{{ money(p.amount, p.currency, { position: 'suffix' }) }}</div>
       </div>
       <p v-if="!payments.length" class="muted">{{ t('reports.empty') }}</p>
     </div>
@@ -288,8 +281,13 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import api from '../api'
+import RadarBars from '../components/RadarBars.vue'
 import ServiceIcon from '../components/ServiceIcon.vue'
+import SignalDot from '../components/SignalDot.vue'
 import { useAuth } from '../stores/auth'
+import { daysLeft } from '../utils/date'
+import { amountOf, formatMoney } from '../utils/money'
+import { renewalStatus } from '../utils/renewal'
 
 const { t } = useI18n()
 const auth = useAuth()
@@ -316,23 +314,8 @@ function emojiOf(s) { return s.icon && !isImg(s.icon) ? s.icon : '🔖' }
 const PALETTE = ['#5b5bd6', '#06b6d4', '#16a34a', '#f59e0b', '#ef4444', '#a855f7', '#0ea5e9', '#ec4899', '#14b8a6', '#f97316', '#8b5cf6', '#22c55e']
 function color(i) { return PALETTE[i % PALETTE.length] }
 function isImg(v) { return typeof v === 'string' && (v.startsWith('/') || v.startsWith('http')) }
-function parseLocalDate(v) {
-  const m = typeof v === 'string' && v.match(/^(\d{4})-(\d{2})-(\d{2})/)
-  if (m) return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]))
-  return new Date(v)
-}
-function daysLeft(s) {
-  if (!s.next_renewal_date) return null
-  return Math.ceil((parseLocalDate(s.next_renewal_date) - new Date()) / 86400000)
-}
-function statusOf(s) {
-  const d = daysLeft(s)
-  if (d === null) return 'ok'
-  if (d < 0) return 'overdue'
-  if (d <= 7) return 'soon'
-  return 'ok'
-}
-function amountOf(s) { return Number(s.amount_in_base ?? s.amount ?? 0) }
+function money(value, currency = cur.value, options = {}) { return formatMoney(value, currency, options) }
+function statusOf(s) { return renewalStatus(s, { emptyStatus: 'ok' }) }
 
 const segments = computed(() => (insights.value.breakdown || []).filter((b) => b.percent > 0))
 const donutStyle = computed(() => {
@@ -381,12 +364,16 @@ const riskRadarBars = computed(() => {
 const riskTotal = computed(() => expired.value.length + upcoming.value.length)
 
 async function loadOverview() {
-  const [ins, det] = await Promise.all([
+  const [ins, det, u, e] = await Promise.all([
     api.get('/api/reports/insights'),
-    api.get('/api/reports/category-detail')
+    api.get('/api/reports/category-detail'),
+    api.get('/api/reports/upcoming'),
+    api.get('/api/reports/expired')
   ])
   insights.value = ins.data
   detail.value = det.data
+  upcoming.value = u.data
+  expired.value = e.data
 }
 async function loadInsights() {
   const [r, o, u, e] = await Promise.all([
