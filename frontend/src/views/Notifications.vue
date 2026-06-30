@@ -39,7 +39,6 @@ onMounted(load)
 </script>
 
 <style scoped>
-.head { display: flex; justify-content: space-between; align-items: center; }
 h1 { margin-top: 0; }
 .cards { grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); }
 .log-card { border-left: 4px solid var(--success); }

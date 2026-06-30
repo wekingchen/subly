@@ -77,6 +77,13 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 button:focus-visible, a:focus-visible, .btn:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible,
 [role="button"]:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
 label { display: block; font-size: 13px; color: var(--text-soft); margin: 10px 0 4px; }
+.head { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.seg { display: inline-flex; flex-wrap: wrap; background: var(--surface); border: 1px solid var(--border);
+  border-radius: 8px; padding: 4px; }
+.seg button { border: none; background: transparent; padding: 6px 14px; border-radius: 6px;
+  cursor: pointer; color: var(--text-soft); }
+.seg button.on { background: var(--primary); color: #fff; }
+
 .row { display: flex; gap: 12px; flex-wrap: wrap; }
 .row > * { min-width: 0; }
 .grid { display: grid; gap: 16px; }

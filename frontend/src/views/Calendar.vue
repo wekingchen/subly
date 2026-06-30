@@ -156,7 +156,7 @@ onMounted(async () => {
 </script>
 
 <style scoped>
-.head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }
+.head { margin-bottom: 14px; }
 .title { display: flex; align-items: baseline; gap: 8px; }
 .month { font-size: 24px; font-weight: 700; letter-spacing: -.02em; }
 .year { font-size: 20px; font-weight: 500; }

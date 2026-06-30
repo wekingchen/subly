@@ -197,13 +197,8 @@ onMounted(load)
 </script>
 
 <style scoped>
-.head { display: flex; justify-content: space-between; align-items: center; }
 h1 { margin-top: 0; }
-.seg { display: inline-flex; background: var(--surface); border: 1px solid var(--border);
-  border-radius: 8px; padding: 4px; margin-bottom: 14px; }
-.seg button { border: none; background: transparent; padding: 6px 14px; border-radius: 6px;
-  cursor: pointer; color: var(--text-soft); }
-.seg button.on { background: var(--primary); color: #fff; }
+.seg { margin-bottom: 14px; }
 .acts { display: flex; gap: 6px; flex-wrap: wrap; }
 .err { color: var(--danger); font-size: 13px; }
 .tag.adm { background: #ede9fe; color: #6d28d9; }

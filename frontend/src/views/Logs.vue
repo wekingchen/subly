@@ -65,7 +65,6 @@ onUnmounted(() => clearInterval(timer))
 </script>
 
 <style scoped>
-.head { display: flex; justify-content: space-between; align-items: center; }
 h1 { margin-top: 0; }
 .switch { display: flex; align-items: center; gap: 8px; min-height: 44px; font-size: 13px; color: var(--text-soft); cursor: pointer; }
 .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--text-soft); }

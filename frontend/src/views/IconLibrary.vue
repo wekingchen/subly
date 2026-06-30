@@ -284,7 +284,7 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
-.head { display:flex; justify-content:space-between; align-items:flex-start; gap:12px; margin-bottom:16px; }
+.head { align-items:flex-start; margin-bottom:16px; }
 h1 { margin:0; }
 .actions-top { justify-content:flex-end; flex-wrap:wrap; }
 .stats { grid-template-columns: repeat(5, 1fr); margin-bottom:14px; }
@@ -302,9 +302,8 @@ h1 { margin:0; }
 .job-row { display:flex; gap:8px; align-items:center; font-size:12px; }
 .job-name { min-width:150px; font-weight:600; }
 .bar { display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-bottom:12px; }
-.seg { display:inline-flex; padding:3px; border-radius:10px; background:var(--surface-2); border:1px solid var(--border); }
-.seg button { border:none; background:transparent; color:var(--text-soft); padding:6px 10px; border-radius:8px; cursor:pointer; }
-.seg button.on { background:var(--primary); color:#fff; }
+.seg { background:var(--surface-2); border-radius:10px; padding:3px; }
+.seg button { padding:6px 10px; border-radius:8px; }
 .search { max-width:280px; }
 .table-card { overflow:auto; }
 .svc-ico { width:30px; height:30px; border-radius:8px; border:1px solid var(--border); object-fit:contain; background:var(--surface-2); }

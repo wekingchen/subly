@@ -150,7 +150,7 @@ h2 { margin: 8px 0 4px; }
 .tag { font-size: 13px; margin: 0 0 14px; }
 .step-t { margin: 8px 0 6px; }
 .hint { font-size: 13px; line-height: 1.6; }
-.seg { display: flex; background: var(--bg); border-radius: 8px; padding: 4px; margin-bottom: 8px; }
+.seg { display: flex; background: var(--bg); border: none; border-radius: 8px; padding: 4px; margin-bottom: 8px; }
 .seg button { flex: 1; border: none; background: transparent; min-height: 44px; padding: 8px; border-radius: 6px;
   cursor: pointer; color: var(--text-soft); }
 .seg button.on { background: var(--surface); color: var(--text); box-shadow: var(--shadow); }

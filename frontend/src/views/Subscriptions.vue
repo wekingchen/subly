@@ -837,14 +837,8 @@ onMounted(async () => {
 </script>
 
 <style scoped>
-.head { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
 h1 { margin-top: 0; }
 .bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
-.seg { display: inline-flex; background: var(--surface); border: 1px solid var(--border);
-  border-radius: 8px; padding: 4px; }
-.seg button { border: none; background: transparent; padding: 6px 14px; border-radius: 6px;
-  cursor: pointer; color: var(--text-soft); }
-.seg button.on { background: var(--primary); color: #fff; }
 .drag-hint { font-size: 12px; }
 .err { color: var(--danger); font-size: 13px; }
 .ico { width: 18px; height: 18px; vertical-align: middle; border-radius: 4px; }

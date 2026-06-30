@@ -337,11 +337,8 @@ onMounted(async () => {
 
 <style scoped>
 h1 { margin-top: 0; }
-.seg { display: inline-flex; flex-wrap: wrap; background: var(--surface); border: 1px solid var(--border);
-  border-radius: 8px; padding: 4px; margin-bottom: 14px; }
-.seg button { border: none; background: transparent; padding: 6px 14px; border-radius: 6px;
-  cursor: pointer; color: var(--text-soft); white-space: nowrap; }
-.seg button.on { background: var(--primary); color: #fff; }
+.seg { margin-bottom: 14px; }
+.seg button { white-space: nowrap; }
 .two { grid-template-columns: 1fr 1fr; }
 .sect { margin-bottom: 16px; }
 .sect h3 { margin-top: 0; display: flex; justify-content: space-between; align-items: baseline; gap: 8px; flex-wrap: wrap; }
