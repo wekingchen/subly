@@ -3,7 +3,7 @@
     <!-- 移动端顶部栏 -->
     <header class="topbar">
       <button ref="hambRef" class="hamb" @click="openDrawer" :aria-expanded="drawer ? 'true' : 'false'" aria-controls="mobile-sidebar" :aria-label="t('nav.menu')">☰</button>
-      <div class="brand sm">🔔 {{ t('app.title') }}</div>
+      <div class="brand sm"><span class="brand-mark">⌁</span><span>Subly</span></div>
       <div style="width:44px"></div>
     </header>
 
@@ -11,7 +11,10 @@
     <div v-if="drawer" class="drawer-mask" @click="drawer = false"></div>
 
     <aside id="mobile-sidebar" class="sidebar" :class="{ open: drawer }" :role="drawer ? 'dialog' : undefined" :aria-modal="drawer ? 'true' : undefined" :aria-label="t('nav.menu')">
-      <div class="brand">🔔 {{ t('app.title') }}</div>
+      <div class="brand-block">
+        <div class="brand"><span class="brand-mark">⌁</span><span>Subly</span></div>
+        <div class="brand-tag"><span class="signal-dot"></span>{{ t('nav.brandTag') }}</div>
+      </div>
       <nav @click="closeDrawer">
         <router-link v-for="it in navItems" :key="it.to" :to="it.to" class="nav-card">
           <span class="nav-ico" v-html="icon(it.key)"></span>
@@ -95,33 +98,40 @@ function logout() {
 
 <style scoped>
 .shell { display: flex; min-height: 100vh; }
-.sidebar { width: 230px; background: var(--surface); border-right: 1px solid var(--border);
-  display: flex; flex-direction: column; padding: 18px 14px; position: sticky; top: 0; height: 100vh; z-index: 50; }
-.brand { font-weight: 700; font-size: 16px; margin-bottom: 22px;
-  background: linear-gradient(135deg, var(--primary), var(--primary-2));
-  -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; }
-nav { display: flex; flex-direction: column; gap: 7px; }
-.nav-card { display: flex; align-items: center; gap: 10px; padding: 9px 11px; border-radius: 12px;
-  color: var(--text); font-size: 14px; border: 1px solid transparent; background: var(--surface-2);
-  transition: transform .15s ease, background .15s ease, box-shadow .2s ease, border-color .15s ease; }
+.sidebar { width: 240px; background: color-mix(in srgb, var(--surface) 92%, var(--radar-panel)); border-right: 1px solid var(--border);
+  display: flex; flex-direction: column; padding: 18px 14px; position: sticky; top: 0; height: 100vh; z-index: 50;
+  box-shadow: inset -1px 0 0 color-mix(in srgb, var(--primary) 12%, transparent); }
+.brand-block { margin-bottom: 22px; padding: 10px 8px 14px; border-bottom: 1px solid var(--border); }
+.brand { display: flex; align-items: center; gap: 8px; font-weight: 800; font-size: 18px; letter-spacing: -.04em;
+  color: var(--text); }
+.brand-mark { width: 28px; height: 28px; border-radius: 9px; display: inline-flex; align-items: center; justify-content: center;
+  background: linear-gradient(135deg, var(--signal-cyan), var(--primary)); color: #06101f; font-weight: 900;
+  box-shadow: 0 0 22px color-mix(in srgb, var(--signal-cyan) 42%, transparent); }
+.brand-tag { margin-top: 7px; display: flex; align-items: center; gap: 7px; color: var(--text-soft); font-size: 11px;
+  text-transform: uppercase; letter-spacing: .12em; }
+nav { display: flex; flex-direction: column; gap: 6px; }
+.nav-card { position: relative; display: flex; align-items: center; gap: 10px; padding: 9px 11px 9px 12px; border-radius: 11px;
+  color: var(--text); font-size: 14px; border: 1px solid transparent; background: transparent;
+  transition: transform .15s ease, background .15s ease, box-shadow .2s ease, border-color .15s ease, color .15s ease; }
+.nav-card::before { content: ''; width: 3px; height: 0; border-radius: 999px; position: absolute; left: 0; top: 50%; transform: translateY(-50%);
+  background: var(--signal-cyan); box-shadow: 0 0 14px color-mix(in srgb, var(--signal-cyan) 60%, transparent); transition: height .18s ease; }
 .nav-ico { width: 30px; height: 30px; border-radius: 9px; display: flex; align-items: center;
-  justify-content: center; background: var(--surface); border: 1px solid var(--border);
-  flex-shrink: 0; transition: transform .2s ease; color: var(--text-soft); }
+  justify-content: center; background: var(--surface-2); border: 1px solid var(--border);
+  flex-shrink: 0; transition: transform .2s ease, color .15s ease, border-color .15s ease; color: var(--text-soft); }
 .nav-ico :deep(svg) { width: 17px; height: 17px; }
-.nav-card:hover .nav-ico { color: var(--primary); }
-.nav-card.router-link-active .nav-ico { color: #fff; }
-.nav-label { flex: 1; font-weight: 500; }
+.nav-label { flex: 1; font-weight: 600; }
 .nav-arrow { color: var(--text-soft); opacity: 0; transform: translateX(-4px); transition: all .2s ease; }
-.nav-card:hover { transform: translateX(3px); background: var(--primary-soft); border-color: color-mix(in srgb, var(--primary) 30%, var(--border)); }
-.nav-card:hover .nav-ico { transform: scale(1.1) rotate(-4deg); }
+.nav-card:hover { transform: translateX(3px); background: color-mix(in srgb, var(--primary) 9%, transparent); border-color: color-mix(in srgb, var(--primary) 24%, transparent); }
+.nav-card:hover .nav-ico { transform: scale(1.06); color: var(--primary); border-color: color-mix(in srgb, var(--primary) 32%, var(--border)); }
 .nav-card:hover .nav-arrow { opacity: 1; transform: translateX(0); }
-.nav-card.router-link-active { background: linear-gradient(135deg, var(--primary), var(--primary-2));
-  color: #fff; box-shadow: 0 6px 16px rgba(91,91,214,.32); border-color: transparent; }
-.nav-card.router-link-active .nav-ico { background: rgba(255,255,255,.22); border-color: transparent; }
-.nav-card.router-link-active .nav-arrow { opacity: 1; transform: translateX(0); color: #fff; }
+.nav-card.router-link-active { background: color-mix(in srgb, var(--signal-cyan) 10%, var(--surface));
+  color: var(--primary); border-color: color-mix(in srgb, var(--signal-cyan) 34%, var(--border)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--signal-cyan) 10%, transparent); }
+.nav-card.router-link-active::before { height: 26px; }
+.nav-card.router-link-active .nav-ico { color: var(--signal-cyan); border-color: color-mix(in srgb, var(--signal-cyan) 48%, transparent); background: color-mix(in srgb, var(--signal-cyan) 10%, var(--surface-2)); }
+.nav-card.router-link-active .nav-arrow { opacity: 1; transform: translateX(0); color: var(--primary); }
 .spacer { flex: 1; }
 .user { font-size: 13px; color: var(--text-soft); border-top: 1px solid var(--border); padding-top: 12px; }
-.user .uname { font-weight: 600; color: var(--text); }
+.user .uname { font-weight: 700; color: var(--text); }
 .user a { display: block; margin-top: 6px; }
 .credit { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border);
   display: flex; flex-direction: column; gap: 5px; }

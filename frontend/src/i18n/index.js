@@ -2,7 +2,7 @@ import { createI18n } from 'vue-i18n'
 
 const zh = {
   app: { title: '省心订阅 Subly', tagline: '订阅 / 续费 / 保号，一个都不漏' },
-  nav: { dashboard: '仪表盘', subscriptions: '订阅管理', calendar: '日历', reports: '报表分析', notifications: '通知中心', logs: '实时日志', settings: '设置', iconLibrary: '图标库管理', users: '用户管理', logout: '退出', menu: '导航菜单' },
+  nav: { dashboard: '仪表盘', subscriptions: '订阅管理', calendar: '日历', reports: '报表分析', notifications: '通知中心', logs: '实时日志', settings: '设置', iconLibrary: '图标库管理', users: '用户管理', logout: '退出', menu: '导航菜单', brandTag: '续费雷达' },
   notify: { title: '通知中心', runScan: '立即扫描提醒', empty: '暂无通知记录', sent: '已发送', failed: '失败', daysBefore: '提前天数' },
   rtlog: { title: '实时日志', live: '实时', paused: '已暂停', action: '操作', user: '用户', detail: '详情', time: '时间', empty: '暂无日志', auto: '自动刷新' },
   account: { title: '账号与密码', username: '用户名', email: '邮箱', saveAccount: '保存账号', changePwd: '修改密码', oldPwd: '原密码', newPwd: '新密码', pwdOk: '密码已修改', accountOk: '账号已更新' },
@@ -22,6 +22,9 @@ const zh = {
     loginBtn: '登录', registerBtn: '注册', noAccount: '没有账户？去注册', hasAccount: '已有账户？去登录',
     loginFail: '用户名或密码错误', welcome: '欢迎回来',
     verifyTitle: '邮箱验证', verifyTip: '验证码已发送至 {email}，请查收并填写（10 分钟内有效）',
+    radarKicker: 'Renewal signal live', radarTitle: '续费雷达控制台',
+    radarSubtitle: '把订阅、域名、VPS 和提醒通道放进自己的自托管雷达站。',
+    radarScan: '30 天续费扫描', radarAlerts: 'Telegram + Bark 双通道', radarLedger: 'SQLite 本地账本',
     code: '验证码', codePh: '6 位数字', verifyBtn: '验证邮箱', backToLogin: '返回登录',
     pendingTitle: '等待审核', pendingMsg: '注册成功，正在等待管理员审核通过后即可登录。',
     registerOk: '注册成功，请登录'
@@ -123,7 +126,7 @@ const zh = {
 
 const en = {
   app: { title: 'Subly', tagline: 'Never miss a renewal again' },
-  nav: { dashboard: 'Dashboard', subscriptions: 'Subscriptions', calendar: 'Calendar', reports: 'Reports', notifications: 'Notifications', logs: 'Live Logs', settings: 'Settings', iconLibrary: 'Icon Library', users: 'Users', logout: 'Logout', menu: 'Menu' },
+  nav: { dashboard: 'Dashboard', subscriptions: 'Subscriptions', calendar: 'Calendar', reports: 'Reports', notifications: 'Notifications', logs: 'Live Logs', settings: 'Settings', iconLibrary: 'Icon Library', users: 'Users', logout: 'Logout', menu: 'Menu', brandTag: 'Renewal radar' },
   notify: { title: 'Notification Center', runScan: 'Run scan now', empty: 'No notifications yet', sent: 'Sent', failed: 'Failed', daysBefore: 'Days before' },
   rtlog: { title: 'Live Logs', live: 'Live', paused: 'Paused', action: 'Action', user: 'User', detail: 'Detail', time: 'Time', empty: 'No logs', auto: 'Auto refresh' },
   account: { title: 'Account & Password', username: 'Username', email: 'Email', saveAccount: 'Save account', changePwd: 'Change password', oldPwd: 'Old password', newPwd: 'New password', pwdOk: 'Password changed', accountOk: 'Account updated' },
@@ -143,6 +146,9 @@ const en = {
     loginBtn: 'Sign in', registerBtn: 'Sign up', noAccount: 'No account? Register', hasAccount: 'Have an account? Login',
     loginFail: 'Wrong username or password', welcome: 'Welcome back',
     verifyTitle: 'Verify email', verifyTip: 'A code was sent to {email}. Enter it below (valid 10 min).',
+    radarKicker: 'Renewal signal live', radarTitle: 'Renewal Command Center',
+    radarSubtitle: 'Run your subscriptions, domains and VPS alerts from your own self-hosted radar station.',
+    radarScan: '30-day renewal scan', radarAlerts: 'Telegram + Bark dual alerts', radarLedger: 'SQLite local ledger',
     code: 'Code', codePh: '6 digits', verifyBtn: 'Verify', backToLogin: 'Back to login',
     pendingTitle: 'Awaiting approval', pendingMsg: 'Registered. Waiting for an admin to approve your account.',
     registerOk: 'Registered, please sign in'
@@ -244,7 +250,7 @@ const en = {
 
 const ru = {
   app: { title: 'Subly', tagline: 'Не пропустите ни одного продления' },
-  nav: { dashboard: 'Панель', subscriptions: 'Подписки', calendar: 'Календарь', reports: 'Отчёты', notifications: 'Уведомления', logs: 'Логи', settings: 'Настройки', iconLibrary: 'Библиотека иконок', users: 'Пользователи', logout: 'Выход', menu: 'Меню' },
+  nav: { dashboard: 'Панель', subscriptions: 'Подписки', calendar: 'Календарь', reports: 'Отчёты', notifications: 'Уведомления', logs: 'Логи', settings: 'Настройки', iconLibrary: 'Библиотека иконок', users: 'Пользователи', logout: 'Выход', menu: 'Меню', brandTag: 'Радар продлений' },
   notify: { title: 'Центр уведомлений', runScan: 'Запустить проверку', empty: 'Нет уведомлений', sent: 'Отправлено', failed: 'Ошибка', daysBefore: 'За дней' },
   rtlog: { title: 'Логи в реальном времени', live: 'Онлайн', paused: 'Пауза', action: 'Действие', user: 'Польз.', detail: 'Детали', time: 'Время', empty: 'Нет логов', auto: 'Автообновление' },
   account: { title: 'Аккаунт и пароль', username: 'Логин', email: 'Эл. почта', saveAccount: 'Сохранить', changePwd: 'Сменить пароль', oldPwd: 'Старый пароль', newPwd: 'Новый пароль', pwdOk: 'Пароль изменён', accountOk: 'Аккаунт обновлён' },
@@ -264,6 +270,9 @@ const ru = {
     loginBtn: 'Войти', registerBtn: 'Создать', noAccount: 'Нет аккаунта? Регистрация', hasAccount: 'Есть аккаунт? Войти',
     loginFail: 'Неверный логин или пароль', welcome: 'С возвращением',
     verifyTitle: 'Подтверждение почты', verifyTip: 'Код отправлен на {email}. Введите его ниже (действует 10 мин).',
+    radarKicker: 'Сигнал продлений активен', radarTitle: 'Центр контроля продлений',
+    radarSubtitle: 'Подписки, домены, VPS и каналы уведомлений — в вашей собственной self-hosted радарной станции.',
+    radarScan: 'Скан на 30 дней', radarAlerts: 'Telegram + Bark', radarLedger: 'Локальная SQLite-книга',
     code: 'Код', codePh: '6 цифр', verifyBtn: 'Подтвердить', backToLogin: 'Назад ко входу',
     pendingTitle: 'Ожидание одобрения', pendingMsg: 'Регистрация завершена. Ожидайте одобрения администратора.',
     registerOk: 'Регистрация завершена, войдите'
