@@ -71,12 +71,6 @@
           {{ t('auth.backToLogin') }}
         </button>
       </template>
-
-      <div class="lang">
-        <a href="#" @click.prevent="setLang('zh')">中文</a>
-        <a href="#" @click.prevent="setLang('en')">EN</a>
-        <a href="#" @click.prevent="setLang('ru')">RU</a>
-      </div>
     </div>
   </div>
 </template>
@@ -87,7 +81,7 @@ import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { useAuth } from '../stores/auth'
 
-const { t, locale } = useI18n()
+const { t } = useI18n()
 const router = useRouter()
 const auth = useAuth()
 
@@ -100,11 +94,6 @@ const code = ref('')
 const error = ref('')
 const info = ref('')
 const busy = ref(false)
-
-function setLang(l) {
-  locale.value = l
-  localStorage.setItem('locale', l)
-}
 
 function backToLogin() {
   step.value = 'form'; mode.value = 'login'
@@ -203,8 +192,6 @@ label { text-align: left; }
 .err { color: var(--danger); font-size: 13px; margin-top: 10px; }
 .ok { color: var(--success); font-size: 13px; margin-top: 10px; }
 .back { display: block; margin-top: 14px; font-size: 13px; }
-.lang { display: flex; justify-content: center; gap: 6px; align-items: center; margin-top: 16px; font-size: 13px; color: var(--text-soft); }
-.lang a { display: inline-flex; align-items: center; min-height: 44px; padding: 0 8px; }
 
 @media (max-width: 880px) {
   .auth-wrap { flex-direction: column; padding: 16px; }

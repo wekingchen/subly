@@ -6,8 +6,6 @@
 
 [![License](https://img.shields.io/badge/license-MIT-blue)](./LICENSE)
 
-**中文 | [English](#english) | [Русский](#русский)**
-
 ```bash
 docker run -d -p 8842:8000 -v subly_data:/app/data yourname/subly:latest
 ```
@@ -33,7 +31,7 @@ docker run -d -p 8842:8000 -v subly_data:/app/data yourname/subly:latest
 | 💱 **多货币** | 全球主流货币 + 自定义货币，实时汇率自动更新 |
 | 🗂️ **分类管理** | 流媒体 / AI / 游戏 / VPS / 运营商等预置分类，支持自定义与拖拽排序 |
 | 💾 **备份恢复** | 单用户 JSON 备份；管理员可一键**整站备份 / 恢复**全部成员数据 |
-| 🌍 **多语言 / 多主题** | 中文 / English / Русский，5 套主题 |
+| 🌈 **中文界面 / 多主题** | 中文界面，5 套主题 |
 | 🖼️ **自定义图标** | Emoji、上传图片、URL，内置图标库支持 favicon 下载、缓存与可见 fallback |
 | 🗄️ **内置 SQLite** | 零配置，开箱即用，无需准备外部数据库 |
 
@@ -108,7 +106,7 @@ Bark 推送无需环境变量，在网页「设置」里填 Device Key 即可；
 | 组件 | 技术 |
 |------|------|
 | 后端 | FastAPI · SQLAlchemy · APScheduler |
-| 前端 | Vue 3 · Vite · vue-i18n · Pinia |
+| 前端 | Vue 3 · Vite · Pinia |
 | 数据库 | SQLite（内置，零配置，文件持久化在 `/app/data`） |
 | 部署 | Docker（多架构 amd64 / arm64）· Caddy 自动 HTTPS |
 
@@ -177,45 +175,3 @@ docker compose -f docker-compose.hub.yml pull && docker compose -f docker-compos
 
 本项目基于 [suyijun8182/easysub](https://github.com/suyijun8182/easysub) 二次开发，感谢原作者。
 原项目联系方式：Telegram [@Aiden_SU](https://t.me/Aiden_SU) · 📧 aidensu8182@gmail.com
-
----
-
-<a name="english"></a>
-
-## English
-
-**Self-hosted subscription / renewal manager with built-in SQLite (zero-config) and Telegram + Bark reminders, so you never let a subscription — or a SIM keep-alive plan — expire.**
-
-**Highlights:** multi-user (JWT, admin/user roles) · recurring & one-time subscriptions · Telegram **and** Bark (iOS) reminders with optional Bark TTL, run side by side · dashboard & spending reports · Apple-style calendar · multi-currency with live FX · category management · icon library with favicon cache and visible fallback · per-user **and admin full-site** backup/restore · multi-language (中/EN/RU) · 5 themes · **built-in SQLite, no external database needed**.
-
-```bash
-docker run -d --name subly -p 8842:8000 \
-  -e JWT_SECRET="$(openssl rand -hex 32)" \
-  -e ADMIN_USERNAME=admin -e ADMIN_PASSWORD=admin123 \
-  -v subly_data:/app/data --restart unless-stopped \
-  yourname/subly:latest
-```
-
-Open `http://<host>:8842` and log in with the admin account set via env vars — no setup wizard. Build from source: `git clone <your-repo> && cd subly && cp .env.example .env && docker compose up -d --build`.
-Based on [suyijun8182/easysub](https://github.com/suyijun8182/easysub) (MIT). NAS guides: [各厂家NAS安装教程.md](./各厂家NAS安装教程.md).
-
----
-
-<a name="русский"></a>
-
-## Русский
-
-**Самостоятельно размещаемый менеджер подписок со встроенным SQLite (без настройки) и напоминаниями в Telegram + Bark — чтобы ни одна подписка (и SIM для поддержания номера) не истекла.**
-
-**Возможности:** мультипользовательский режим (JWT, роли админ/пользователь) · регулярные и разовые подписки · напоминания в Telegram **и** Bark (iOS) одновременно, с опциональным Bark TTL · дашборд и отчёты о расходах · календарь в стиле Apple · мультивалютность с live-курсами · управление категориями · библиотека иконок с favicon-кэшем и видимым fallback · резервное копирование/восстановление для пользователя **и всего сайта (админ)** · мультиязычность (中/EN/RU) · 5 тем · **встроенный SQLite, внешняя БД не требуется**.
-
-```bash
-docker run -d --name subly -p 8842:8000 \
-  -e JWT_SECRET="$(openssl rand -hex 32)" \
-  -e ADMIN_USERNAME=admin -e ADMIN_PASSWORD=admin123 \
-  -v subly_data:/app/data --restart unless-stopped \
-  yourname/subly:latest
-```
-
-Откройте `http://<host>:8842` и войдите под админом, заданным через переменные окружения — без мастера настройки.
-На основе [suyijun8182/easysub](https://github.com/suyijun8182/easysub) (MIT). Инструкции для NAS: [各厂家NAS安装教程.md](./各厂家NAS安装教程.md).

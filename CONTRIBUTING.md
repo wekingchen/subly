@@ -233,14 +233,9 @@ npm test
 
 ---
 
-## 本地化贡献
+## 界面文案贡献
 
-帮助我们支持更多语言：
-
-1. 在 `frontend/src/i18n/locales/` 中创建新的 JSON 文件
-2. 翻译所有字符串
-3. 在 `frontend/src/i18n/index.js` 中注册语言
-4. 提交 PR
+当前项目界面只维护中文文案。若你修改用户可见功能，请同步更新 `frontend/src/i18n/index.js` 中的 `zh` 文案，保持按钮、提示、错误信息的用词一致。
 
 ---
 

@@ -33,7 +33,6 @@ class UserOut(BaseModel):
     email: str
     is_admin: bool
     is_active: bool
-    locale: str
     theme: str
     base_currency: str
     category_order: list[int] | None = None
@@ -52,7 +51,6 @@ class UserOut(BaseModel):
 
 
 class UserUpdate(BaseModel):
-    locale: str | None = None
     theme: str | None = None
     base_currency: str | None = None
     category_order: list[int] | None = None

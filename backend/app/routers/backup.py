@@ -257,7 +257,6 @@ def export_data(user: User = Depends(get_current_user), db: Session = Depends(ge
         "user": {
             "username": user.username,
             "base_currency": user.base_currency,
-            "locale": user.locale,
             "theme": user.theme,
         },
         **_collect_entities(db, user),
@@ -299,7 +298,6 @@ def _user_meta(u: User) -> dict:
         "is_active": u.is_active,
         "is_approved": u.is_approved,
         "email_verified": u.email_verified,
-        "locale": u.locale,
         "theme": u.theme,
         "base_currency": u.base_currency,
         "category_order": u.category_order,
@@ -369,7 +367,6 @@ def import_all(
                 is_active=bool(meta.get("is_active", True)),
                 is_approved=bool(meta.get("is_approved", True)),
                 email_verified=bool(meta.get("email_verified", True)),
-                locale=meta.get("locale", "zh"),
                 theme=meta.get("theme", "light"),
                 base_currency=meta.get("base_currency", "CNY"),
                 category_order=meta.get("category_order"),

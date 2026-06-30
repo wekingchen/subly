@@ -26,7 +26,6 @@ export const useAuth = defineStore('auth', {
     async fetchMe() {
       const { data } = await api.get('/api/auth/me')
       this.user = data
-      localStorage.setItem('locale', data.locale || 'zh')
       document.documentElement.setAttribute('data-theme', data.theme || 'light')
       return data
     },

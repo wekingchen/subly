@@ -58,7 +58,7 @@ import { useI18n } from 'vue-i18n'
 import api from '../api'
 import ServiceIcon from '../components/ServiceIcon.vue'
 
-const { t, locale } = useI18n()
+const { t } = useI18n()
 const now = new Date()
 const year = ref(now.getFullYear())
 const month = ref(now.getMonth())
@@ -88,13 +88,12 @@ function isImg(v) { return typeof v === 'string' && (v.startsWith('/') || v.star
 function emojiOf(s) { return s.icon && !isImg(s.icon) ? s.icon : '🔖' }
 
 const dows = computed(() => {
-  const fmt = new Intl.DateTimeFormat(locale.value === 'zh' ? 'zh-CN' : locale.value, { weekday: 'short' })
+  const fmt = new Intl.DateTimeFormat('zh-CN', { weekday: 'short' })
   // 2024-01-07 是周日
   return [...Array(7)].map((_, i) => fmt.format(new Date(2024, 0, 7 + i)))
 })
 const monthName = computed(() => {
-  const loc = locale.value === 'zh' ? 'zh-CN' : locale.value
-  return new Intl.DateTimeFormat(loc, { month: 'long' }).format(new Date(year.value, month.value, 1))
+  return new Intl.DateTimeFormat('zh-CN', { month: 'long' }).format(new Date(year.value, month.value, 1))
 })
 
 function move(d) {
@@ -134,8 +133,7 @@ const cells = computed(() => {
 })
 
 const agendaDays = computed(() => {
-  const loc = locale.value === 'zh' ? 'zh-CN' : locale.value
-  const fmt = new Intl.DateTimeFormat(loc, { month: 'short', day: 'numeric', weekday: 'short' })
+  const fmt = new Intl.DateTimeFormat('zh-CN', { month: 'short', day: 'numeric', weekday: 'short' })
   return cells.value
     .filter((c) => c.inMonth && c.events.length)
     .map((c) => {

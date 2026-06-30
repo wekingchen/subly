@@ -35,7 +35,7 @@ class User(Base):
     email_code_expires: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     # 偏好
-    locale: Mapped[str] = mapped_column(String(8), default="zh")        # zh | en | ru
+    locale: Mapped[str] = mapped_column(String(8), default="zh")        # 中文单语言，历史保留字段
     theme: Mapped[str] = mapped_column(String(32), default="light")
     base_currency: Mapped[str] = mapped_column(String(8), default="CNY")
     # 订阅管理页的分类显示顺序（分类 id 列表，按用户拖拽保存）

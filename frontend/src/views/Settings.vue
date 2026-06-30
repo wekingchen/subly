@@ -5,13 +5,7 @@
     <div class="grid two">
       <!-- 外观与偏好 -->
       <div class="card sect">
-        <h3>🎨 {{ t('settings.theme') }} / {{ t('settings.language') }}</h3>
-        <label>{{ t('settings.language') }}</label>
-        <select v-model="locale" @change="changeLocale">
-          <option value="zh">中文</option>
-          <option value="en">English</option>
-          <option value="ru">Русский</option>
-        </select>
+        <h3>🎨 {{ t('settings.theme') }}</h3>
         <label>{{ t('settings.theme') }}</label>
         <div class="theme-picker">
           <button v-for="th in themes" :key="th.v" class="th" :class="{ on: theme === th.v }"
@@ -203,7 +197,7 @@ import { useI18n } from 'vue-i18n'
 import api from '../api'
 import { useAuth } from '../stores/auth'
 
-const { t, locale } = useI18n()
+const { t } = useI18n()
 const auth = useAuth()
 
 const themes = [
@@ -357,10 +351,6 @@ async function changePwd() {
   } catch (e) { accOk.value = false; accMsg.value = e.response?.data?.detail || 'Error' }
 }
 
-async function changeLocale() {
-  localStorage.setItem('locale', locale.value)
-  await auth.updateMe({ locale: locale.value })
-}
 async function changeTheme() { await auth.updateMe({ theme: theme.value }) }
 async function changeCurrency() {
   await auth.updateMe({ base_currency: baseCurrency.value })

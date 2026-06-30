@@ -75,7 +75,7 @@ Bark needs no env var — configure the Device Key and optional non-negative TTL
 
 ## Features
 
-Multi-user (JWT, admin/user roles) · recurring & one-time subscriptions · multi-language (中/EN/RU) · 5 themes · multi-currency with live FX · dashboard analytics · category management · Apple-style calendar · spending reports · **Telegram + Bark** notifications (run side by side, optional Bark TTL) · icon library with favicon cache and visible fallback · per-user & **admin full-site** backup/restore · built-in SQLite, zero config.
+Multi-user (JWT, admin/user roles) · recurring & one-time subscriptions · Chinese UI · 5 themes · multi-currency with live FX · dashboard analytics · category management · Apple-style calendar · spending reports · **Telegram + Bark** notifications (run side by side, optional Bark TTL) · icon library with favicon cache and visible fallback · per-user & **admin full-site** backup/restore · built-in SQLite, zero config.
 
 ## License
 

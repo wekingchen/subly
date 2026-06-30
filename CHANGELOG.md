@@ -17,6 +17,8 @@
 ### Changed
 - 内置图标库改为多来源 favicon 下载：优先直连站点 `favicon.ico`、首页 icon link，再尝试公共 provider，并支持 PNG / ICO / WEBP / JPEG / SVG 多格式缓存
 - 图标下载新增可配置开关与限制：`ICON_FETCH_ENABLED`、`ICON_FETCH_GOOGLE_ENABLED`、`ICON_FETCH_TIMEOUT_S`、`ICON_FETCH_MAX_BYTES`、`ICON_FETCH_CONCURRENCY`、`ICON_FETCH_SVG_ENABLED`
+- 移除英文 / 俄文语言包，界面改为中文单语言，保留 `vue-i18n` 仅承载中文文案
+- 后端 `UserOut` / `UserUpdate` 不再暴露或接受 `locale`；备份导出/导入不再带 `locale`（数据库列保留，固定 `zh`）
 
 ### Fixed
 - 修复冷缓存、Google favicon 不可达或触发限流 / 熔断时，图标库返回透明 1x1 PNG 导致整库视觉空白的问题；失败时现在会显示稳定颜色和首字母的可见 fallback
@@ -59,10 +61,8 @@
 - ✅ 自动续费提醒 - APScheduler 定时任务 + Telegram 推送
 - ✅ 仪表盘 - 总览支出、即将到期项目、最近订阅
 
-#### 多语言和本地化
-- 支持中文 / English / Русский
-- vue-i18n 国际化框架
-- 用户可选择语言
+#### 中文界面
+- 中文界面与文案集中管理
 
 #### 多主题支持
 - 5 个预设主题：浅色、深色、海洋、森林、紫罗兰
