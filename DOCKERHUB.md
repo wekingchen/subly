@@ -1,8 +1,8 @@
-# Subly · 省心订阅
+# Subly · 你的自托管续费雷达
 
 Self-hosted subscription / renewal radar with built-in **SQLite** (zero-config), Chinese UI, **Telegram + Bark** reminders, multi-user approval, service icon library, backups, and real-time logs.
 
-自托管的订阅 / 续费 / 保号管理系统：内置 **SQLite** 零配置，中文界面，支持 **Telegram + Bark** 双通道提醒、注册审核、服务图标库、备份恢复与实时日志。
+你的自托管续费雷达：集中管理订阅、域名、VPS、保号套餐与提醒通道，内置 **SQLite** 零配置，支持 **Telegram + Bark** 双通道提醒、注册审核、服务图标库、备份恢复与实时日志。
 
 - **Source / 源码**: `<your-repo-url>`
 - **Image / 镜像**: `<your-dockerhub-namespace>/subly:latest` 或 `ghcr.io/<your-github-username>/subly:latest`

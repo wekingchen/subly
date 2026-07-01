@@ -20,6 +20,7 @@
 - 实时日志时间按容器 `TZ` / `settings.tz`（默认 `Asia/Shanghai`）显示：`/api/logs` 现在返回带 UTC 时区标记的 `created_at`，前端按系统时区格式化。
 
 ### Changed
+- README、Docker Hub、NAS 与技术文档统一项目名表述：正式名称使用 `Subly`，中文定位调整为“你的自托管续费雷达”。
 - 抽取共享周期日期工具 `utils/date.js`（`toISODate` / `addCycleDate`），订阅页与日历展开复用同一套周期推进逻辑，与后端 `billing.add_cycle` 语义对齐。
 - 新增 `utils/recurrence.js` 与 `utils/time.js`：分别负责日历范围内的续费事件展开与按目标时区格式化时间。
 

@@ -1,8 +1,8 @@
 <div align="center">
 
-# 省心订阅 Subly
+# Subly
 
-**自托管的订阅 / 续费 / 保号管理系统 —— 内置 SQLite 零配置，中文单语言，Telegram + Bark 双通道提醒。**
+**你的自托管续费雷达 —— 管理订阅、域名、VPS、保号套餐与提醒通道。**
 
 [![License](https://img.shields.io/badge/license-MIT-blue)](./LICENSE)
 
@@ -10,7 +10,7 @@
 docker run -d -p 8842:8000 -v subly_data:/app/data <你的DockerHub用户名>/subly:latest
 ```
 
-> Subly 面向个人与小团队的自托管续费雷达：把订阅、域名、VPS、保号套餐、提醒通道与成员权限集中到一个 SQLite 本地账本中管理。
+> Subly 面向个人与小团队，把订阅、域名、VPS、保号套餐、提醒通道与成员权限集中到一个本地 SQLite 账本中管理，并在续费前主动提醒。
 
 </div>
 
