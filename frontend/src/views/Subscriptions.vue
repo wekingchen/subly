@@ -133,9 +133,18 @@
           </Transition>
 
           <div class="sc-acts" @click.stop>
-            <button class="btn sm ghost" @click.stop="openEdit(s)">{{ t('sub.edit') }}</button>
-            <button v-if="s.billing_type === 'recurring'" class="btn sm" @click.stop="askRenew(s)">♻️ {{ t('sub.renew') }}</button>
-            <button class="btn sm danger" @click.stop="askDelete(s)">{{ t('sub.delete') }}</button>
+            <button class="btn sm ghost act-btn act-edit" @click.stop="openEdit(s)">
+              <span class="act-ico" aria-hidden="true">✎</span>
+              <span class="act-label">{{ t('sub.edit') }}</span>
+            </button>
+            <button v-if="s.billing_type === 'recurring'" class="btn sm act-btn act-renew" @click.stop="askRenew(s)">
+              <span class="act-ico" aria-hidden="true">♻</span>
+              <span class="act-label">{{ t('sub.renew') }}</span>
+            </button>
+            <button class="btn sm danger act-btn act-delete" @click.stop="askDelete(s)">
+              <span class="act-ico" aria-hidden="true">×</span>
+              <span class="act-label">{{ t('sub.delete') }}</span>
+            </button>
           </div>
           <div v-if="!filter" class="card-sort">
             <button class="btn sm ghost" @click.stop="moveSub(g.key, s.id, -1)" :aria-label="t('sub.moveUp')">↑</button>
@@ -997,6 +1006,8 @@ h1 { margin-top: 0; }
 .tag.one_time { background: #fef3c7; color: #b45309; }
 .sc-acts { display: flex; gap: 6px; margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--border); }
 .sc-acts .btn { flex: 1; }
+.act-btn { display: inline-flex; align-items: center; justify-content: center; gap: 4px; }
+.act-ico { display: inline-flex; align-items: center; justify-content: center; line-height: 1; }
 
 /* 续费弹窗单选 */
 .opt { display: flex; align-items: flex-start; gap: 10px; border: 1px solid var(--border); border-radius: 10px;
@@ -1057,8 +1068,17 @@ h1 { margin-top: 0; }
   .detail-section { padding: 10px; }
   .detail-grid { grid-template-columns: 1fr; }
   .detail-value { overflow-wrap: anywhere; }
-  .sc-acts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .sc-acts .btn { min-height: 44px; }
+  .sc-acts { display: flex; align-items: center; gap: 6px; margin-top: 12px; padding-top: 10px;
+    border-top: 1px dashed color-mix(in srgb, var(--border) 82%, transparent); }
+  .sc-acts .act-btn { min-height: 44px; padding: 0 10px; border-radius: 999px; font-size: 12px;
+    font-weight: 750; letter-spacing: -.01em; box-shadow: none; white-space: nowrap; }
+  .sc-acts .act-edit { flex: 0 0 auto; color: var(--text-soft);
+    background: color-mix(in srgb, var(--surface-2) 72%, transparent); border-color: transparent; }
+  .sc-acts .act-renew { flex: 1 1 auto; min-width: 0; justify-content: center;
+    background: linear-gradient(135deg, color-mix(in srgb, var(--primary) 82%, #0b1020), color-mix(in srgb, var(--signal-cyan) 42%, var(--primary))); }
+  .sc-acts .act-delete { flex: 0 0 auto; min-width: 44px; color: var(--danger);
+    background: color-mix(in srgb, var(--danger) 8%, transparent);
+    border: 1px solid color-mix(in srgb, var(--danger) 22%, transparent); box-shadow: none; }
   .card-sort { display: grid; grid-template-columns: repeat(2, 1fr); margin-top: 8px; }
   .block { padding: 10px; margin-bottom: 10px; background: color-mix(in srgb, var(--surface-2) 42%, transparent); }
   .block-t { margin-bottom: 8px; }
@@ -1073,6 +1093,20 @@ h1 { margin-top: 0; }
   .browser-group-t { min-height: 44px; padding: 6px 0; }
   .svc { min-height: 44px; }
   .svc span { white-space: normal; line-height: 1.3; }
+}
+
+@media (max-width: 380px) {
+  .sc-acts .act-edit,
+  .sc-acts .act-delete { flex: 0 0 44px; padding: 0; }
+  .sc-acts .act-edit .act-label,
+  .sc-acts .act-delete .act-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
 }
 </style>
 
