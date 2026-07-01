@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { amountOf, formatMoney } from './money'
+import { amountOf, formatMoney, hasBaseEquivalent } from './money'
 
 describe('amountOf', () => {
   it('prefers amount_in_base over amount', () => {
@@ -24,10 +24,39 @@ describe('amountOf', () => {
   })
 })
 
+
+describe('hasBaseEquivalent', () => {
+  it('returns true only for different currencies with a finite base amount', () => {
+    expect(hasBaseEquivalent({ currency: 'USD', amount_in_base: 143.2 }, 'CNY')).toBe(true)
+  })
+
+  it('returns false when the subscription currency already matches the base currency', () => {
+    expect(hasBaseEquivalent({ currency: 'CNY', amount_in_base: 143.2 }, 'CNY')).toBe(false)
+    expect(hasBaseEquivalent({ currency: 'USD', amount_in_base: 143.2 }, 'usd')).toBe(false)
+  })
+
+  it('returns false when amount_in_base is not finite', () => {
+    expect(hasBaseEquivalent({ currency: 'USD', amount_in_base: 'bad' }, 'CNY')).toBe(false)
+    expect(hasBaseEquivalent({ currency: 'USD', amount_in_base: undefined }, 'CNY')).toBe(false)
+    expect(hasBaseEquivalent({ currency: 'USD', amount_in_base: null }, 'CNY')).toBe(false)
+    expect(hasBaseEquivalent({ currency: 'USD', amount_in_base: '' }, 'CNY')).toBe(false)
+    expect(hasBaseEquivalent({ currency: 'USD', amount_in_base: '   ' }, 'CNY')).toBe(false)
+    expect(hasBaseEquivalent({ currency: 'USD', amount_in_base: false }, 'CNY')).toBe(false)
+  })
+
+  it('returns false when item or base currency is missing or invalid', () => {
+    expect(hasBaseEquivalent(null, 'CNY')).toBe(false)
+    expect(hasBaseEquivalent({ currency: 'USD', amount_in_base: 143.2 }, '')).toBe(false)
+    expect(hasBaseEquivalent({ currency: 'USD', amount_in_base: 143.2 }, true)).toBe(false)
+    expect(hasBaseEquivalent({ currency: true, amount_in_base: 143.2 }, 'CNY')).toBe(false)
+  })
+})
+
 describe('formatMoney', () => {
   it('formats with currency prefix by default', () => {
     expect(formatMoney(12.3, 'CNY')).toBe('CNY 12.30')
   })
+
 
   it('formats with currency suffix', () => {
     expect(formatMoney(12.3, 'USD', { position: 'suffix' })).toBe('12.30 USD')

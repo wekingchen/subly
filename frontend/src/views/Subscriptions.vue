@@ -11,7 +11,7 @@
         <button :class="{ on: filter === 'recurring' }" @click="setFilter('recurring')">{{ t('sub.filterRecurring') }}</button>
         <button :class="{ on: filter === 'one_time' }" @click="setFilter('one_time')">{{ t('sub.filterOneTime') }}</button>
       </div>
-      <span class="muted drag-hint">⠿ {{ t('sub.dragHint') }}</span>
+      <span v-if="!filter" class="muted drag-hint">⠿ {{ t('sub.dragHint') }}</span>
     </div>
 
     <div v-if="!subs.length" class="card muted">{{ t('dashboard.none') }}</div>
@@ -19,29 +19,27 @@
     <!-- 按分类分组 -->
     <div v-for="g in grouped" :key="g.key" class="cat-group"
          :class="{ 'drop-cat': dragOverCat === g.key }"
-         draggable="true"
-         @dragstart="onCatDragStart(g.key, $event)"
          @dragover.prevent="onCatDragOver(g.key)"
-         @dragend="clearDrag"
          @drop="onCatDrop(g.key)">
-      <div class="cat-head">
+      <div class="cat-head"
+           :draggable="!filter"
+           @dragstart="onCatDragStart(g.key, $event)"
+           @dragend="clearDrag">
         <span class="grip">⠿</span>
         <span class="cat-ico">{{ g.icon }}</span>
         <span class="cat-name">{{ g.name }}</span>
         <span class="cat-count">{{ g.items.length }}</span>
-        <span class="mobile-sort">
+        <span v-if="!filter" class="mobile-sort">
           <button class="btn sm ghost" @click.stop="moveCat(g.key, -1)" :aria-label="t('sub.moveUp')">↑</button>
           <button class="btn sm ghost" @click.stop="moveCat(g.key, 1)" :aria-label="t('sub.moveDown')">↓</button>
         </span>
       </div>
 
       <div class="sub-grid">
-        <div v-for="s in g.items" :key="s.id" class="card sub-card"
-             :class="{ inactive: !s.is_active, expired: isExpired(s), soon: isSoon(s), 'drop-card': dragOverSub === s.id }"
-             draggable="true"
-             @dragstart.stop="onCardDragStart(g.key, s.id, $event)"
+        <div v-for="s in g.items" :key="s.id" class="card sub-card signal-card"
+             :class="{ inactive: !s.is_active, expired: isExpired(s), soon: isSoon(s), 'drop-card': dragOverSub === s.id, expanded: isExpanded(s.id) }"
+             @click="onCardClick(s, $event)"
              @dragover.prevent.stop="onCardDragOver(g.key, s.id)"
-             @dragend="clearDrag"
              @drop.stop="onCardDrop(g.key, s.id)">
           <div class="status-strip" :class="statusOf(s)"></div>
           <div class="sc-head">
@@ -52,52 +50,94 @@
               <div class="muted sc-plan" v-if="s.plan">{{ s.plan }}</div>
             </div>
             <StatusChip :status="statusOf(s)">{{ statusChip(s) }}</StatusChip>
+            <button type="button" class="card-detail-toggle" :aria-expanded="isExpanded(s.id)"
+                    :aria-controls="detailId(s.id)"
+                    :aria-label="`${s.name || t('nav.subscriptions')}：${isExpanded(s.id) ? t('sub.collapse') : t('sub.expand')}`"
+                    @click.stop="toggleDetails(s.id)">{{ isExpanded(s.id) ? '▾' : '▸' }}</button>
+            <span v-if="!filter" class="card-grip" draggable="true" :title="t('sub.dragCard')" aria-hidden="true"
+                  @click.stop
+                  @dragstart.stop="onCardDragStart(g.key, s.id, $event)"
+                  @dragend="clearDrag">⠿</span>
           </div>
 
-          <div class="sc-amount mono-data">
-            <MoneyText :value="s.amount" :currency="s.currency" position="suffix" />
-            <span v-if="s.billing_type === 'recurring'" class="muted cycle">/ {{ cycleText(s) }}</span>
-          </div>
-
-          <div class="sc-due" :class="statusOf(s)" v-if="s.billing_type === 'recurring' && s.next_renewal_date">
-            <span class="due mono-data">{{ s.next_renewal_date }}</span>
-            <span class="sc-due-text">{{ dueText(s) }}</span>
-          </div>
-          <div class="sc-due oneTime" v-else-if="s.billing_type === 'one_time'">
-            <span class="sc-due-text">{{ t('sub.lifetime') }}</span>
-          </div>
-
-          <div v-if="isExpired(s)" class="expired-banner">⚠️ {{ t('sub.expiredTag') }}</div>
-          <div v-else-if="isSoon(s)" class="soon-banner">⏰ {{ t('sub.soonTag') }}</div>
-
-          <div v-if="s.remark" class="sc-remark">📝 {{ s.remark }}</div>
-
-          <div class="sc-rows">
-            <div class="sc-row" v-if="s.ipv4">
-              <span class="muted">🌐 IPv4</span><span class="mono">{{ s.ipv4 }}</span>
+          <div class="sc-signal">
+            <div class="sc-amount mono-data">
+              <MoneyText :value="s.amount" :currency="s.currency" position="suffix" />
+              <span v-if="s.billing_type === 'recurring'" class="muted cycle">/ {{ cycleText(s) }}</span>
             </div>
-            <div class="sc-row" v-if="s.ipv6">
-              <span class="muted">🌐 IPv6</span><span class="mono">{{ s.ipv6 }}</span>
+            <div v-if="shouldShowBaseAmount(s)" class="sc-base-amount">
+              <span class="muted">{{ t('sub.baseAmountPrefix') }}</span>
+              <MoneyText :value="baseAmount(s)" :currency="baseCurrency" position="prefix" muted />
             </div>
-            <div class="sc-row" v-if="payName(s)">
-              <span class="muted">💳 {{ t('sub.payment') }}</span><span>{{ payName(s) }}</span>
+
+            <div class="sc-due" :class="statusOf(s)" v-if="s.billing_type === 'recurring' && s.next_renewal_date">
+              <span class="due mono-data">{{ s.next_renewal_date }}</span>
+              <span class="sc-due-text">{{ dueText(s) }}</span>
             </div>
-            <div class="sc-row" v-if="s.billing_type === 'recurring'">
-              <span class="muted">🔁 {{ t('sub.autoRenew') }}</span>
-              <span>{{ s.auto_renew ? '✓' : '✗' }}</span>
+            <div class="sc-due oneTime" v-else-if="s.billing_type === 'one_time'">
+              <span class="sc-due-text">{{ t('sub.lifetime') }}</span>
             </div>
-            <div class="sc-row" v-if="s.family_members && s.family_members.length">
-              <span class="muted">👨‍👩‍👧 {{ t('sub.family') }}</span>
-              <span>{{ s.family_members.join('、') }}</span>
-            </div>
+
+            <div v-if="isExpired(s)" class="expired-banner">⚠️ {{ t('sub.expiredTag') }}</div>
+            <div v-else-if="isSoon(s)" class="soon-banner">⏰ {{ t('sub.soonTag') }}</div>
           </div>
 
-          <div class="sc-acts">
-            <button class="btn sm ghost" @click="openEdit(s)">{{ t('sub.edit') }}</button>
-            <button v-if="s.billing_type === 'recurring'" class="btn sm" @click="askRenew(s)">♻️ {{ t('sub.renew') }}</button>
-            <button class="btn sm danger" @click="askDelete(s)">{{ t('sub.delete') }}</button>
+          <div class="sc-quick">
+            <span v-if="payName(s)" class="quick-chip">💳 {{ payName(s) }}</span>
+            <span v-if="s.billing_type === 'recurring'" class="quick-chip">🔁 {{ boolText(s.auto_renew) }}</span>
+            <span v-if="s.family_members && s.family_members.length" class="quick-chip">👨‍👩‍👧 {{ s.family_members.length }}</span>
+            <span v-if="bundleName(s)" class="quick-chip">📦 {{ bundleName(s) }}</span>
           </div>
-          <div class="card-sort">
+
+          <Transition name="detail">
+            <div v-if="isExpanded(s.id)" :id="detailId(s.id)" class="sc-detail" @click.stop>
+              <div class="detail-section">
+                <div class="detail-title">{{ t('sub.detailIdentityCost') }}</div>
+                <div class="detail-grid">
+                  <div class="detail-item"><div class="detail-label">{{ t('sub.category') }}</div><div class="detail-value">{{ categoryName(s) }}</div></div>
+                  <div class="detail-item"><div class="detail-label">{{ t('sub.plan') }}</div><div class="detail-value">{{ textOrDash(s.plan) }}</div></div>
+                  <div class="detail-item"><div class="detail-label">{{ t('sub.originalAmount') }}</div><div class="detail-value mono-data"><MoneyText :value="s.amount" :currency="s.currency" position="suffix" /></div></div>
+                  <div v-if="shouldShowBaseAmount(s)" class="detail-item"><div class="detail-label">{{ t('sub.baseCurrencyAmount') }} · {{ baseCurrency }}</div><div class="detail-value mono-data"><MoneyText :value="baseAmount(s)" :currency="baseCurrency" position="suffix" muted /></div></div>
+                  <div class="detail-item"><div class="detail-label">{{ t('sub.billingType') }}</div><div class="detail-value">{{ s.billing_type === 'one_time' ? t('sub.oneTime') : t('sub.recurring') }}</div></div>
+                  <div class="detail-item"><div class="detail-label">{{ t('sub.cycle') }}</div><div class="detail-value">{{ s.billing_type === 'recurring' ? cycleText(s) : DASH }}</div></div>
+                  <div class="detail-item detail-item--full"><div class="detail-label">{{ t('sub.website') }}</div><div class="detail-value"><a v-if="s.url" :href="s.url" target="_blank" rel="noopener noreferrer" @click.stop>{{ s.url }}</a><span v-else>{{ DASH }}</span></div></div>
+                  <div class="detail-item detail-item--full"><div class="detail-label">{{ t('sub.remark') }}</div><div class="detail-value">{{ textOrDash(s.remark) }}</div></div>
+                </div>
+              </div>
+
+              <div class="detail-section">
+                <div class="detail-title">{{ t('sub.detailRiskReminder') }}</div>
+                <div class="detail-grid">
+                  <div class="detail-item"><div class="detail-label">{{ t('sub.startDate') }}</div><div class="detail-value mono-data">{{ textOrDash(s.start_date) }}</div></div>
+                  <div class="detail-item"><div class="detail-label">{{ t('sub.nextRenewal') }}</div><div class="detail-value mono-data">{{ s.billing_type === 'recurring' ? textOrDash(s.next_renewal_date) : t('sub.lifetime') }}</div></div>
+                  <div class="detail-item"><div class="detail-label">{{ t('sub.endDate') }}</div><div class="detail-value mono-data">{{ textOrDash(s.end_date) }}</div></div>
+                  <div class="detail-item"><div class="detail-label">{{ t('sub.lastRenewedAt') }}</div><div class="detail-value mono-data">{{ textOrDash(s.last_renewed_at) }}</div></div>
+                  <div class="detail-item"><div class="detail-label">{{ t('sub.remindDays') }}</div><div class="detail-value mono-data">{{ textOrDash(s.remind_days_before) }}</div></div>
+                  <div class="detail-item"><div class="detail-label">{{ t('sub.autoRenew') }}</div><div class="detail-value">{{ boolText(s.auto_renew) }}</div></div>
+                  <div class="detail-item"><div class="detail-label">{{ t('sub.calendarVisible') }}</div><div class="detail-value">{{ boolText(s.show_in_calendar) }}</div></div>
+                </div>
+              </div>
+
+              <div class="detail-section">
+                <div class="detail-title">{{ t('sub.detailAccountingOwner') }}</div>
+                <div class="detail-grid">
+                  <div class="detail-item"><div class="detail-label">{{ t('sub.payment') }}</div><div class="detail-value">{{ payName(s) || DASH }}</div></div>
+                  <div class="detail-item"><div class="detail-label">{{ t('sub.bundle') }}</div><div class="detail-value">{{ bundleName(s) || DASH }}</div></div>
+                  <div class="detail-item detail-item--full"><div class="detail-label">{{ t('sub.family') }}</div><div class="detail-value">{{ familyText(s) }}</div></div>
+                  <div class="detail-item"><div class="detail-label">{{ t('sub.ipv4') }}</div><div class="detail-value mono-data">{{ textOrDash(s.ipv4) }}</div></div>
+                  <div class="detail-item"><div class="detail-label">{{ t('sub.ipv6') }}</div><div class="detail-value mono-data">{{ textOrDash(s.ipv6) }}</div></div>
+                  <div class="detail-item detail-item--full"><div class="detail-label">{{ t('sub.notes') }}</div><div class="detail-value">{{ textOrDash(s.notes) }}</div></div>
+                </div>
+              </div>
+            </div>
+          </Transition>
+
+          <div class="sc-acts" @click.stop>
+            <button class="btn sm ghost" @click.stop="openEdit(s)">{{ t('sub.edit') }}</button>
+            <button v-if="s.billing_type === 'recurring'" class="btn sm" @click.stop="askRenew(s)">♻️ {{ t('sub.renew') }}</button>
+            <button class="btn sm danger" @click.stop="askDelete(s)">{{ t('sub.delete') }}</button>
+          </div>
+          <div v-if="!filter" class="card-sort">
             <button class="btn sm ghost" @click.stop="moveSub(g.key, s.id, -1)" :aria-label="t('sub.moveUp')">↑</button>
             <button class="btn sm ghost" @click.stop="moveSub(g.key, s.id, 1)" :aria-label="t('sub.moveDown')">↓</button>
           </div>
@@ -388,6 +428,7 @@ import ServiceIcon from '../components/ServiceIcon.vue'
 import StatusChip from '../components/StatusChip.vue'
 import { useAuth } from '../stores/auth'
 import { addCycleDate, daysLeft, parseLocalDate, toISODate } from '../utils/date'
+import { amountOf, hasBaseEquivalent } from '../utils/money'
 import { isExpired, isSoon, renewalStatus } from '../utils/renewal'
 
 const { t } = useI18n()
@@ -424,6 +465,37 @@ const delPwd = ref('')
 const delErr = ref('')
 const deleting = ref(false)
 
+// 卡片内联详情：同时只展开一张
+const expandedSubId = ref(null)
+function isExpanded(id) { return expandedSubId.value === id }
+function toggleDetails(id) { expandedSubId.value = expandedSubId.value === id ? null : id }
+function detailId(id) { return `sub-detail-${id}` }
+function closestElement(target) { return target?.closest ? target : target?.parentElement }
+function onCardClick(s, e) {
+  // 点击卡片空白处展开/收起；点中按钮、链接、详情区等交互控件则交给控件自身（它们已 @click.stop）
+  const target = closestElement(e.target)
+  if (target?.closest('button, a, input, select, textarea, label, summary, .sc-detail, .quick-chip')) return
+  toggleDetails(s.id)
+}
+
+// 基准货币
+const baseCurrency = computed(() => {
+  const raw = auth.user?.base_currency
+  if (typeof raw !== 'string') return 'CNY'
+  return raw.trim().toUpperCase() || 'CNY'
+})
+
+// 详情字段 helper
+const DASH = '—'
+function textOrDash(v) { return (v === null || v === undefined || v === '') ? DASH : v }
+function boolText(v) { return v ? '✓' : '✗' }
+function bundleName(s) {
+  const b = bundles.value.find((x) => x.id === s.bundle_id)
+  return b ? b.name : ''
+}
+function categoryName(s) { return catMeta(catKeyOf(s)).name }
+function familyText(s) { return s.family_members && s.family_members.length ? s.family_members.join('、') : DASH }
+
 watch([showForm, renewTarget, delTarget, showBrowser], () => {
   const open = showForm.value || renewTarget.value || delTarget.value || showBrowser.value
   document.body.classList.toggle('modal-open', !!open)
@@ -442,6 +514,8 @@ function payName(s) {
   const p = methods.value.find((x) => x.id === s.payment_method_id)
   return p ? `${p.icon || ''} ${p.name}`.trim() : ''
 }
+function shouldShowBaseAmount(s) { return hasBaseEquivalent(s, baseCurrency.value) }
+function baseAmount(s) { return amountOf(s) }
 function cycleText(s) {
   const n = s.cycle_count > 1 ? s.cycle_count + ' ' : ''
   return n + t('sub.' + s.cycle)
@@ -544,6 +618,7 @@ const dragOverSub = ref(null)
 function clearDrag() { dragCatKey = null; dragCard = null; dragOverCat.value = null; dragOverSub.value = null }
 
 async function moveCat(key, dir) {
+  if (filter.value) return
   const arr = [...catOrder.value]
   const from = arr.indexOf(key)
   const to = from + dir
@@ -555,6 +630,7 @@ async function moveCat(key, dir) {
 }
 
 async function moveSub(catKey, id, dir) {
+  if (filter.value) return
   const arr = [...(orderMap[catKey] || [])]
   const from = arr.indexOf(id)
   const to = from + dir
@@ -565,14 +641,22 @@ async function moveSub(catKey, id, dir) {
 }
 
 function onCatDragStart(key, e) {
-  // 仅当不是从卡片发起时才作为分类拖拽
-  if (dragCard) return
+  if (filter.value) {
+    e.preventDefault()
+    return
+  }
+  // 分类排序只允许从分类标题发起，避免卡片空白处拖动误触发分类排序。
+  const target = closestElement(e.target)
+  if (target?.closest('button, a, input, select, textarea, label') || dragCard) {
+    e.preventDefault()
+    return
+  }
   dragCatKey = key
   if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move'
 }
-function onCatDragOver(key) { if (dragCatKey && !dragCard) dragOverCat.value = key }
+function onCatDragOver(key) { if (!filter.value && dragCatKey && !dragCard) dragOverCat.value = key }
 async function onCatDrop(key) {
-  if (!dragCatKey || dragCard || dragCatKey === key) return clearDrag()
+  if (filter.value || !dragCatKey || dragCard || dragCatKey === key) return clearDrag()
   const arr = [...catOrder.value]
   const from = arr.indexOf(dragCatKey)
   const to = arr.indexOf(key)
@@ -586,14 +670,18 @@ async function onCatDrop(key) {
 }
 
 function onCardDragStart(catKey, id, e) {
+  if (filter.value) {
+    e.preventDefault()
+    return
+  }
   dragCard = { catKey, id }
   if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move'
 }
 function onCardDragOver(catKey, id) {
-  if (dragCard && dragCard.catKey === catKey) dragOverSub.value = id
+  if (!filter.value && dragCard && dragCard.catKey === catKey) dragOverSub.value = id
 }
 async function onCardDrop(catKey, id) {
-  if (!dragCard || dragCard.catKey !== catKey || dragCard.id === id) return clearDrag()
+  if (filter.value || !dragCard || dragCard.catKey !== catKey || dragCard.id === id) return clearDrag()
   const arr = [...orderMap[catKey]]
   const from = arr.indexOf(dragCard.id)
   const to = arr.indexOf(id)
@@ -608,6 +696,7 @@ async function load() {
   const params = filter.value ? { billing_type: filter.value } : {}
   const { data } = await api.get('/api/subscriptions', { params })
   subs.value = data
+  if (expandedSubId.value && !subs.value.some((s) => s.id === expandedSubId.value)) expandedSubId.value = null
   rebuild()
 }
 function setFilter(f) { filter.value = f; load() }
@@ -832,34 +921,27 @@ h1 { margin-top: 0; }
   padding: 1px 9px; font-size: 12px; }
 .mobile-sort, .card-sort { display: none; gap: 6px; }
 
-/* 放大后的订阅卡片 */
+/* 信号卡 */
 .sub-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 16px; }
-.sub-card { padding: 18px; cursor: grab; position: relative; overflow: hidden;
-  transition: transform .25s cubic-bezier(.2,.8,.2,1), box-shadow .25s ease, border-color .2s ease; }
-/* 续费状态色条：safe / soon / overdue */
+.sub-card { padding: 18px; cursor: pointer; position: relative; overflow: hidden;
+  transition: transform .22s cubic-bezier(.2,.8,.2,1), box-shadow .22s ease, border-color .18s ease, background .18s ease; }
+.sub-card:focus-visible { outline: 2px solid var(--primary); outline-offset: 3px; }
+.sub-card.expanded { border-color: color-mix(in srgb, var(--primary) 45%, var(--border)); box-shadow: var(--shadow-lg);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--signal-cyan) 4%, var(--surface)), var(--surface)); }
+/* 续费状态信号轨：safe / soon / overdue */
 .status-strip { position: absolute; left: 0; top: 0; bottom: 0; width: 4px; }
 .status-strip.ok { background: var(--success); opacity: .35; }
 .status-strip.soon { background: var(--warning); opacity: .85; }
 .status-strip.overdue { background: var(--danger); }
 .status-strip.oneTime { background: var(--text-soft); opacity: .22; }
-/* 续费日主视觉行 */
-.sc-due { display: flex; align-items: center; gap: 8px; margin: 6px 0 10px; font-size: 14px; }
-.sc-due .due { font-weight: 700; }
-.sc-due-text { font-size: 12px; color: var(--text-soft); }
-.sc-due.ok .due { color: var(--text); }
-.sc-due.soon .due, .sc-due.soon .sc-due-text { color: var(--warning); }
-.sc-due.overdue .due, .sc-due.overdue .sc-due-text { color: var(--danger); }
-.sc-due.oneTime .sc-due-text { color: var(--text-soft); font-style: italic; }
-/* 悬停动感：上浮 + 轻微放大 + 渐变高光描边 + 顶部光带扫过 */
 .sub-card::after { content: ''; position: absolute; top: 0; left: -60%; width: 40%; height: 100%;
-  background: linear-gradient(100deg, transparent, color-mix(in srgb, var(--primary) 14%, transparent), transparent);
+  background: linear-gradient(100deg, transparent, color-mix(in srgb, var(--primary) 12%, transparent), transparent);
   transform: skewX(-18deg); opacity: 0; transition: opacity .3s; pointer-events: none; }
-.sub-card:hover { transform: translateY(-6px) scale(1.015); box-shadow: var(--shadow-lg);
-  border-color: color-mix(in srgb, var(--primary) 45%, var(--border)); }
+.sub-card:hover { transform: translateY(-3px); box-shadow: var(--shadow-lg);
+  border-color: color-mix(in srgb, var(--primary) 40%, var(--border)); }
 .sub-card:hover::after { opacity: 1; animation: sheen .8s ease; }
 @keyframes sheen { from { left: -60%; } to { left: 130%; } }
-.sub-card:hover .sc-ico { transform: scale(1.08) rotate(-3deg); }
-.sub-card:active { cursor: grabbing; transform: scale(.99); }
+.sub-card:hover .sc-ico { transform: scale(1.05) rotate(-2deg); }
 .sub-card.inactive { opacity: .55; }
 .sub-card.expired { border-color: var(--danger); box-shadow: 0 0 0 1px var(--danger), var(--shadow); }
 .sub-card.soon { border-color: var(--warning); box-shadow: 0 0 0 1px var(--warning), var(--shadow); }
@@ -869,22 +951,47 @@ h1 { margin-top: 0; }
   flex-shrink: 0; background: var(--surface-2); transition: transform .25s cubic-bezier(.2,.8,.2,1); }
 .sc-ico.emoji { display: flex; align-items: center; justify-content: center; font-size: 26px; }
 .sc-title { flex: 1; min-width: 0; }
-.sc-name { font-weight: 600; font-size: 17px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sc-name { font-weight: 700; font-size: 17px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .sc-plan { font-size: 12px; }
-.sc-amount { font-size: 28px; font-weight: 700; margin: 14px 0 8px; letter-spacing: -.02em; }
+.card-grip { flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center; border: none; background: transparent; color: var(--text-soft); cursor: grab;
+  padding: 5px 6px; border-radius: 8px; line-height: 1; user-select: none; }
+.card-grip:hover { background: var(--surface-2); color: var(--text); }
+.card-grip:active { cursor: grabbing; }
+.card-detail-toggle { flex-shrink: 0; border: none; background: transparent; color: var(--text-soft); cursor: pointer;
+  padding: 5px 8px; border-radius: 8px; line-height: 1; font-size: 14px; }
+.card-detail-toggle:hover { background: var(--surface-2); color: var(--text); }
+.sc-signal { display: grid; gap: 6px; margin-top: 14px; }
+.sc-amount { font-size: 28px; font-weight: 800; letter-spacing: -.02em; }
 .sc-amount .cur { font-size: 15px; font-weight: 500; }
 .sc-amount .cycle { font-size: 14px; font-weight: 500; }
-.expired-banner { background: var(--danger); color: #fff; font-size: 12px; font-weight: 600;
-  border-radius: 8px; padding: 4px 10px; display: inline-block; margin-bottom: 8px; }
-.soon-banner { background: var(--warning); color: #fff; font-size: 12px; font-weight: 600;
-  border-radius: 8px; padding: 4px 10px; display: inline-block; margin-bottom: 8px; }
-.sc-remark { background: var(--primary-soft); color: var(--primary); border-radius: 8px;
-  padding: 6px 10px; font-size: 13px; margin-bottom: 8px; line-height: 1.4;
-  word-break: break-word; }
-.sc-rows { display: flex; flex-direction: column; gap: 6px; font-size: 13px; }
-.sc-row { display: flex; justify-content: space-between; gap: 8px; }
-.mono { font-family: ui-monospace, "Cascadia Code", Consolas, monospace; font-size: 12px; }
-.sc-row > span:last-child { text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sc-base-amount { display: flex; align-items: baseline; gap: 6px; font-size: 12px; color: var(--text-soft); }
+.sc-due { display: flex; align-items: center; gap: 8px; font-size: 14px; }
+.sc-due .due { font-weight: 700; }
+.sc-due-text { font-size: 12px; color: var(--text-soft); }
+.sc-due.ok .due { color: var(--text); }
+.sc-due.soon .due, .sc-due.soon .sc-due-text { color: var(--warning); }
+.sc-due.overdue .due, .sc-due.overdue .sc-due-text { color: var(--danger); }
+.sc-due.oneTime .sc-due-text { color: var(--text-soft); font-style: italic; }
+.expired-banner { background: color-mix(in srgb, var(--danger) 14%, transparent); color: var(--danger); font-size: 12px; font-weight: 800;
+  border-radius: 8px; padding: 4px 10px; display: inline-block; width: fit-content; }
+.soon-banner { background: color-mix(in srgb, var(--warning) 16%, transparent); color: var(--warning); font-size: 12px; font-weight: 800;
+  border-radius: 8px; padding: 4px 10px; display: inline-block; width: fit-content; }
+.sc-quick { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.quick-chip { display: inline-flex; align-items: center; max-width: 100%; border: 1px solid var(--border); border-radius: 999px;
+  padding: 3px 8px; color: var(--text-soft); background: color-mix(in srgb, var(--surface-2) 76%, transparent); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sc-detail { margin-top: 14px; padding-top: 14px; border-top: 1px dashed var(--border); display: grid; gap: 12px; }
+.detail-section { border: 1px solid var(--border); border-radius: 14px; padding: 12px;
+  background: color-mix(in srgb, var(--surface-2) 76%, transparent); }
+.detail-title { font-size: 13px; font-weight: 850; color: var(--primary); margin-bottom: 9px; letter-spacing: -.01em; }
+.detail-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px 12px; }
+.detail-item { min-width: 0; }
+.detail-item--full { grid-column: 1 / -1; }
+.detail-label { font-size: 11px; color: var(--text-soft); margin-bottom: 2px; }
+.detail-value { font-size: 13px; line-height: 1.45; word-break: break-word; }
+.detail-value a { color: var(--primary); text-decoration: none; }
+.detail-value a:hover { text-decoration: underline; }
+.detail-enter-active, .detail-leave-active { transition: opacity .16s ease, transform .16s ease; }
+.detail-enter-from, .detail-leave-to { opacity: 0; transform: translateY(-4px); }
 .due.soon { color: var(--warning); font-weight: 600; }
 .due.overdue { color: var(--danger); font-weight: 700; }
 .tag.one_time { background: #fef3c7; color: #b45309; }
@@ -939,7 +1046,9 @@ h1 { margin-top: 0; }
   .cat-head { cursor: default; flex-wrap: wrap; }
   .cat-head .grip { display: none; }
   .mobile-sort { display: inline-flex; margin-left: auto; }
-  .sub-card { cursor: default; }
+  .sub-card { cursor: pointer; }
+  .card-grip { display: none; }
+  .detail-grid { grid-template-columns: 1fr; }
   .sc-acts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .sc-acts .btn { min-height: 44px; }
   .card-sort { display: grid; grid-template-columns: repeat(2, 1fr); margin-top: 8px; }

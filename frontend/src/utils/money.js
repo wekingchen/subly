@@ -16,3 +16,14 @@ export function formatMoney(value, currency = 'CNY', options = {}) {
   if (position === 'suffix') return `${fixed}${hasSpace ? ' ' : ''}${currency}`
   return `${currency}${hasSpace ? ' ' : ''}${fixed}`
 }
+
+export function hasBaseEquivalent(item, baseCurrency) {
+  if (!item || typeof item.currency === 'boolean' || typeof baseCurrency === 'boolean') return false
+  const itemCurrency = String(item.currency || '').trim().toUpperCase()
+  const base = String(baseCurrency || '').trim().toUpperCase()
+  if (!itemCurrency || !base || itemCurrency === base) return false
+  const raw = item.amount_in_base
+  if (raw == null || typeof raw === 'boolean') return false
+  if (typeof raw === 'string' && raw.trim() === '') return false
+  return Number.isFinite(Number(raw))
+}
