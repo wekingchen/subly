@@ -74,6 +74,8 @@ SERVICES = [
     ("文心一言", "yiyan.baidu.com", "ai"),
     ("通义千问", "tongyi.aliyun.com", "ai"),
     ("Kimi", "kimi.moonshot.cn", "ai"),
+    ("智谱 GLM", "bigmodel.cn", "ai"),
+    ("火山引擎 / 豆包", "volcengine.com", ["ai", "vps"]),
     # 游戏 gaming
     ("Steam", "steampowered.com", "gaming"),
     ("Epic Games", "epicgames.com", "gaming"),
