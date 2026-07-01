@@ -88,16 +88,14 @@ uvicorn app.main:app --reload --port 8000
 
 后端默认读取项目根目录或当前工作目录下的 `.env`。可参考根目录 `.env.example` 配置 `JWT_SECRET`、`ADMIN_*`、SMTP、图标库和日志等变量。
 
-可选开发工具：
+运行测试（包含运行时依赖 + pytest）：
 
 ```bash
-pip install black flake8 pytest
-black backend/
-flake8 backend/
-pytest
+python -m pip install -r requirements-dev.txt
+python -m pytest
 ```
 
-> 当前仓库没有强制提交这些开发工具配置；如果你的改动只涉及文档或前端，可以按实际影响选择验证命令。
+当前后端测试覆盖续费日期计算、多分类归一、JWT / 密码 hash 与 `/api/health` smoke。改动了 `billing.py`、`icon_library.py`、`security.py` 等纯函数后建议跑一遍 `python -m pytest`。
 
 ### 前端
 
@@ -108,13 +106,15 @@ npm run dev
 npm run build
 ```
 
-当前 `frontend/package.json` 中只有以下脚本：
+当前 `frontend/package.json` 中的脚本：
 
 - `npm run dev`
 - `npm run build`
 - `npm run preview`
+- `npm test`（`vitest run`，跑一遍测试）
+- `npm run test:watch`（`vitest`，监听模式）
 
-请不要在贡献说明或 PR 检查中要求运行尚未定义的 `npm run lint`、`npm run format` 或 `npm test`，除非对应脚本已经在同一个 PR 中新增。
+前端工具函数（`src/utils/` 下的日期、金额、续费状态）已有 Vitest 用例。改动了这些工具函数或相关逻辑后请运行 `npm test`。请不要在贡献说明或 PR 检查中要求运行尚未定义的 `npm run lint`、`npm run format`，除非对应脚本已经在同一个 PR 中新增。
 
 ### Docker / Compose 验证
 
@@ -129,6 +129,15 @@ docker compose -f docker-compose.hub.yml config
 
 ```bash
 npm --prefix frontend run build
+```
+
+修改了后端纯函数或前端工具函数后，建议运行对应测试：
+
+```bash
+# 后端
+cd backend && python -m pytest
+# 前端
+cd frontend && npm test
 ```
 
 ---
@@ -192,7 +201,10 @@ git diff --check
 1. 工作区只包含本次需要提交的文件。
 2. 没有提交本地生成目录、数据库、缓存或密钥。
 3. 相关文档与 `.env.example` 已同步。
-4. 已运行与你的改动相关的验证命令，并在 PR 中写清楚结果。
+4. 已运行与你的改动相关的验证命令，并在 PR 中写清楚结果：
+   - 后端逻辑改动 → `cd backend && python -m pytest`
+   - 前端工具函数 / UI 逻辑改动 → `cd frontend && npm test`
+   - 前端构建相关改动 → `cd frontend && npm run build`
 5. 如果修改数据模型，已考虑旧 SQLite 数据库的迁移路径。
 6. 如果修改通知、图标下载、备份恢复或用户权限，已检查失败路径和敏感信息日志。
 

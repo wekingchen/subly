@@ -1,4 +1,4 @@
-import { defineConfig } from 'vite'
+import { defineConfig } from 'vitest/config'
 import vue from '@vitejs/plugin-vue'
 
 export default defineConfig({
@@ -10,5 +10,9 @@ export default defineConfig({
       '/static': { target: 'http://localhost:8000', changeOrigin: true }
     }
   },
-  build: { outDir: 'dist' }
+  build: { outDir: 'dist' },
+  test: {
+    environment: 'node',
+    include: ['src/**/*.test.js']
+  }
 })
