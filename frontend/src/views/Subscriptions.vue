@@ -52,7 +52,7 @@
             <StatusChip :status="statusOf(s)">{{ statusChip(s) }}</StatusChip>
             <button type="button" class="card-more"
                     :aria-label="`${s.name || t('nav.subscriptions')}：更多操作`"
-                    @click.stop="openCardActions(s)">⋯</button>
+                    @click.stop="openCardActions(s, g.key)">⋯</button>
             <button type="button" class="card-detail-toggle" :aria-expanded="isExpanded(s.id)"
                     :aria-controls="detailId(s.id)"
                     :aria-label="`${s.name || t('nav.subscriptions')}：${isExpanded(s.id) ? t('sub.collapse') : t('sub.expand')}`"
@@ -148,10 +148,6 @@
               <span class="act-label">{{ t('sub.delete') }}</span>
             </button>
           </div>
-          <div v-if="!filter" class="card-sort">
-            <button class="btn sm ghost" @click.stop="moveSub(g.key, s.id, -1)" :aria-label="t('sub.moveUp')">↑</button>
-            <button class="btn sm ghost" @click.stop="moveSub(g.key, s.id, 1)" :aria-label="t('sub.moveDown')">↓</button>
-          </div>
         </div>
       </div>
     </div>
@@ -210,6 +206,10 @@
             <div class="action-plan muted">{{ textOrDash(actionTarget.plan) }}</div>
           </div>
           <button type="button" class="action-close" :aria-label="t('common.close')" @click="closeCardActions">×</button>
+        </div>
+        <div v-if="!filter" class="action-move">
+          <button type="button" class="action-move-btn" @click="moveFromActions(-1)">↑ {{ t('sub.moveUp') }}</button>
+          <button type="button" class="action-move-btn" @click="moveFromActions(1)">↓ {{ t('sub.moveDown') }}</button>
         </div>
         <button class="action-item" @click="editFromActions">
           <span>✎</span><span>{{ t('sub.edit') }}</span>
@@ -502,6 +502,7 @@ const delErr = ref('')
 const deleting = ref(false)
 
 const actionTarget = ref(null)
+const actionCatKey = ref(null)
 const actionSheetRef = ref(null)
 
 // 卡片内联详情：同时只展开一张
@@ -765,8 +766,8 @@ function openNew() {
   recomputeNext()
 }
 function actionSheetTitleId(id) { return `sub-action-title-${id}` }
-function openCardActions(s) { actionTarget.value = s }
-function closeCardActions() { actionTarget.value = null }
+function openCardActions(s, catKey) { actionTarget.value = s; actionCatKey.value = catKey }
+function closeCardActions() { actionTarget.value = null; actionCatKey.value = null }
 function editFromActions() {
   const target = actionTarget.value
   closeCardActions()
@@ -781,6 +782,12 @@ function deleteFromActions() {
   const target = actionTarget.value
   closeCardActions()
   if (target) askDelete(target)
+}
+function moveFromActions(dir) {
+  const target = actionTarget.value
+  const catKey = actionCatKey.value
+  closeCardActions()
+  if (target && catKey != null) moveSub(catKey, target.id, dir)
 }
 
 function openEdit(s) {
@@ -1125,6 +1132,10 @@ h1 { margin-top: 0; }
 .action-plan { font-size: 12px; margin-top: 2px; }
 .action-close { width: 36px; height: 36px; flex-shrink: 0; border: none; border-radius: 999px; background: var(--surface-2); color: var(--text-soft); cursor: pointer; font-size: 18px; line-height: 1; }
 .action-close:hover { color: var(--text); }
+.action-move { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; padding: 6px 0 8px; }
+.action-move-btn { min-height: 42px; border: 1px solid var(--border); border-radius: 14px; background: color-mix(in srgb, var(--surface-2) 72%, transparent);
+  color: var(--text-soft); font-size: 13px; font-weight: 750; cursor: pointer; }
+.action-move-btn:hover { color: var(--text); border-color: color-mix(in srgb, var(--primary) 36%, var(--border)); }
 .action-item { width: 100%; min-height: 48px; display: flex; align-items: center; gap: 10px; padding: 0 12px; border: none;
   border-radius: 16px; background: transparent; color: var(--text); font-size: 15px; font-weight: 700; text-align: left; cursor: pointer; }
 .action-item:hover { background: var(--surface-2); }
@@ -1150,7 +1161,7 @@ h1 { margin-top: 0; }
   .detail-grid { grid-template-columns: 1fr; }
   .detail-value { overflow-wrap: anywhere; }
   .sc-acts { display: none; }
-  .card-sort { display: grid; grid-template-columns: repeat(2, 1fr); margin-top: 8px; }
+  .card-sort { display: none; }
   .block { padding: 10px; margin-bottom: 10px; background: color-mix(in srgb, var(--surface-2) 42%, transparent); }
   .block-t { margin-bottom: 8px; }
   .icon-pick { width: 100%; justify-content: center; align-items: center; }
