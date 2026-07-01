@@ -998,7 +998,7 @@ h1 { margin-top: 0; }
 .sub-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 16px; }
 .sub-card { padding: 18px; cursor: pointer; position: relative; overflow: hidden;
   transition: transform .22s cubic-bezier(.2,.8,.2,1), box-shadow .22s ease, border-color .18s ease, background .18s ease; }
-.sub-card:not(.expanded) { min-height: 290px; }
+.sub-card:not(.expanded) { min-height: 240px; }
 .sub-card:focus-visible { outline: 2px solid var(--primary); outline-offset: 3px; }
 .sub-card.expanded { border-color: color-mix(in srgb, var(--primary) 45%, var(--border)); box-shadow: var(--shadow-lg);
   background: linear-gradient(180deg, color-mix(in srgb, var(--signal-cyan) 4%, var(--surface)), var(--surface)); }
