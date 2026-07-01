@@ -96,7 +96,7 @@
         </div>
         <button class="btn ghost sm" @click="refreshRates">↻ {{ t('settings.refreshRates') }}</button>
       </div>
-      <p v-if="rateMsg" class="feedback ok">{{ rateMsg }}</p>
+      <p v-if="rateMsg" class="feedback" :class="rateOk ? 'ok' : 'err'">{{ rateMsg }}</p>
       <div v-if="rates.items.length" class="rate-grid">
         <div v-for="r in rates.items" :key="r.code" class="rate">
           <div class="rate-code">{{ r.symbol }} {{ r.code }}</div>
@@ -264,6 +264,7 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import api from '../api'
 import { useAuth } from '../stores/auth'
+import { formatDateTimeInZone } from '../utils/time'
 
 const { t } = useI18n()
 const auth = useAuth()
@@ -298,6 +299,7 @@ const bkMsg = ref('')
 const bkOk = ref(false)
 const currencies = ref([])
 const rateMsg = ref('')
+const rateOk = ref(false)
 const rates = ref({ base: baseCurrency.value, updated_at: null, items: [] })
 const tgMsg = ref('')
 const tgOk = ref(false)
@@ -431,21 +433,27 @@ async function changeCurrency() {
   loadRates()
 }
 
-function fmtTime(s) { return s ? new Date(s).toLocaleString() : '' }
+function fmtTime(s) { return formatDateTimeInZone(s, sys.value?.timezone || 'Asia/Shanghai') }
 async function loadRates() {
   try { rates.value = (await api.get('/api/currencies/rate-table')).data }
   catch { /* ignore */ }
 }
 async function saveTg() {
-  await auth.updateMe({
-    telegram_enabled: tg.enabled,
-    telegram_bot_token: tg.bot_token,
-    telegram_chat_id: tg.chat_id,
-    telegram_admin_id: tg.admin_id,
-    telegram_api_base: tg.api_base || null,
-    telegram_proxy: tg.proxy || null
-  })
-  tgOk.value = true; tgMsg.value = t('settings.saved')
+  try {
+    await auth.updateMe({
+      telegram_enabled: tg.enabled,
+      telegram_bot_token: tg.bot_token,
+      telegram_chat_id: tg.chat_id,
+      telegram_admin_id: tg.admin_id,
+      telegram_api_base: tg.api_base || null,
+      telegram_proxy: tg.proxy || null
+    })
+    tgOk.value = true; tgMsg.value = t('settings.saved')
+    return true
+  } catch (e) {
+    tgOk.value = false; tgMsg.value = e.response?.data?.detail || 'Error'
+    return false
+  }
 }
 
 function normalizeBarkTtl() {
@@ -464,16 +472,21 @@ function normalizeBarkTtl() {
 async function saveBark() {
   const ttl = normalizeBarkTtl()
   if (ttl === undefined) return false
-  await auth.updateMe({
-    bark_enabled: bk.enabled,
-    bark_device_key: bk.device_key,
-    bark_server: bk.server || null,
-    bark_sound: bk.sound || null,
-    bark_group: bk.group || null,
-    bark_ttl: ttl
-  })
-  bkOk.value = true; bkMsg.value = t('settings.saved')
-  return true
+  try {
+    await auth.updateMe({
+      bark_enabled: bk.enabled,
+      bark_device_key: bk.device_key,
+      bark_server: bk.server || null,
+      bark_sound: bk.sound || null,
+      bark_group: bk.group || null,
+      bark_ttl: ttl
+    })
+    bkOk.value = true; bkMsg.value = t('settings.saved')
+    return true
+  } catch (e) {
+    bkOk.value = false; bkMsg.value = e.response?.data?.detail || 'Error'
+    return false
+  }
 }
 
 async function testBark() {
@@ -487,28 +500,36 @@ async function testBark() {
 }
 
 async function refreshRates() {
+  rateMsg.value = ''
   try {
     await api.post('/api/currencies/rates/refresh')
+    rateOk.value = true
     rateMsg.value = t('settings.ratesUpdated')
     await loadRates()
-  } catch (e) { rateMsg.value = e.response?.data?.detail || 'Error' }
+  } catch (e) {
+    rateOk.value = false
+    rateMsg.value = e.response?.data?.detail || 'Error'
+  }
 }
 async function checkBot() {
-  await saveTg()
+  const saved = await saveTg()
+  if (!saved) return
   try {
     const { data } = await api.get('/api/notifications/telegram/me')
     tgOk.value = true; tgMsg.value = `${t('settings.botOk')}: @${data.result?.username}`
   } catch (e) { tgOk.value = false; tgMsg.value = t('settings.botFail') + ': ' + (e.response?.data?.detail || '') }
 }
 async function testSend() {
-  await saveTg()
+  const saved = await saveTg()
+  if (!saved) return
   try {
     await api.post('/api/notifications/telegram/test', { chat_id: tg.chat_id })
     tgOk.value = true; tgMsg.value = t('settings.testOk')
   } catch (e) { tgOk.value = false; tgMsg.value = e.response?.data?.detail || 'Error' }
 }
 async function getUpdates() {
-  await saveTg()
+  const saved = await saveTg()
+  if (!saved) return
   try {
     const { data } = await api.get('/api/notifications/telegram/updates')
     const ids = (data.result || []).map((u) => u.message?.chat?.id).filter(Boolean)
@@ -519,8 +540,10 @@ async function getUpdates() {
 }
 
 onMounted(async () => {
-  currencies.value = (await api.get('/api/currencies')).data
-  sys.value = (await api.get('/api/system/info')).data
+  try { currencies.value = (await api.get('/api/currencies')).data }
+  catch { currencies.value = [] }
+  try { sys.value = (await api.get('/api/system/info')).data }
+  catch { sys.value = null }
   loadRates()
 })
 </script>
@@ -593,11 +616,20 @@ hr { border: none; border-top: 1px solid var(--border); margin: 16px 0; }
 @media (max-width: 720px) {
   .settings-page { gap: 14px; }
   .settings-hero { padding: 18px; }
+  .hero-copy p { line-height: 1.6; }
   .hero-metrics { grid-template-columns: 1fr; }
-  .form-grid, .form-grid.wide { grid-template-columns: 1fr; }
+  .metric-card b, .panel-title, .rate-code, .rate-val, .si b { overflow-wrap: anywhere; }
+  .form-grid, .form-grid.wide { grid-template-columns: 1fr; gap: 8px; }
   .field.span-2 { grid-column: auto; }
-  .panel-head { align-items: stretch; }
+  .panel-card { border-radius: 14px; }
+  .panel-head { align-items: stretch; gap: 10px; margin-bottom: 10px; }
+  .panel-head p { font-size: 12px; line-height: 1.55; }
   .panel-head .btn, .actions-row .btn, .actions-row .file-btn { flex: 1 1 100%; justify-content: center; text-align: center; }
-  .actions-row { align-items: stretch; }
+  .actions-row { align-items: stretch; gap: 8px; }
+  .switch { width: 100%; justify-content: space-between; min-height: 44px; padding: 8px 0; }
+  .theme-picker { flex-wrap: wrap; }
+  .rate-grid, .sys-grid { grid-template-columns: 1fr; }
+  .hint-box { grid-template-columns: 1fr; gap: 6px; }
+  .hint-box span { font-weight: 800; }
 }
 </style>

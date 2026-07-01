@@ -277,26 +277,29 @@ onMounted(async () => {
 }
 @media (max-width: 720px) {
   .cal-hero { gap: 14px; }
+  .title { flex-wrap: wrap; }
+  .cal-sub { line-height: 1.55; }
   .nav { width: 100%; justify-content: space-between; }
   .navbtn, .today-btn { min-width: 44px; height: 44px; }
   .cal-radar-bars { grid-template-columns: repeat(2, 1fr); }
+  .rb-label, .rb-amt { white-space: normal; line-height: 1.25; }
   .cal { display: none; }
   .agenda { display: flex; flex-direction: column; gap: 10px; padding: 12px; }
   .ag-day { border: 1px solid var(--border); border-radius: 14px; padding: 10px; background: linear-gradient(135deg, color-mix(in srgb, var(--signal-cyan) 4%, var(--surface)), var(--surface)); }
   .ag-day.today { border-color: color-mix(in srgb, var(--signal-cyan) 42%, var(--border)); box-shadow: 0 0 0 3px color-mix(in srgb, var(--signal-cyan) 10%, transparent); }
   .ag-day.overdue { border-color: color-mix(in srgb, var(--danger) 44%, var(--border)); }
   .ag-day.soon { border-color: color-mix(in srgb, var(--warning) 42%, var(--border)); }
-  .ag-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
-  .ag-date { font-weight: 700; }
+  .ag-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 8px; }
+  .ag-date { font-weight: 700; overflow-wrap: anywhere; }
   .ag-count { background: var(--surface-2); color: var(--text-soft); border-radius: 999px; padding: 2px 8px; font-size: 12px; }
-  .ag-ev { display: flex; align-items: center; gap: 8px; min-height: 44px; border-radius: 10px; padding: 6px 8px;
+  .ag-ev { display: grid; grid-template-columns: auto auto minmax(0, 1fr); align-items: center; gap: 8px; min-height: 44px; border-radius: 10px; padding: 6px 8px;
     border-left: 3px solid color-mix(in srgb, var(--c) 55%, transparent); background: color-mix(in srgb, var(--c) 10%, transparent); }
   .ag-ev.soon { border-left-color: var(--warning); background: color-mix(in srgb, var(--warning) 10%, transparent); }
   .ag-ev.overdue { border-left-color: var(--danger); background: color-mix(in srgb, var(--danger) 10%, transparent); }
   .ag-signal { width: 8px; height: 8px; border-radius: 999px; background: var(--c); flex-shrink: 0; box-shadow: 0 0 0 3px color-mix(in srgb, var(--c) 12%, transparent); }
   .ag-ico { width: 24px; height: 24px; border-radius: 6px; object-fit: contain; flex-shrink: 0; }
-  .ag-name { flex: 1; min-width: 0; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .ag-amt { font-size: 12px; white-space: nowrap; }
+  .ag-name { min-width: 0; font-weight: 600; white-space: normal; line-height: 1.35; overflow-wrap: anywhere; }
+  .ag-amt { grid-column: 3; font-size: 12px; white-space: normal; overflow-wrap: anywhere; }
   .ag-empty { padding: 28px 10px; text-align: center; }
   .month { font-size: 20px; }
 }

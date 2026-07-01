@@ -58,11 +58,11 @@ def _send_one(db, sub: Subscription, user: User, n: int, today: date, channel: s
         )
     except Exception as e:  # noqa: BLE001
         log.status = "failed"
-        log.message = f"{type(e).__name__}: {e}"
+        log.message = exchange.safe_error_message(e)
         ok = False
         activity.log(
             f"{channel}.reminder",
-            f"提醒「{sub.name}」发送失败（{channel}）：{e}",
+            f"提醒「{sub.name}」发送失败（{channel}）：{log.message}",
             user=user,
             level="error",
         )

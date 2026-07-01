@@ -122,26 +122,35 @@ def _restore_entities(db: Session, user: User, data: dict, replace: bool) -> int
             db.delete(s)
         db.flush()
 
-    # 现有可用实体（当前用户的 + 系统预置的），按名称去重，避免重复创建
+    # 现有可用实体（当前用户的 + 系统预置的），按名称去重，避免重复创建。
+    # 同名时优先复用当前用户自己的实体；只有用户侧不存在时才落到系统预置。
     existing_cats = {
         c.name: c
         for c in db.scalars(
-            select(Category).where(
-                or_(Category.user_id == user.id, Category.is_system.is_(True))
-            )
+            select(Category).where(Category.is_system.is_(True)).order_by(Category.id)
         ).all()
     }
+    existing_cats.update({
+        c.name: c
+        for c in db.scalars(
+            select(Category).where(Category.user_id == user.id).order_by(Category.id)
+        ).all()
+    })
     existing_pms = {
         p.name: p
         for p in db.scalars(
-            select(PaymentMethod).where(
-                or_(PaymentMethod.user_id == user.id, PaymentMethod.is_system.is_(True))
-            )
+            select(PaymentMethod).where(PaymentMethod.is_system.is_(True)).order_by(PaymentMethod.id)
         ).all()
     }
+    existing_pms.update({
+        p.name: p
+        for p in db.scalars(
+            select(PaymentMethod).where(PaymentMethod.user_id == user.id).order_by(PaymentMethod.id)
+        ).all()
+    })
     existing_bundles = {
         b.name: b
-        for b in db.scalars(select(Bundle).where(Bundle.user_id == user.id)).all()
+        for b in db.scalars(select(Bundle).where(Bundle.user_id == user.id).order_by(Bundle.id)).all()
     }
 
     cat_map: dict[int, int] = {}
@@ -238,6 +247,7 @@ def _restore_entities(db: Session, user: User, data: dict, replace: bool) -> int
             sub.next_renewal_date = compute_next_renewal(start, sub.cycle, sub.cycle_count)
         if billing_type == "one_time":
             sub.next_renewal_date = None
+            sub.auto_renew = False
         db.add(sub)
         count += 1
 

@@ -66,6 +66,27 @@ describe('expandRenewalsInRange', () => {
     expect(excluded).toHaveLength(0)
   })
 
+  it('handles month-end renewals inside the requested range', () => {
+    const events = expandRenewalsInRange([
+      baseSub({ next_renewal_date: '2024-01-31' })
+    ], '2024-02-01', '2024-02-29')
+
+    expect(events.map((e) => e.occurrence_date)).toEqual(['2024-02-29'])
+  })
+
+  it('handles yearly renewals from leap day', () => {
+    const events = expandRenewalsInRange([
+      baseSub({ cycle: 'year', next_renewal_date: '2024-02-29' })
+    ], '2025-02-01', '2025-02-28')
+
+    expect(events.map((e) => e.occurrence_date)).toEqual(['2025-02-28'])
+  })
+
+  it('returns an empty list for invalid ranges', () => {
+    expect(expandRenewalsInRange([baseSub()], 'bad', '2026-07-31')).toEqual([])
+    expect(expandRenewalsInRange([baseSub()], '2026-07-01', 'bad')).toEqual([])
+  })
+
   it('filters hidden, inactive, one-time and date-less subscriptions', () => {
     const events = expandRenewalsInRange([
       baseSub({ id: 1, show_in_calendar: false }),

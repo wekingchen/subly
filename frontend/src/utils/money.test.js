@@ -79,4 +79,14 @@ describe('formatMoney', () => {
   it('formats invalid amounts as zero', () => {
     expect(formatMoney('bad', 'CNY')).toBe('CNY 0.00')
   })
+
+  it('keeps zero, negative and large amounts stable', () => {
+    expect(formatMoney(0, 'CNY')).toBe('CNY 0.00')
+    expect(formatMoney(-12.345, 'CNY')).toBe('CNY -12.35')
+    expect(formatMoney(1234567.891, 'USD')).toBe('USD 1234567.89')
+  })
+
+  it('uses the currency string as a plain label for unknown currencies', () => {
+    expect(formatMoney(9.9, 'XYZ')).toBe('XYZ 9.90')
+  })
 })

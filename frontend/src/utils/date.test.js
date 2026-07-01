@@ -34,6 +34,12 @@ describe('parseLocalDate', () => {
     expect(parsed.getDate()).toBe(2)
     expect(parsed.getHours()).toBe(0)
   })
+
+  it('does not shift date-only strings across timezones', () => {
+    const parsed = parseLocalDate('2024-03-10')
+
+    expect(toISODate(parsed)).toBe('2024-03-10')
+  })
 })
 
 describe('daysLeft', () => {
@@ -49,6 +55,10 @@ describe('daysLeft', () => {
 
   it('supports a custom field when reading objects', () => {
     expect(daysLeft({ renew_at: '2024-01-03' }, { field: 'renew_at', now: '2024-01-01' })).toBe(2)
+  })
+
+  it('returns zero for date strings on the same local calendar day', () => {
+    expect(daysLeft('2024-01-01T23:59:59Z', { now: '2024-01-01' })).toBe(0)
   })
 
   it('returns null for invalid target dates', () => {

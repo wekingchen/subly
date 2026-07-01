@@ -29,6 +29,7 @@ describe('renewalStatus', () => {
 
   it('classifies overdue, soon and ok subscriptions', () => {
     expect(renewalStatus(recurring('2023-12-31'), { now: NOW })).toBe('overdue')
+    expect(renewalStatus(recurring('2024-01-01'), { now: NOW })).toBe('soon')
     expect(renewalStatus(recurring('2024-01-08'), { now: NOW })).toBe('soon')
     expect(renewalStatus(recurring('2024-01-09'), { now: NOW })).toBe('ok')
   })
@@ -61,6 +62,11 @@ describe('isSoon', () => {
     expect(isSoon(recurring('2024-01-04'), { now: NOW, soonDays: 2 })).toBe(false)
     expect(isSoon(recurring('2024-01-04'), { now: NOW, soonDays: 3 })).toBe(true)
   })
+
+  it('supports a zero-day soon window for today only', () => {
+    expect(isSoon(recurring('2024-01-01'), { now: NOW, soonDays: 0 })).toBe(true)
+    expect(isSoon(recurring('2024-01-02'), { now: NOW, soonDays: 0 })).toBe(false)
+  })
 })
 
 describe('radarBucket', () => {
@@ -77,6 +83,7 @@ describe('radarBucket', () => {
     expect(radarBucket(recurring('2024-01-04'), { now: NOW })).toBe('d3')
     expect(radarBucket(recurring('2024-01-08'), { now: NOW })).toBe('d7')
     expect(radarBucket(recurring('2024-01-20'), { now: NOW })).toBe('d30')
+    expect(radarBucket(recurring('2024-01-31'), { now: NOW })).toBe('d30')
   })
 
   it('returns null outside the horizon or for unsupported items', () => {

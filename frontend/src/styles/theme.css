@@ -50,6 +50,8 @@ html, body { margin: 0; background: var(--bg); color: var(--text);
   -webkit-font-smoothing: antialiased; transition: background-color .35s ease, color .35s ease;
   overflow-x: hidden; }
 body.modal-open { overflow: hidden; }
+a, button, input, select, textarea { max-width: 100%; }
+a, .card, .tag, .btn { overflow-wrap: anywhere; }
 /* 主题感知的背景光晕 + 极细雷达网格，让整体更有层次 */
 body::before { content: ''; position: fixed; inset: 0; z-index: -1; pointer-events: none;
   background:
@@ -152,12 +154,14 @@ tr:last-child td { border-bottom: none; }
   h1 { font-size: 20px; }
   .card { padding: 16px; border-radius: 14px; }
   .btn, .btn.sm, .seg button { min-height: var(--tap-size); }
+  .btn { display: inline-flex; align-items: center; justify-content: center; text-align: center; }
   input, select, textarea { min-height: var(--tap-size); font-size: 16px; }
-  .modal { padding: 18px; padding-bottom: calc(18px + env(safe-area-inset-bottom)); border-radius: 16px 16px 0 0; width: 100%; max-width: 100%;
-    max-height: calc(100dvh - env(safe-area-inset-top)); align-self: flex-end; }
+  .modal { display: flex; flex-direction: column; padding: 18px; padding-bottom: calc(18px + env(safe-area-inset-bottom)); border-radius: 16px 16px 0 0; width: 100%; max-width: 100%;
+    max-height: calc(100dvh - env(safe-area-inset-top)); align-self: flex-end; overscroll-behavior: contain; }
+  .modal > h3:first-child { padding-right: 42px; }
   .modal-mask { padding: 0; align-items: flex-end; }
   .modal-foot { bottom: calc(-18px - env(safe-area-inset-bottom)); margin: 16px -18px calc(-18px - env(safe-area-inset-bottom));
-    padding: 12px 18px calc(12px + env(safe-area-inset-bottom)); flex-wrap: wrap; }
+    padding: 12px 18px calc(12px + env(safe-area-inset-bottom)); flex-wrap: wrap; z-index: 2; }
   .modal-foot .btn { flex: 1 1 120px; }
   .row { gap: 10px; }
   /* 表单中的分栏在窄屏下自动占满整行 */

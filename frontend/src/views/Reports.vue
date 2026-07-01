@@ -563,11 +563,15 @@ h1 { margin: 0; }
 }
 @media (max-width: 720px) {
   .kpis { grid-template-columns: 1fr 1fr; }
-  .kpi-v { font-size: 20px; }
+  .kpi-v { font-size: 20px; overflow-wrap: anywhere; }
   .two { grid-template-columns: 1fr; }
   .desktop-only { display: none; }
   .mobile-only { display: flex; }
   .report-head-metrics { grid-template-columns: 1fr; }
+  .rb-label, .rb-amt, .ld-s { white-space: normal; line-height: 1.3; }
+  .ld-row { align-items: flex-start; }
+  .ld-n { white-space: normal; line-height: 1.35; overflow-wrap: anywhere; }
+  .ld-amt { white-space: normal; overflow-wrap: anywhere; }
 }
 @media (max-width: 480px) {
   .bar-row { grid-template-columns: 1fr auto; gap: 6px; }

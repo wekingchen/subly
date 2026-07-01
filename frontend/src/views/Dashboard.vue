@@ -307,7 +307,7 @@ h3 { margin-top: 0; }
 .event-line.overdue .event-signal { background: var(--danger); box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 14%, transparent); }
 .l-name { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .l-txt { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.l-right { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.l-right { display: flex; align-items: center; gap: 8px; flex-shrink: 0; min-width: 0; }
 /* 列表/分类项中的小图标：图片或 emoji 统一尺寸 */
 .mini-ico { width: 20px; height: 20px; border-radius: 5px; object-fit: contain; flex-shrink: 0;
   border: 1px solid var(--border); background: var(--surface-2); }
@@ -354,12 +354,19 @@ h3 { margin-top: 0; }
 @media (max-width: 720px) {
   .stats { grid-template-columns: 1fr 1fr; }
   .radar-bars { grid-template-columns: 1fr 1fr; }
-  .hero { flex-wrap: wrap; }
-  .hero .btn { margin-top: 8px; }
+  .hero { flex-direction: column; align-items: stretch; }
+  .hero .btn { margin-top: 4px; width: 100%; }
+  .sub { line-height: 1.55; }
+  .stat { align-items: flex-start; gap: 10px; }
   .stat .badge { width: 40px; height: 40px; }
   .stat .badge :deep(svg) { width: 20px; height: 20px; }
-  .stat .big { font-size: 21px; }
+  .stat .big { font-size: 20px; overflow-wrap: anywhere; }
+  .event-line { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: start; }
+  .l-name { align-items: flex-start; }
+  .l-txt { white-space: normal; line-height: 1.35; }
+  .l-right { grid-column: 2; flex-wrap: wrap; justify-content: flex-start; }
   .donut-wrap { flex-wrap: wrap; }
+  .cat-cols, .recent-grid { grid-template-columns: 1fr; }
 }
-@media (max-width: 380px) { .stats { grid-template-columns: 1fr; } }
+@media (max-width: 430px) { .stats { grid-template-columns: 1fr; } }
 </style>

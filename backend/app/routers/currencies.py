@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import or_, select
@@ -12,6 +12,16 @@ from app.schemas import CurrencyIn, CurrencyOut
 from app.services import exchange
 
 router = APIRouter(prefix="/api/currencies", tags=["currencies"])
+
+
+def _utc_iso(dt):
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    else:
+        dt = dt.astimezone(timezone.utc)
+    return dt.isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
 @router.get("", response_model=list[CurrencyOut])
@@ -62,7 +72,7 @@ def get_rates(user: User = Depends(get_current_user), db: Session = Depends(get_
     updated = max((r.updated_at for r in rows), default=None)
     return {
         "base": base,
-        "updated_at": updated,
+        "updated_at": _utc_iso(updated),
         "rates": {r.quote: r.rate for r in rows},
     }
 
@@ -93,7 +103,7 @@ def rate_table(user: User = Depends(get_current_user), db: Session = Depends(get
             }
         )
     items.sort(key=lambda x: x["code"])
-    return {"base": base, "updated_at": updated, "items": items}
+    return {"base": base, "updated_at": _utc_iso(updated), "items": items}
 
 
 @router.post("/rates/refresh")
@@ -102,7 +112,7 @@ def refresh_rates(user: User = Depends(get_current_user), db: Session = Depends(
         count = exchange.refresh_rates(db)
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"汇率刷新失败：{exchange.safe_error_message(e)}")
-    return {"ok": True, "updated": count, "at": datetime.utcnow()}
+    return {"ok": True, "updated": count, "at": _utc_iso(datetime.now(timezone.utc))}
 
 
 @router.post("/rates/auto-refresh")

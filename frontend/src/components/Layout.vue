@@ -10,7 +10,7 @@
     <!-- 遮罩（移动端抽屉打开时） -->
     <div v-if="drawer" class="drawer-mask" @click="drawer = false"></div>
 
-    <aside id="mobile-sidebar" class="sidebar" :class="{ open: drawer }" :role="drawer ? 'dialog' : undefined" :aria-modal="drawer ? 'true' : undefined" :aria-label="t('nav.menu')">
+    <aside id="mobile-sidebar" ref="drawerRef" class="sidebar" :class="{ open: drawer }" :aria-label="t('nav.menu')" tabindex="-1">
       <div class="brand-block">
         <div class="brand"><span class="brand-mark">⌁</span><span>Subly</span></div>
         <div class="brand-tag"><span class="signal-dot"></span>{{ t('nav.brandTag') }}</div>
@@ -50,6 +50,7 @@ const auth = useAuth()
 const router = useRouter()
 const drawer = ref(false)
 const hambRef = ref(null)
+const drawerRef = ref(null)
 
 function openDrawer() {
   drawer.value = true
@@ -59,7 +60,7 @@ function closeDrawer() {
 }
 watch(drawer, (open) => {
   document.body.classList.toggle('modal-open', open)
-  if (!open) nextTick(() => hambRef.value?.focus?.())
+  nextTick(() => (open ? drawerRef.value : hambRef.value)?.focus?.())
 })
 function onKey(e) {
   if (e.key === 'Escape' && drawer.value) closeDrawer()
@@ -170,14 +171,15 @@ function logout() {
   .hamb { width: 44px; height: 44px; border: none; background: transparent;
     font-size: 20px; color: var(--text); cursor: pointer; border-radius: 10px; }
   .topbar { padding-top: calc(10px + env(safe-area-inset-top)); padding-bottom: calc(10px + env(safe-area-inset-bottom)); }
-  .drawer-mask { display: block; position: fixed; inset: 0; background: rgba(15,18,35,.45);
+  .drawer-mask { display: block; position: fixed; inset: 0; background: rgba(15,18,35,.5);
     z-index: 48; }
-  .sidebar { position: fixed; top: 0; left: 0; height: 100dvh; width: 250px;
+  .sidebar { position: fixed; top: 0; left: 0; height: 100dvh; width: min(82vw, 280px);
     transform: translateX(-110%); transition: transform .25s ease; box-shadow: var(--shadow-lg);
-    overflow-y: auto; -webkit-overflow-scrolling: touch; padding-bottom: calc(18px + env(safe-area-inset-bottom)); }
+    overflow-y: auto; -webkit-overflow-scrolling: touch; padding-bottom: calc(18px + env(safe-area-inset-bottom)); outline: none; }
   .sidebar.open { transform: translateX(0); }
   .nav-list { gap: 14px; }
-  .nav-card { min-height: 46px; }
+  .nav-card { min-height: 48px; padding-block: 9px; }
+  .nav-label { white-space: normal; line-height: 1.25; }
   .content { padding: 16px 14px; min-width: 0; }
 }
 </style>

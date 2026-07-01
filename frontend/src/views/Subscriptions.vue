@@ -952,7 +952,7 @@ h1 { margin-top: 0; }
 .sc-ico.emoji { display: flex; align-items: center; justify-content: center; font-size: 26px; }
 .sc-title { flex: 1; min-width: 0; }
 .sc-name { font-weight: 700; font-size: 17px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.sc-plan { font-size: 12px; }
+.sc-plan { font-size: 12px; overflow-wrap: anywhere; }
 .card-grip { flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center; border: none; background: transparent; color: var(--text-soft); cursor: grab;
   padding: 5px 6px; border-radius: 8px; line-height: 1; user-select: none; }
 .card-grip:hover { background: var(--surface-2); color: var(--text); }
@@ -1040,24 +1040,39 @@ h1 { margin-top: 0; }
 .svc span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 @media (max-width: 720px) {
+  .bar { align-items: stretch; }
+  .bar .btn { width: 100%; }
   .sub-grid { grid-template-columns: 1fr; }
-  .sc-name { font-size: 16px; }
+  .sc-head { align-items: flex-start; gap: 10px; }
+  .sc-name { font-size: 16px; white-space: normal; line-height: 1.3; }
+  .sc-amount { font-size: 24px; overflow-wrap: anywhere; }
+  .sc-due { align-items: flex-start; flex-wrap: wrap; }
+  .quick-chip { white-space: normal; line-height: 1.35; border-radius: 12px; }
   .drag-hint { display: none; }
   .cat-head { cursor: default; flex-wrap: wrap; }
   .cat-head .grip { display: none; }
   .mobile-sort { display: inline-flex; margin-left: auto; }
-  .sub-card { cursor: pointer; }
+  .sub-card { cursor: pointer; padding: 16px; }
   .card-grip { display: none; }
+  .detail-section { padding: 10px; }
   .detail-grid { grid-template-columns: 1fr; }
+  .detail-value { overflow-wrap: anywhere; }
   .sc-acts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .sc-acts .btn { min-height: 44px; }
   .card-sort { display: grid; grid-template-columns: repeat(2, 1fr); margin-top: 8px; }
+  .block { padding: 10px; margin-bottom: 10px; background: color-mix(in srgb, var(--surface-2) 42%, transparent); }
+  .block-t { margin-bottom: 8px; }
   .icon-pick { width: 100%; justify-content: center; align-items: center; }
   .ico-lg { width: 56px; height: 56px; }
+  .radio-row { display: grid; grid-template-columns: 1fr; gap: 8px; }
+  .rb { min-height: 44px; align-items: center; }
+  .chips { gap: 8px; }
+  .chip { max-width: 100%; overflow-wrap: anywhere; }
   .lib-grid { grid-template-columns: repeat(auto-fill, minmax(44px, 1fr)); max-height: 190px; }
   .lib-ico-btn { width: 44px; height: 44px; justify-self: center; }
   .browser-group-t { min-height: 44px; padding: 6px 0; }
   .svc { min-height: 44px; }
+  .svc span { white-space: normal; line-height: 1.3; }
 }
 </style>
 
