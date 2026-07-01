@@ -1,10 +1,10 @@
 import { createI18n } from 'vue-i18n'
 
 const zh = {
-  app: { title: '省心订阅 Subly', tagline: '订阅 / 续费 / 保号，一个都不漏' },
+  app: { tagline: '订阅 / 续费 / 保号，一个都不漏' },
   nav: { dashboard: '雷达总览', subscriptions: '订阅账本', calendar: '续费日历', reports: '支出报表', notifications: '通知中心', logs: '实时日志', settings: '系统设置', iconLibrary: '服务管理', users: '用户管理', groupWorkspace: '雷达工作台', groupSystem: '通知与系统', groupAdmin: '管理员', logout: '退出', menu: '导航菜单', brandTag: '续费雷达' },
   notify: { title: '通知中心', runScan: '立即扫描提醒', empty: '暂无通知记录', sent: '已发送', failed: '失败', daysBefore: '提前天数' },
-  rtlog: { title: '实时日志', live: '实时', paused: '已暂停', action: '操作', user: '用户', detail: '详情', time: '时间', empty: '暂无日志', auto: '自动刷新' },
+  rtlog: { title: '实时日志', live: '实时', paused: '已暂停', empty: '暂无日志', auto: '自动刷新' },
   account: { title: '账号与密码', username: '用户名', email: '邮箱', saveAccount: '保存账号', changePwd: '修改密码', oldPwd: '原密码', newPwd: '新密码', pwdOk: '密码已修改', accountOk: '账号已更新' },
   sys: { title: '系统信息', version: '版本', dbStatus: '数据库', configured: '已连接', serverTime: '服务器时间', timezone: '时区', scanTime: '提醒扫描时间', yourSubs: '我的订阅', totalUsers: '用户总数', totalSubs: '订阅总数' },
   admin: {
@@ -14,13 +14,13 @@ const zh = {
     enable: '启用', disable: '禁用', resetPwd: '重置密码', resetPwdPrompt: '输入新密码：',
     newPwdPh: '新密码', deleteTitle: '删除用户',
     confirmDelete: '确认删除该用户及其全部数据？', create: '创建', cancel: '取消',
-    approved: '已通过', pending: '待审核', approve: '通过审核', emailUnverified: '邮箱未验证',
+    pending: '待审核', approve: '通过审核', emailUnverified: '邮箱未验证',
     pendingTab: '待审核 ({n})', allTab: '全部用户', noPending: '没有待审核的用户'
   },
   auth: {
     login: '登录', register: '注册', username: '用户名', email: '邮箱', password: '密码',
-    loginBtn: '登录', registerBtn: '注册', noAccount: '没有账户？去注册', hasAccount: '已有账户？去登录',
-    loginFail: '用户名或密码错误', welcome: '欢迎回来',
+    loginBtn: '登录', registerBtn: '注册',
+    loginFail: '用户名或密码错误',
     verifyTitle: '邮箱验证', verifyTip: '验证码已发送至 {email}，请查收并填写（10 分钟内有效）',
     radarKicker: 'Renewal signal live', radarTitle: '续费雷达控制台',
     radarSubtitle: '把订阅、域名、VPS 和提醒通道放进自己的自托管雷达站。',
@@ -31,8 +31,8 @@ const zh = {
   },
   dashboard: {
     monthSpend: '本月支出', yearSpend: '年度支出', active: '生效订阅', upcoming: '即将到期', recent: '最近订阅',
-    none: '暂无数据', perMonth: '/月', daysLeft: '剩 {n} 天', today: '今天到期',
-    overdue: '已过期', byCategory: '分类占比', avgMonth: '平均月支出', expiringSoon: '即将到期', viewAll: '查看全部',
+    none: '暂无数据', daysLeft: '剩 {n} 天', today: '今天到期',
+    overdue: '已过期', byCategory: '分类占比', viewAll: '查看全部',
     commandCenter: '控制台',
     greeting: '你好，{name} 👋', subtitle: '这是你的订阅总览', catOverview: '分类总览（全部订阅）',
     radarTitle: '续费雷达', radarHero: '未来 30 天有 {n} 项续费，预计 {amount}',
@@ -49,7 +49,7 @@ const zh = {
     plan: '套餐', planPh: '如 高级版 / 专业版',
     secService: '服务', secPrice: '价格信息', secBilling: '计费信息', secClassify: '分类与支付',
     secFamily: '家庭共享', secBundle: '捆绑包', secExtra: '附加信息', secCalendar: '日历',
-    iconLibrary: '图标库', iconUrl: '图标 URL', iconUrlImport: '下载', nameSuggest: '常用服务（点击选择）',
+    iconLibrary: '图标库', iconUrl: '图标 URL', iconUrlImport: '下载',
     family: '家庭成员', familyAdd: '添加成员', familyPh: '成员名称',
     bundleNone: '不使用捆绑包', bundleJoin: '加入已有捆绑包', bundleCreate: '创建捆绑包', bundleName: '捆绑包名称',
     showInCalendar: '在日历中显示', website: '官方网站',
@@ -76,17 +76,16 @@ const zh = {
     monthlyTotal: '每月合计', yearlyTotal: '每年合计', byCategory: '分类支出占比', spendTrend: '支出概览',
     recurringSubs: '循环订阅', permanentBuy: '永久购买', count: '数量', amount: '金额', date: '日期', type: '类型',
     permanentTotal: '永久购买总额', recurringMonthly: '循环订阅月支出', noData: '暂无可视化数据',
-    finRadar: '财务雷达', reportSubtitle: '支出结构、续费风险与近期付款信号', riskRadar: '续费压力', riskTotal: '风险信号',
-    categorySignal: '分类信号', paymentSignal: '付款信号'
+    finRadar: '财务雷达', reportSubtitle: '支出结构、续费风险与近期付款信号', riskRadar: '续费压力', riskTotal: '风险信号'
   },
   settings: {
-    title: '设置', language: '语言', theme: '主题', baseCurrency: '基准货币', telegram: 'Telegram 通知',
+    title: '设置', theme: '主题', baseCurrency: '基准货币', telegram: 'Telegram 通知',
     tgEnabled: '启用 Telegram 通知', botToken: 'Bot Token', adminId: 'Admin ID',
     apiBase: 'TG API 反代（可选）', proxy: 'HTTP 代理（可选）',
-    chatId: 'Chat ID', botStatus: '机器人状态', checkBot: '验证机器人', testSend: '发送测试',
+    chatId: 'Chat ID', checkBot: '验证机器人', testSend: '发送测试',
     getUpdates: '获取 Chat ID', save: '保存', saved: '已保存', refreshRates: '刷新汇率', ratesUpdated: '汇率已更新',
     themeLight: '浅色', themeDark: '深色', themeOcean: '海洋', themeForest: '森林', themePurple: '紫罗兰',
-    botOk: '机器人正常', botFail: '验证失败', testOk: '测试消息已发送', logs: '通知记录',
+    botOk: '机器人正常', botFail: '验证失败', testOk: '测试消息已发送',
     bark: 'Bark 推送', barkEnabled: '启用 Bark 推送', barkKey: 'Device Key',
     barkServer: '服务器地址（可选）', barkSound: '提示音（可选）', barkGroup: '分组（可选）', barkTtl: 'TTL（秒，可选）',
     barkTtlPh: '留空使用默认', barkTtlInvalid: 'TTL 必须是非负整数',
@@ -128,7 +127,7 @@ const zh = {
     overview: '概览', cachedCount: '{n} 已缓存', missingCount: '{n} 未缓存', activeCount: '{n} 启用', inactiveCount: '{n} 停用',
     exportList: '导出列表', refresh: '刷新', batch: '批量', selectAll: '全选', batchFetch: '抓取所选'
   },
-  common: { loading: '加载中...', save: '保存', actions: '操作', status: '状态', date: '日期', confirm: '确认', cancel: '取消', close: '关闭' }
+  common: { loading: '加载中...', actions: '操作', confirm: '确认', close: '关闭' }
 }
 
 export default createI18n({

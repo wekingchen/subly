@@ -22,12 +22,6 @@ export function renewalStatus(item, options = {}) {
   return 'ok'
 }
 
-export function dueClass(item, options = {}) {
-  const status = renewalStatus(item, options)
-  if (status === 'overdue' || status === 'soon') return status
-  return ''
-}
-
 export function isExpired(item, options = {}) {
   if (!isRecurring(item) || !hasRenewalDate(item, options.field || 'next_renewal_date')) return false
   const d = daysLeft(item, options)

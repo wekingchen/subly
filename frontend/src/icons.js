@@ -28,5 +28,3 @@ export function icon(name) {
     '</svg>'
   )
 }
-
-export default PATHS

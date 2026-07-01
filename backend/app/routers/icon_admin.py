@@ -1,6 +1,5 @@
 """管理员：服务图标库 CRUD + 图标预热任务。"""
 import threading
-import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
@@ -38,10 +37,6 @@ def _normalize_domain(value: str) -> str:
     raw = raw.split("?", 1)[0].split("#", 1)[0]
     return raw.strip().lower()
 
-
-def _slug_from_domain(domain: str) -> str:
-    safe = re_safe(domain)
-    return safe
 
 
 def re_safe(value: str) -> str:
