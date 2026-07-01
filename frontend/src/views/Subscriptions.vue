@@ -50,6 +50,9 @@
               <div class="muted sc-plan" v-if="s.plan">{{ s.plan }}</div>
             </div>
             <StatusChip :status="statusOf(s)">{{ statusChip(s) }}</StatusChip>
+            <button type="button" class="card-more"
+                    :aria-label="`${s.name || t('nav.subscriptions')}：更多操作`"
+                    @click.stop="openCardActions(s)">⋯</button>
             <button type="button" class="card-detail-toggle" :aria-expanded="isExpanded(s.id)"
                     :aria-controls="detailId(s.id)"
                     :aria-label="`${s.name || t('nav.subscriptions')}：${isExpanded(s.id) ? t('sub.collapse') : t('sub.expand')}`"
@@ -78,8 +81,7 @@
               <span class="sc-due-text">{{ t('sub.lifetime') }}</span>
             </div>
 
-            <div v-if="isExpired(s)" class="expired-banner">⚠️ {{ t('sub.expiredTag') }}</div>
-            <div v-else-if="isSoon(s)" class="soon-banner">⏰ {{ t('sub.soonTag') }}</div>
+            <div class="sc-meter" :class="statusOf(s)" aria-hidden="true"><span></span></div>
           </div>
 
           <div class="sc-quick">
@@ -193,6 +195,31 @@
           <button class="btn ghost" @click="delTarget = null">{{ t('sub.cancel') }}</button>
           <button class="btn danger" :disabled="deleting || !delPwd" @click="confirmDelete">{{ t('sub.delete') }}</button>
         </div>
+      </div>
+    </div>
+
+    <!-- 移动端更多操作 -->
+    <div v-if="actionTarget" class="action-mask" @click="closeCardActions">
+      <div ref="actionSheetRef" class="action-sheet" role="dialog" aria-modal="true"
+           :aria-labelledby="actionSheetTitleId(actionTarget.id)" tabindex="-1" @click.stop>
+        <div class="action-head">
+          <ServiceIcon :src="actionTarget.icon" :name="actionTarget.name" :fallback="actionTarget.icon || '🔖'"
+                       class="action-ico" loading="lazy" decoding="async" />
+          <div class="action-copy">
+            <div :id="actionSheetTitleId(actionTarget.id)" class="action-name">{{ actionTarget.name }}</div>
+            <div class="action-plan muted">{{ textOrDash(actionTarget.plan) }}</div>
+          </div>
+          <button type="button" class="action-close" :aria-label="t('common.close')" @click="closeCardActions">×</button>
+        </div>
+        <button class="action-item" @click="editFromActions">
+          <span>✎</span><span>{{ t('sub.edit') }}</span>
+        </button>
+        <button v-if="actionTarget.billing_type === 'recurring'" class="action-item" @click="renewFromActions">
+          <span>♻</span><span>{{ t('sub.renew') }}</span>
+        </button>
+        <button class="action-item danger" @click="deleteFromActions">
+          <span>×</span><span>{{ t('sub.delete') }}</span>
+        </button>
       </div>
     </div>
 
@@ -474,6 +501,9 @@ const delPwd = ref('')
 const delErr = ref('')
 const deleting = ref(false)
 
+const actionTarget = ref(null)
+const actionSheetRef = ref(null)
+
 // 卡片内联详情：同时只展开一张
 const expandedSubId = ref(null)
 function isExpanded(id) { return expandedSubId.value === id }
@@ -505,11 +535,19 @@ function bundleName(s) {
 function categoryName(s) { return catMeta(catKeyOf(s)).name }
 function familyText(s) { return s.family_members && s.family_members.length ? s.family_members.join('、') : DASH }
 
-watch([showForm, renewTarget, delTarget, showBrowser], () => {
-  const open = showForm.value || renewTarget.value || delTarget.value || showBrowser.value
+watch([showForm, renewTarget, delTarget, showBrowser, actionTarget], () => {
+  const open = showForm.value || renewTarget.value || delTarget.value || showBrowser.value || actionTarget.value
   document.body.classList.toggle('modal-open', !!open)
+  if (actionTarget.value) nextTick(() => actionSheetRef.value?.focus())
 })
-onBeforeUnmount(() => document.body.classList.remove('modal-open'))
+function onActionKeydown(e) {
+  if (e.key === 'Escape' && actionTarget.value) closeCardActions()
+}
+onMounted(() => window.addEventListener('keydown', onActionKeydown))
+onBeforeUnmount(() => {
+  window.removeEventListener('keydown', onActionKeydown)
+  document.body.classList.remove('modal-open')
+})
 
 const toasts = ref([])
 let toastId = 0
@@ -726,6 +764,25 @@ function openNew() {
   newBundleName.value = ''; suggestions.value = []; showForm.value = true
   recomputeNext()
 }
+function actionSheetTitleId(id) { return `sub-action-title-${id}` }
+function openCardActions(s) { actionTarget.value = s }
+function closeCardActions() { actionTarget.value = null }
+function editFromActions() {
+  const target = actionTarget.value
+  closeCardActions()
+  if (target) openEdit(target)
+}
+function renewFromActions() {
+  const target = actionTarget.value
+  closeCardActions()
+  if (target) askRenew(target)
+}
+function deleteFromActions() {
+  const target = actionTarget.value
+  closeCardActions()
+  if (target) askDelete(target)
+}
+
 function openEdit(s) {
   suppressAuto = true
   form.value = { ...s, next_renewal_date: s.next_renewal_date || '', family_members: [...(s.family_members || [])] }
@@ -934,6 +991,7 @@ h1 { margin-top: 0; }
 .sub-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 16px; }
 .sub-card { padding: 18px; cursor: pointer; position: relative; overflow: hidden;
   transition: transform .22s cubic-bezier(.2,.8,.2,1), box-shadow .22s ease, border-color .18s ease, background .18s ease; }
+.sub-card:not(.expanded) { min-height: 290px; }
 .sub-card:focus-visible { outline: 2px solid var(--primary); outline-offset: 3px; }
 .sub-card.expanded { border-color: color-mix(in srgb, var(--primary) 45%, var(--border)); box-shadow: var(--shadow-lg);
   background: linear-gradient(180deg, color-mix(in srgb, var(--signal-cyan) 4%, var(--surface)), var(--surface)); }
@@ -966,6 +1024,9 @@ h1 { margin-top: 0; }
   padding: 5px 6px; border-radius: 8px; line-height: 1; user-select: none; }
 .card-grip:hover { background: var(--surface-2); color: var(--text); }
 .card-grip:active { cursor: grabbing; }
+.card-more { display: none; flex-shrink: 0; align-items: center; justify-content: center; width: 32px; height: 32px;
+  border: none; border-radius: 999px; background: transparent; color: var(--text-soft); cursor: pointer; font-size: 20px; line-height: 1; }
+.card-more:hover { background: var(--surface-2); color: var(--text); }
 .card-detail-toggle { flex-shrink: 0; border: none; background: transparent; color: var(--text-soft); cursor: pointer;
   padding: 5px 8px; border-radius: 8px; line-height: 1; font-size: 14px; }
 .card-detail-toggle:hover { background: var(--surface-2); color: var(--text); }
@@ -981,10 +1042,11 @@ h1 { margin-top: 0; }
 .sc-due.soon .due, .sc-due.soon .sc-due-text { color: var(--warning); }
 .sc-due.overdue .due, .sc-due.overdue .sc-due-text { color: var(--danger); }
 .sc-due.oneTime .sc-due-text { color: var(--text-soft); font-style: italic; }
-.expired-banner { background: color-mix(in srgb, var(--danger) 14%, transparent); color: var(--danger); font-size: 12px; font-weight: 800;
-  border-radius: 8px; padding: 4px 10px; display: inline-block; width: fit-content; }
-.soon-banner { background: color-mix(in srgb, var(--warning) 16%, transparent); color: var(--warning); font-size: 12px; font-weight: 800;
-  border-radius: 8px; padding: 4px 10px; display: inline-block; width: fit-content; }
+.sc-meter { height: 4px; border-radius: 999px; overflow: hidden; background: color-mix(in srgb, var(--surface-2) 70%, transparent); }
+.sc-meter span { display: block; width: 54%; height: 100%; border-radius: inherit; background: color-mix(in srgb, var(--success) 62%, var(--signal-cyan)); }
+.sc-meter.soon span { width: 82%; background: var(--warning); }
+.sc-meter.overdue span { width: 100%; background: var(--danger); }
+.sc-meter.oneTime span { width: 38%; background: color-mix(in srgb, var(--text-soft) 46%, transparent); }
 .sc-quick { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
 .quick-chip { display: inline-flex; align-items: center; max-width: 100%; border: 1px solid var(--border); border-radius: 999px;
   padding: 3px 8px; color: var(--text-soft); background: color-mix(in srgb, var(--surface-2) 76%, transparent); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -1050,11 +1112,30 @@ h1 { margin-top: 0; }
 .svc-ico { width: 22px; height: 22px; border-radius: 5px; object-fit: contain; flex-shrink: 0; }
 .svc span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
+.action-mask { position: fixed; inset: 0; z-index: 70; display: flex; align-items: flex-end; justify-content: center;
+  padding: 14px; background: rgba(2, 6, 23, .54); backdrop-filter: blur(8px); }
+.action-sheet { width: min(430px, 100%); border: 1px solid color-mix(in srgb, var(--border) 76%, transparent); border-radius: 24px;
+  padding: 10px; background: linear-gradient(180deg, color-mix(in srgb, var(--surface) 94%, var(--signal-cyan)), var(--surface));
+  box-shadow: 0 22px 70px rgba(0, 0, 0, .34); }
+.action-head { display: flex; align-items: center; gap: 10px; padding: 8px 8px 12px; border-bottom: 1px solid var(--border); margin-bottom: 4px; }
+.action-ico { width: 36px; height: 36px; border-radius: 10px; object-fit: contain; border: 1px solid var(--border); background: var(--surface-2); flex-shrink: 0; }
+.action-ico.emoji { display: flex; align-items: center; justify-content: center; font-size: 22px; }
+.action-copy { flex: 1; min-width: 0; }
+.action-name { font-weight: 800; line-height: 1.25; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.action-plan { font-size: 12px; margin-top: 2px; }
+.action-close { width: 36px; height: 36px; flex-shrink: 0; border: none; border-radius: 999px; background: var(--surface-2); color: var(--text-soft); cursor: pointer; font-size: 18px; line-height: 1; }
+.action-close:hover { color: var(--text); }
+.action-item { width: 100%; min-height: 48px; display: flex; align-items: center; gap: 10px; padding: 0 12px; border: none;
+  border-radius: 16px; background: transparent; color: var(--text); font-size: 15px; font-weight: 700; text-align: left; cursor: pointer; }
+.action-item:hover { background: var(--surface-2); }
+.action-item.danger { color: var(--danger); }
+
 @media (max-width: 720px) {
   .bar { align-items: stretch; }
   .bar .btn { width: 100%; }
   .sub-grid { grid-template-columns: 1fr; }
   .sc-head { align-items: flex-start; gap: 10px; }
+  .card-more { display: inline-flex; }
   .sc-name { font-size: 16px; white-space: normal; line-height: 1.3; }
   .sc-amount { font-size: 24px; overflow-wrap: anywhere; }
   .sc-due { align-items: flex-start; flex-wrap: wrap; }
@@ -1068,17 +1149,7 @@ h1 { margin-top: 0; }
   .detail-section { padding: 10px; }
   .detail-grid { grid-template-columns: 1fr; }
   .detail-value { overflow-wrap: anywhere; }
-  .sc-acts { display: flex; align-items: center; gap: 6px; margin-top: 12px; padding-top: 10px;
-    border-top: 1px dashed color-mix(in srgb, var(--border) 82%, transparent); }
-  .sc-acts .act-btn { min-height: 44px; padding: 0 10px; border-radius: 999px; font-size: 12px;
-    font-weight: 750; letter-spacing: -.01em; box-shadow: none; white-space: nowrap; }
-  .sc-acts .act-edit { flex: 0 0 auto; color: var(--text-soft);
-    background: color-mix(in srgb, var(--surface-2) 72%, transparent); border-color: transparent; }
-  .sc-acts .act-renew { flex: 1 1 auto; min-width: 0; justify-content: center;
-    background: linear-gradient(135deg, color-mix(in srgb, var(--primary) 82%, #0b1020), color-mix(in srgb, var(--signal-cyan) 42%, var(--primary))); }
-  .sc-acts .act-delete { flex: 0 0 auto; min-width: 44px; color: var(--danger);
-    background: color-mix(in srgb, var(--danger) 8%, transparent);
-    border: 1px solid color-mix(in srgb, var(--danger) 22%, transparent); box-shadow: none; }
+  .sc-acts { display: none; }
   .card-sort { display: grid; grid-template-columns: repeat(2, 1fr); margin-top: 8px; }
   .block { padding: 10px; margin-bottom: 10px; background: color-mix(in srgb, var(--surface-2) 42%, transparent); }
   .block-t { margin-bottom: 8px; }
@@ -1093,20 +1164,6 @@ h1 { margin-top: 0; }
   .browser-group-t { min-height: 44px; padding: 6px 0; }
   .svc { min-height: 44px; }
   .svc span { white-space: normal; line-height: 1.3; }
-}
-
-@media (max-width: 380px) {
-  .sc-acts .act-edit,
-  .sc-acts .act-delete { flex: 0 0 44px; padding: 0; }
-  .sc-acts .act-edit .act-label,
-  .sc-acts .act-delete .act-label {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    overflow: hidden;
-    clip-path: inset(50%);
-    white-space: nowrap;
-  }
 }
 </style>
 
