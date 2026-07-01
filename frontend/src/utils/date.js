@@ -13,6 +13,36 @@ export function parseLocalDate(value) {
   return Number.isNaN(date.getTime()) ? null : date
 }
 
+export function toISODate(value) {
+  const date = parseLocalDate(value)
+  if (!date) return ''
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+}
+
+function daysInMonth(year, monthIndex) {
+  return new Date(year, monthIndex + 1, 0).getDate()
+}
+
+function addMonths(date, months) {
+  const source = parseLocalDate(date) || new Date()
+  const day = source.getDate()
+  const target = new Date(source)
+  target.setDate(1)
+  target.setMonth(target.getMonth() + months)
+  const dim = daysInMonth(target.getFullYear(), target.getMonth())
+  target.setDate(Math.min(day, dim))
+  return target
+}
+
+export function addCycleDate(dateOrString, cycle, count) {
+  const n = Math.max(1, Number(count) || 1)
+  const date = parseLocalDate(dateOrString) || new Date()
+  if (cycle === 'day') { date.setDate(date.getDate() + n); return date }
+  if (cycle === 'week') { date.setDate(date.getDate() + n * 7); return date }
+  if (cycle === 'year') return addMonths(date, n * 12)
+  return addMonths(date, n)
+}
+
 export function daysLeft(valueOrItem, options = {}) {
   const field = options.field || 'next_renewal_date'
   const value = valueOrItem && typeof valueOrItem === 'object' && !(valueOrItem instanceof Date)

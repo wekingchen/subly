@@ -71,8 +71,9 @@ import RadarBars from '../components/RadarBars.vue'
 import ServiceIcon from '../components/ServiceIcon.vue'
 import SignalDot from '../components/SignalDot.vue'
 import { useAuth } from '../stores/auth'
-import { parseLocalDate } from '../utils/date'
+import { toISODate } from '../utils/date'
 import { amountOf, formatMoney } from '../utils/money'
+import { expandRenewalsInRange, groupRenewalEventsByDate } from '../utils/recurrence'
 import { groupRenewalStatus, radarBucket as renewalRadarBucket, renewalStatus } from '../utils/renewal'
 
 const { t } = useI18n()
@@ -123,25 +124,25 @@ const cells = computed(() => {
   const firstDow = first.getDay()
   const today = new Date()
   const start = new Date(year.value, month.value, 1 - firstDow)
-  const arr = []
+  const dates = []
   for (let i = 0; i < 42; i++) {
-    const d = new Date(start.getFullYear(), start.getMonth(), start.getDate() + i)
-    const events = subs.value.filter((s) => {
-      if (!s.next_renewal_date || s.show_in_calendar === false) return false
-      const dt = parseLocalDate(s.next_renewal_date)
-      if (!dt) return false
-      return dt.getFullYear() === d.getFullYear() && dt.getMonth() === d.getMonth() && dt.getDate() === d.getDate()
-    })
-    arr.push({
+    dates.push(new Date(start.getFullYear(), start.getMonth(), start.getDate() + i))
+  }
+  // 若最后一整行都不属于本月则去掉（保持 5~6 行紧凑）
+  const visibleDates = dates.slice(35).every((d) => d.getMonth() !== month.value) ? dates.slice(0, 35) : dates
+  const eventsByDate = groupRenewalEventsByDate(
+    expandRenewalsInRange(subs.value, visibleDates[0], visibleDates[visibleDates.length - 1])
+  )
+
+  return visibleDates.map((d) => {
+    const key = toISODate(d)
+    return {
       day: d.getDate(),
       inMonth: d.getMonth() === month.value,
       isToday: today.getFullYear() === d.getFullYear() && today.getMonth() === d.getMonth() && today.getDate() === d.getDate(),
-      events
-    })
-  }
-  // 若最后一整行都不属于本月则去掉（保持 5~6 行紧凑）
-  if (arr.slice(35).every((c) => !c.inMonth)) return arr.slice(0, 35)
-  return arr
+      events: eventsByDate.get(key) || []
+    }
+  })
 })
 
 const visibleEvents = computed(() => cells.value.filter((c) => c.inMonth).flatMap((c) => c.events))

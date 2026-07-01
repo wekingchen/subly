@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { daysLeft, parseLocalDate } from './date'
+import { addCycleDate, daysLeft, parseLocalDate, toISODate } from './date'
 
 describe('parseLocalDate', () => {
   it('returns null for empty or invalid values', () => {
@@ -58,5 +58,45 @@ describe('daysLeft', () => {
   it('uses Math.ceil for partial-day differences', () => {
     const now = new Date(2024, 0, 1, 12, 0, 0)
     expect(daysLeft(new Date(2024, 0, 2, 0, 0, 0), { now })).toBe(1)
+  })
+})
+
+describe('toISODate', () => {
+  it('formats a date as local YYYY-MM-DD', () => {
+    expect(toISODate(new Date(2024, 0, 5))).toBe('2024-01-05')
+  })
+
+  it('accepts date-only string input', () => {
+    expect(toISODate('2024-03-09')).toBe('2024-03-09')
+  })
+
+  it('returns empty string for invalid input', () => {
+    expect(toISODate(null)).toBe('')
+    expect(toISODate('bad')).toBe('')
+  })
+})
+
+describe('addCycleDate', () => {
+  it('adds day and week cycles', () => {
+    expect(toISODate(addCycleDate('2024-01-01', 'day', 3))).toBe('2024-01-04')
+    expect(toISODate(addCycleDate('2024-01-01', 'week', 2))).toBe('2024-01-15')
+  })
+
+  it('handles month-end and leap year', () => {
+    expect(toISODate(addCycleDate('2024-01-31', 'month', 1))).toBe('2024-02-29')
+    expect(toISODate(addCycleDate('2023-01-31', 'month', 1))).toBe('2023-02-28')
+  })
+
+  it('handles year cycle on leap day', () => {
+    expect(toISODate(addCycleDate('2024-02-29', 'year', 1))).toBe('2025-02-28')
+  })
+
+  it('normalizes non-positive count to one', () => {
+    expect(toISODate(addCycleDate('2024-01-01', 'month', 0))).toBe('2024-02-01')
+    expect(toISODate(addCycleDate('2024-01-01', 'month', -2))).toBe('2024-02-01')
+  })
+
+  it('defaults unknown cycle to month', () => {
+    expect(toISODate(addCycleDate('2024-01-15', 'unknown', 1))).toBe('2024-02-15')
   })
 })

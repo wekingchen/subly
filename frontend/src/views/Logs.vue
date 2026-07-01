@@ -34,7 +34,7 @@
     <div class="card terminal-card">
       <div class="terminal-head">
         <div class="terminal-title"><span class="terminal-led" :class="{ on: live }"></span>{{ t('rtlog.auto') }}</div>
-        <span class="muted mono-data">limit=400 · interval=4s</span>
+        <span class="muted mono-data">limit=400 · interval=4s · tz={{ displayTimezone }}</span>
       </div>
       <div class="log-stream">
         <div v-for="l in logs" :key="l.id" class="log-line" :class="levelClass(l.level)">
@@ -55,10 +55,12 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import api from '../api'
+import { formatTimeInZone } from '../utils/time'
 
 const { t } = useI18n()
 const logs = ref([])
 const live = ref(true)
+const displayTimezone = ref('Asia/Shanghai')
 let lastId = 0
 let timer = null
 
@@ -72,12 +74,16 @@ function levelClass(level) {
   if (text.includes('warn')) return 'warn'
   return 'info'
 }
-function fmt(s) { return s ? new Date(s).toLocaleTimeString() : '' }
+function fmt(s) { return formatTimeInZone(s, displayTimezone.value) }
 
 async function initial() {
-  const { data } = await api.get('/api/logs', { params: { limit: 100 } })
-  logs.value = data
-  lastId = data.length ? data[data.length - 1].id : 0
+  const [logRes, infoRes] = await Promise.all([
+    api.get('/api/logs', { params: { limit: 100 } }),
+    api.get('/api/system/info').catch(() => null)
+  ])
+  logs.value = logRes.data
+  lastId = logRes.data.length ? logRes.data[logRes.data.length - 1].id : 0
+  if (infoRes?.data?.timezone) displayTimezone.value = infoRes.data.timezone
 }
 
 async function poll() {

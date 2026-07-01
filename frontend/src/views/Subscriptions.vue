@@ -106,7 +106,7 @@
     </div>
 
     <!-- 续费确认弹窗 -->
-    <div v-if="renewTarget" class="modal-mask" @click.self="renewTarget = null">
+    <div v-if="renewTarget" class="modal-mask">
       <div class="modal" style="width:460px">
         <button class="modal-x" :aria-label="t('common.close')" @click="renewTarget = null">×</button>
         <h3>♻️ {{ t('sub.renewTitle') }}</h3>
@@ -133,7 +133,7 @@
     </div>
 
     <!-- 删除确认（需验证密码） -->
-    <div v-if="delTarget" class="modal-mask" @click.self="delTarget = null">
+    <div v-if="delTarget" class="modal-mask">
       <div class="modal" style="width:420px">
         <button class="modal-x" :aria-label="t('common.close')" @click="delTarget = null">×</button>
         <h3>🗑️ {{ t('sub.deleteTitle') }}</h3>
@@ -148,7 +148,7 @@
     </div>
 
     <!-- 添加/编辑订阅 -->
-    <div v-if="showForm" class="modal-mask" @click.self="showForm = false">
+    <div v-if="showForm" class="modal-mask">
       <div class="modal">
         <button class="modal-x" :aria-label="t('common.close')" @click="showForm = false">×</button>
         <h3>{{ form.id ? t('sub.edit') : t('sub.add') }}</h3>
@@ -349,7 +349,7 @@
     </div>
 
     <!-- 按分类浏览服务库 -->
-    <div v-if="showBrowser" class="modal-mask browser" @click.self="showBrowser = false">
+    <div v-if="showBrowser" class="modal-mask browser">
       <div class="modal">
         <div class="head" style="margin-bottom:10px">
           <h3 style="margin:0">📚 {{ t('sub.browseTitle') }}</h3>
@@ -387,7 +387,7 @@ import MoneyText from '../components/MoneyText.vue'
 import ServiceIcon from '../components/ServiceIcon.vue'
 import StatusChip from '../components/StatusChip.vue'
 import { useAuth } from '../stores/auth'
-import { daysLeft, parseLocalDate } from '../utils/date'
+import { addCycleDate, daysLeft, parseLocalDate, toISODate } from '../utils/date'
 import { isExpired, isSoon, renewalStatus } from '../utils/renewal'
 
 const { t } = useI18n()
@@ -461,33 +461,13 @@ function statusChip(s) {
   return t('sub.statusSafe')
 }
 
-/* ---------- 客户端续费日计算（与后端 billing.add_cycle 对齐） ---------- */
-function addMonths(d, months) {
-  const base = new Date(d)
-  const day = base.getDate()
-  const target = new Date(base.getFullYear(), base.getMonth() + months, 1)
-  const dim = new Date(target.getFullYear(), target.getMonth() + 1, 0).getDate()
-  target.setDate(Math.min(day, dim))
-  return target
-}
-function addCycle(dateStr, cycle, count) {
-  const n = Math.max(1, count || 1)
-  const d = parseLocalDate(dateStr) || new Date()
-  if (cycle === 'day') { d.setDate(d.getDate() + n); return d }
-  if (cycle === 'week') { d.setDate(d.getDate() + n * 7); return d }
-  if (cycle === 'year') return addMonths(d, n * 12)
-  return addMonths(d, n)
-}
-function toISO(d) {
-  const x = new Date(d)
-  return `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, '0')}-${String(x.getDate()).padStart(2, '0')}`
-}
+/* ---------- 客户端续费日计算复用共享工具（utils/date.js，与后端 billing.add_cycle 对齐） ---------- */
 
 function blank() {
   return {
     id: null, name: '', plan: '', icon: '', amount: 0, currency: 'CNY',
     category_id: null, payment_method_id: null, bundle_id: null, billing_type: 'recurring',
-    cycle: 'month', cycle_count: 1, start_date: toISO(new Date()),
+    cycle: 'month', cycle_count: 1, start_date: toISODate(new Date()),
     next_renewal_date: '', end_date: null, url: '', notes: '', remark: '', ipv4: '', ipv6: '',
     remind_days_before: '7,1', auto_renew: true, is_active: true,
     show_in_calendar: true, family_members: []
@@ -498,7 +478,7 @@ let suppressAuto = false
 function recomputeNext() {
   if (form.value.billing_type !== 'recurring') { form.value.next_renewal_date = ''; return }
   if (form.value.start_date) {
-    form.value.next_renewal_date = toISO(addCycle(form.value.start_date, form.value.cycle, form.value.cycle_count))
+    form.value.next_renewal_date = toISODate(addCycleDate(form.value.start_date, form.value.cycle, form.value.cycle_count))
   }
 }
 watch(
@@ -777,12 +757,12 @@ async function save() {
 /* ---------- 续费 ---------- */
 function askRenew(s) { renewTarget.value = s; renewMode.value = 'today' }
 const previewToday = computed(() =>
-  renewTarget.value ? toISO(addCycle(new Date(), renewTarget.value.cycle, renewTarget.value.cycle_count)) : ''
+  renewTarget.value ? toISODate(addCycleDate(new Date(), renewTarget.value.cycle, renewTarget.value.cycle_count)) : ''
 )
 const previewDue = computed(() => {
   if (!renewTarget.value) return ''
   const base = renewTarget.value.next_renewal_date ? parseLocalDate(renewTarget.value.next_renewal_date) : new Date()
-  return toISO(addCycle(base, renewTarget.value.cycle, renewTarget.value.cycle_count))
+  return toISODate(addCycleDate(base, renewTarget.value.cycle, renewTarget.value.cycle_count))
 })
 async function confirmRenew() {
   if (!renewTarget.value || renewing.value) return
