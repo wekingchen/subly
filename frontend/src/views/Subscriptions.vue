@@ -341,30 +341,12 @@
       </div>
     </div>
 
-    <!-- 按分类浏览服务库 -->
-    <div v-if="showBrowser" class="modal-mask browser">
-      <div class="modal">
-        <div class="head" style="margin-bottom:10px">
-          <h3 style="margin:0">📚 {{ t('sub.browseTitle') }}</h3>
-          <button class="btn ghost sm" @click="showBrowser = false">{{ t('common.close') }}</button>
-        </div>
-        <p class="muted" style="font-size:13px;margin-top:0">{{ t('sub.pickHint') }}</p>
-        <input v-model="browserQ" :placeholder="t('sub.searchPh')" style="margin-bottom:12px" />
-        <div v-for="g in groupedLib" :key="g.key" class="lib-group">
-          <button class="lib-group-t browser-group-t" @click="toggleBrowserGroup(g.key)">
-            <span>{{ isBrowserGroupExpanded(g.key) ? '▾' : '▸' }}</span>
-            <span>{{ g.label }}</span>
-            <span class="muted">({{ g.items.length }})</span>
-          </button>
-          <div v-if="isBrowserGroupExpanded(g.key)" class="svc-grid">
-            <button v-for="s in g.items" :key="s.slug" class="svc" @click="pickFromBrowser(s)">
-              <ServiceIcon :src="s.icon" :name="s.name" class="svc-ico" loading="lazy" decoding="async" /> <span>{{ s.name }}</span>
-            </button>
-          </div>
-        </div>
-        <p v-if="!groupedLib.length" class="muted">{{ t('reports.empty') }}</p>
-      </div>
-    </div>
+    <ServiceBrowserModal
+      v-if="showBrowser"
+      :services="iconLib"
+      @close="showBrowser = false"
+      @pick="pickFromBrowser"
+    />
 
     <div class="toast-wrap">
       <div v-for="tst in toasts" :key="tst.id" class="toast" :class="tst.type">{{ tst.msg }}</div>
@@ -380,11 +362,12 @@ import ServiceIcon from '../components/ServiceIcon.vue'
 import ActionMenuContent from '../components/subscriptions/ActionMenuContent.vue'
 import DeleteSubscriptionModal from '../components/subscriptions/DeleteSubscriptionModal.vue'
 import RenewSubscriptionModal from '../components/subscriptions/RenewSubscriptionModal.vue'
+import ServiceBrowserModal from '../components/subscriptions/ServiceBrowserModal.vue'
 import SubscriptionCard from '../components/subscriptions/SubscriptionCard.vue'
 import { useAuth } from '../stores/auth'
 import { addCycleDate, parseLocalDate, toISODate } from '../utils/date'
 import { amountOf, hasBaseEquivalent } from '../utils/money'
-import { buildServicePickPatch, findCategoryIdByServiceKey, getServiceCategoryKeys, getServiceCategoryLabel, groupServicesByCategory, isVpsCategory as isVpsServiceCategory, suggestServicesByName } from '../utils/serviceLibrary'
+import { buildServicePickPatch, isVpsCategory as isVpsServiceCategory, suggestServicesByName } from '../utils/serviceLibrary'
 import { buildGroupedSubscriptions, buildSubscriptionOrderState, categoryOrderToPersistedIds, getCategoryMeta, getSubscriptionCategoryKey, moveCategoryByOffset, moveCategoryToTarget, moveValueByOffset, moveValueToTarget, UNCATEGORIZED_KEY } from '../utils/subscriptionOrdering'
 import { buildSubscriptionPayload, cloneSubscriptionForEdit, computeNextRenewalDate, createBlankSubscriptionForm } from '../utils/subscriptionForm'
 
@@ -410,8 +393,6 @@ const newBundleName = ref('')
 const suggestions = ref([])
 
 const showBrowser = ref(false)
-const browserQ = ref('')
-const openBrowserGroups = ref(new Set())
 
 const renewTarget = ref(null)
 const renewMode = ref('today')
@@ -722,9 +703,6 @@ function openEdit(s) {
 function onNameInput() {
   suggestions.value = suggestServicesByName(iconLib.value, form.value.name, 6)
 }
-function findCategoryByKey(key) { return findCategoryIdByServiceKey(key, categories.value) }
-function serviceCategoryKeys(svc) { return getServiceCategoryKeys(svc) }
-function serviceCategoryLabel(svc, key, index) { return getServiceCategoryLabel(svc, key, index) }
 const isVpsCategory = computed(() => {
   const c = categories.value.find((x) => x.id === form.value.category_id)
   return isVpsServiceCategory(c)
@@ -736,19 +714,8 @@ function pickService(s) {
 }
 
 function openBrowser() {
-  browserQ.value = ''
-  openBrowserGroups.value = new Set()
   showBrowser.value = true
 }
-const browserHasQuery = computed(() => browserQ.value.trim().length > 0)
-function isBrowserGroupExpanded(key) { return browserHasQuery.value || openBrowserGroups.value.has(key) }
-function toggleBrowserGroup(key) {
-  const next = new Set(openBrowserGroups.value)
-  if (next.has(key)) next.delete(key)
-  else next.add(key)
-  openBrowserGroups.value = next
-}
-const groupedLib = computed(() => groupServicesByCategory(iconLib.value, browserQ.value))
 function pickFromBrowser(s) { pickService(s); showBrowser.value = false }
 
 function addMember() {
@@ -926,18 +893,6 @@ h1 { margin-top: 0; }
 .rb { display: flex; align-items: center; gap: 6px; width: auto; margin: 0; font-size: 14px; color: var(--text); }
 .rb input { width: auto; }
 
-.browser .modal { width: 560px; }
-.lib-group { margin-bottom: 14px; }
-.lib-group-t { font-size: 13px; font-weight: 600; color: var(--text-soft); margin-bottom: 8px; }
-.browser-group-t { width: 100%; display: flex; align-items: center; gap: 6px; padding: 0; border: none; background: transparent; cursor: pointer; text-align: left; }
-.svc-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
-.svc { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border: 1px solid var(--border);
-  border-radius: 10px; background: var(--surface); cursor: pointer; font-size: 13px; color: var(--text);
-  text-align: left; transition: border-color .12s, background .12s; }
-.svc:hover { border-color: var(--primary); background: var(--primary-soft); }
-.svc-ico { width: 22px; height: 22px; border-radius: 5px; object-fit: contain; flex-shrink: 0; }
-.svc span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-
 .action-mask { position: fixed; inset: 0; z-index: 70; display: flex; align-items: flex-end; justify-content: center;
   padding: 14px; background: rgba(2, 6, 23, .54); backdrop-filter: blur(8px); }
 .action-sheet { width: min(430px, 100%); border: 1px solid color-mix(in srgb, var(--border) 76%, transparent); border-radius: 24px;
@@ -975,9 +930,6 @@ h1 { margin-top: 0; }
   .chip { max-width: 100%; overflow-wrap: anywhere; }
   .lib-grid { grid-template-columns: repeat(auto-fill, minmax(44px, 1fr)); max-height: 190px; }
   .lib-ico-btn { width: 44px; height: 44px; justify-self: center; }
-  .browser-group-t { min-height: 44px; padding: 6px 0; }
-  .svc { min-height: 44px; }
-  .svc span { white-space: normal; line-height: 1.3; }
 }
 </style>
 
