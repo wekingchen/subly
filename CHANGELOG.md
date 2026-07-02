@@ -21,6 +21,7 @@
 
 ### Changed
 - README、Docker Hub、NAS 与技术文档统一项目名表述：正式名称使用 `Subly`，中文定位调整为“你的自托管续费雷达”。
+- 桌面端订阅卡片动作区降权为更轻的续费雷达工具条，并补充「续费」仅更新记录与到期日、不触发付款的说明，避免误认为支付入口。
 - 抽取共享周期日期工具 `utils/date.js`（`toISODate` / `addCycleDate`），订阅页与日历展开复用同一套周期推进逻辑，与后端 `billing.add_cycle` 语义对齐。
 - 新增 `utils/recurrence.js` 与 `utils/time.js`：分别负责日历范围内的续费事件展开与按目标时区格式化时间。
 

@@ -139,7 +139,9 @@
               <span class="act-ico" aria-hidden="true">✎</span>
               <span class="act-label">{{ t('sub.edit') }}</span>
             </button>
-            <button v-if="s.billing_type === 'recurring'" class="btn sm act-btn act-renew" @click.stop="askRenew(s)">
+            <button v-if="s.billing_type === 'recurring'" class="btn sm ghost act-btn act-renew"
+                    :title="t('sub.renewHint')"
+                    @click.stop="askRenew(s)">
               <span class="act-ico" aria-hidden="true">♻</span>
               <span class="act-label">{{ t('sub.renew') }}</span>
             </button>
@@ -158,6 +160,7 @@
         <button class="modal-x" :aria-label="t('common.close')" @click="renewTarget = null">×</button>
         <h3>♻️ {{ t('sub.renewTitle') }}</h3>
         <p style="font-size:14px;line-height:1.6">{{ t('sub.renewMsg', { name: renewTarget.name }) }}</p>
+        <p class="muted" style="font-size:12px;margin-top:-4px">{{ t('sub.renewDisclaimer') }}</p>
         <label class="opt" :class="{ on: renewMode === 'today' }">
           <input type="radio" value="today" v-model="renewMode" />
           <div>
@@ -996,7 +999,7 @@ h1 { margin-top: 0; }
 
 /* 信号卡 */
 .sub-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 16px; }
-.sub-card { padding: 18px; cursor: pointer; position: relative; overflow: hidden;
+.sub-card { display: flex; flex-direction: column; padding: 18px; cursor: pointer; position: relative; overflow: hidden;
   transition: transform .22s cubic-bezier(.2,.8,.2,1), box-shadow .22s ease, border-color .18s ease, background .18s ease; }
 .sub-card:not(.expanded) { min-height: 240px; }
 .sub-card:focus-visible { outline: 2px solid var(--primary); outline-offset: 3px; }
@@ -1008,13 +1011,8 @@ h1 { margin-top: 0; }
 .status-strip.soon { background: var(--warning); opacity: .85; }
 .status-strip.overdue { background: var(--danger); }
 .status-strip.oneTime { background: var(--text-soft); opacity: .22; }
-.sub-card::after { content: ''; position: absolute; top: 0; left: -60%; width: 40%; height: 100%;
-  background: linear-gradient(100deg, transparent, color-mix(in srgb, var(--primary) 12%, transparent), transparent);
-  transform: skewX(-18deg); opacity: 0; transition: opacity .3s; pointer-events: none; }
 .sub-card:hover { transform: translateY(-3px); box-shadow: var(--shadow-lg);
   border-color: color-mix(in srgb, var(--primary) 40%, var(--border)); }
-.sub-card:hover::after { opacity: 1; animation: sheen .8s ease; }
-@keyframes sheen { from { left: -60%; } to { left: 130%; } }
 .sub-card:hover .sc-ico { transform: scale(1.05) rotate(-2deg); }
 .sub-card.inactive { opacity: .55; }
 .sub-card.expired { border-color: var(--danger); box-shadow: 0 0 0 1px var(--danger), var(--shadow); }
@@ -1028,7 +1026,9 @@ h1 { margin-top: 0; }
 .sc-name { font-weight: 700; font-size: 17px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .sc-plan { font-size: 12px; overflow-wrap: anywhere; }
 .card-grip { flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center; border: none; background: transparent; color: var(--text-soft); cursor: grab;
-  padding: 5px 6px; border-radius: 8px; line-height: 1; user-select: none; }
+  padding: 5px 6px; border-radius: 8px; line-height: 1; user-select: none; opacity: .35; transition: opacity .15s ease, background .12s ease, color .12s ease; }
+.sub-card:hover .card-grip,
+.card-grip:focus-visible { opacity: 1; }
 .card-grip:hover { background: var(--surface-2); color: var(--text); }
 .card-grip:active { cursor: grabbing; }
 .card-more { display: none; flex-shrink: 0; align-items: center; justify-content: center; width: 32px; height: 32px;
@@ -1049,7 +1049,7 @@ h1 { margin-top: 0; }
 .sc-due.soon .due, .sc-due.soon .sc-due-text { color: var(--warning); }
 .sc-due.overdue .due, .sc-due.overdue .sc-due-text { color: var(--danger); }
 .sc-due.oneTime .sc-due-text { color: var(--text-soft); font-style: italic; }
-.sc-meter { height: 4px; border-radius: 999px; overflow: hidden; background: color-mix(in srgb, var(--surface-2) 70%, transparent); }
+.sc-meter { height: 3px; border-radius: 999px; overflow: hidden; background: color-mix(in srgb, var(--surface-2) 48%, transparent); }
 .sc-meter span { display: block; width: 54%; height: 100%; border-radius: inherit; background: color-mix(in srgb, var(--success) 62%, var(--signal-cyan)); }
 .sc-meter.soon span { width: 82%; background: var(--warning); }
 .sc-meter.overdue span { width: 100%; background: var(--danger); }
@@ -1073,9 +1073,13 @@ h1 { margin-top: 0; }
 .due.soon { color: var(--warning); font-weight: 600; }
 .due.overdue { color: var(--danger); font-weight: 700; }
 .tag.one_time { background: #fef3c7; color: #b45309; }
-.sc-acts { display: flex; gap: 6px; margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--border); }
+.sc-acts { display: flex; gap: 8px; margin-top: auto; padding-top: 10px; border-top: 1px dashed color-mix(in srgb, var(--border) 80%, transparent); }
 .sc-acts .btn { flex: 1; }
 .act-btn { display: inline-flex; align-items: center; justify-content: center; gap: 4px; }
+.btn.act-renew { background: var(--primary-soft); color: var(--primary);
+  border: 1px solid color-mix(in srgb, var(--primary) 24%, var(--border)); box-shadow: none; }
+.btn.act-renew:hover { background: color-mix(in srgb, var(--primary-soft) 70%, var(--primary) 14%);
+  border-color: color-mix(in srgb, var(--primary) 38%, var(--border)); transform: none; box-shadow: none; }
 .act-ico { display: inline-flex; align-items: center; justify-content: center; line-height: 1; }
 
 /* 续费弹窗单选 */

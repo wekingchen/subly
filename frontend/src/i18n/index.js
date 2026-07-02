@@ -55,6 +55,8 @@ const zh = {
     showInCalendar: '在日历中显示', website: '官方网站',
     browse: '按分类浏览', browseTitle: '选择服务', searchPh: '搜索服务名…', pickHint: '点击下方服务快速填入名称、图标与官网',
     renewTitle: '确认续费', renewMsg: '为「{name}」选择续费方式：',
+    renewHint: '标记当期已续费，推进下次到期日；此操作不会触发付款。',
+    renewDisclaimer: '此操作只更新你的续费记录与下次到期日，不会向任何服务付款。',
     renewToday: '保号 / 提前续费：从今天起 +1 个周期（重新计周期）',
     renewDue: '常规循环：从原到期日 +1 个周期（不浪费已付时间）',
     renewNext: '续费后下次到期：', renewOk: '已续费，下次到期 {date}', confirm: '确认续费',
