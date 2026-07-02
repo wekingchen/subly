@@ -40,6 +40,7 @@ const zh = {
   },
   sub: {
     add: '添加订阅', edit: '编辑订阅', name: '名称', amount: '金额', currency: '货币',
+    ledgerKicker: '续费雷达 · 订阅账本', ledgerSubtitle: '按分类收拢每一条续费信号，提前看见风险，也保留已买断的长期记录。', ledgerCount: '{n} 条信号', emptyTitle: '还没有订阅信号', emptyDesc: '添加第一条订阅，把续费日、付款方式和提醒规则收进账本。', emptyFilteredTitle: '当前筛选没有结果', emptyFilteredDesc: '切回全部订阅，或添加符合当前类型的新记录。',
     category: '分类', payment: '付款方式', billingType: '计费类型', recurring: '周期订阅', oneTime: '一次性买断',
     cycle: '周期', cycleCount: '每', day: '天', week: '周', month: '月', year: '年',
     startDate: '开始日期', nextRenewal: '下次续费', endDate: '结束日期', url: '链接', notes: '备注',

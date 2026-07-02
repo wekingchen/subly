@@ -1,20 +1,35 @@
 <template>
   <div>
-    <div class="head">
-      <h1>{{ t('nav.subscriptions') }}</h1>
-      <button class="btn" @click="openNew">+ {{ t('sub.add') }}</button>
-    </div>
+    <section class="ledger-hero radar-grid-bg">
+      <div class="ledger-hero-main">
+        <div class="ledger-kicker"><span class="signal-dot"></span>{{ t('sub.ledgerKicker') }}</div>
+        <h1>{{ t('nav.subscriptions') }}</h1>
+        <p class="ledger-subtitle">{{ t('sub.ledgerSubtitle') }}</p>
+      </div>
+      <div class="ledger-hero-side">
+        <div class="ledger-count mono-data">{{ t('sub.ledgerCount', { n: subs.length }) }}</div>
+        <button class="btn" @click="openNew">+ {{ t('sub.add') }}</button>
+      </div>
+    </section>
 
-    <div class="bar">
-      <div class="seg">
+    <div class="bar ledger-toolbar">
+      <div class="seg ledger-seg">
         <button :class="{ on: filter === '' }" @click="setFilter('')">{{ t('sub.filterAll') }}</button>
         <button :class="{ on: filter === 'recurring' }" @click="setFilter('recurring')">{{ t('sub.filterRecurring') }}</button>
         <button :class="{ on: filter === 'one_time' }" @click="setFilter('one_time')">{{ t('sub.filterOneTime') }}</button>
       </div>
-      <span v-if="!filter" class="muted drag-hint">⠿ {{ t('sub.dragHint') }}</span>
+      <span v-if="!filter" class="drag-hint signal-note"><span aria-hidden="true">⠿</span> {{ t('sub.dragHint') }}</span>
+      <button v-else class="btn sm ghost" @click="setFilter('')">{{ t('sub.filterAll') }}</button>
     </div>
 
-    <div v-if="!subs.length" class="card muted">{{ t('dashboard.none') }}</div>
+    <div v-if="!subs.length" class="card empty-ledger">
+      <div class="empty-orbit" aria-hidden="true"><span></span></div>
+      <div>
+        <h2>{{ filter ? t('sub.emptyFilteredTitle') : t('sub.emptyTitle') }}</h2>
+        <p class="muted">{{ filter ? t('sub.emptyFilteredDesc') : t('sub.emptyDesc') }}</p>
+      </div>
+      <button class="btn" @click="openNew">+ {{ t('sub.add') }}</button>
+    </div>
 
     <!-- 按分类分组 -->
     <div v-for="g in grouped" :key="g.key" class="cat-group"
@@ -839,8 +854,38 @@ onMounted(async () => {
 
 <style scoped>
 h1 { margin-top: 0; }
-.bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
-.drag-hint { font-size: 12px; }
+
+/* 账本 hero：唯一的签名元素，复用 radar-grid 背景与 signal-dot */
+.ledger-hero { display: flex; align-items: flex-end; justify-content: space-between; gap: 20px;
+  flex-wrap: wrap; position: relative; padding: 22px 24px; margin-bottom: 16px;
+  border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--primary-soft) 72%, var(--surface)), var(--surface));
+  box-shadow: var(--shadow); }
+.ledger-hero::after { content: ''; position: absolute; top: 0; bottom: 0; left: 0; width: 4px;
+  background: linear-gradient(180deg, var(--signal-cyan), var(--primary)); }
+.ledger-hero-main { min-width: 0; }
+.ledger-kicker { display: inline-flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 700;
+  letter-spacing: .12em; text-transform: uppercase; color: var(--primary); }
+.ledger-hero h1 { margin: 8px 0 6px; }
+.ledger-subtitle { margin: 0; max-width: 46ch; color: var(--text-soft); font-size: 14px; line-height: 1.6; }
+.ledger-hero-side { display: flex; flex-direction: column; align-items: flex-end; gap: 12px; }
+.ledger-count { font-size: 13px; font-weight: 700; color: var(--text-soft); }
+
+.ledger-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }
+.ledger-toolbar .drag-hint { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-soft); }
+.signal-note { border: 1px dashed var(--border); border-radius: 999px; padding: 4px 12px; }
+
+/* 空状态：诚实区分无记录 / 筛选无结果，给行动指引 */
+.empty-ledger { display: flex; flex-direction: column; align-items: center; gap: 16px; text-align: center;
+  padding: 36px 24px; border-style: dashed; }
+.empty-ledger h2 { margin: 0; font-size: 16px; }
+.empty-ledger p { margin: 6px 0 0; font-size: 13px; max-width: 38ch; }
+.empty-orbit { position: relative; width: 46px; height: 46px; }
+.empty-orbit span { position: absolute; inset: 0; border-radius: 50%;
+  border: 1px dashed color-mix(in srgb, var(--primary) 40%, var(--border)); }
+.empty-orbit span::after { content: ''; position: absolute; top: 50%; left: 50%; width: 10px; height: 10px;
+  transform: translate(-50%, -50%); border-radius: 50%; background: color-mix(in srgb, var(--signal-cyan) 60%, var(--primary)); }
+
 .err { color: var(--danger); font-size: 13px; }
 .ico { width: 18px; height: 18px; vertical-align: middle; border-radius: 4px; }
 .auto-tip { color: var(--primary); font-size: 11px; }
@@ -906,8 +951,14 @@ h1 { margin-top: 0; }
 .action-popover-backdrop { position: fixed; inset: 0; z-index: 79; background: transparent; }
 
 @media (max-width: 720px) {
-  .bar { align-items: stretch; }
-  .bar .btn { width: 100%; }
+  .ledger-hero { padding: 18px; align-items: stretch; }
+  .ledger-hero-side { align-items: stretch; width: 100%; }
+  .ledger-hero-side .btn { width: 100%; }
+  .ledger-toolbar { align-items: stretch; }
+  .ledger-toolbar .btn { width: 100%; }
+  .ledger-toolbar .drag-hint { display: none; }
+  .ledger-seg { width: 100%; }
+  .ledger-seg button { flex: 1 1 0; }
   .sub-grid { grid-template-columns: 1fr; }
   .drag-hint { display: none; }
   .cat-head { cursor: default; flex-wrap: wrap; }
