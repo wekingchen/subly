@@ -12,15 +12,11 @@
       </div>
     </section>
 
-    <div class="bar ledger-toolbar">
-      <div class="seg ledger-seg">
-        <button :class="{ on: filter === '' }" @click="setFilter('')">{{ t('sub.filterAll') }}</button>
-        <button :class="{ on: filter === 'recurring' }" @click="setFilter('recurring')">{{ t('sub.filterRecurring') }}</button>
-        <button :class="{ on: filter === 'one_time' }" @click="setFilter('one_time')">{{ t('sub.filterOneTime') }}</button>
-      </div>
-      <span v-if="!filter && subs.length" class="drag-hint signal-note"><span aria-hidden="true">⠿</span> {{ t('sub.dragHint') }}</span>
-      <button v-else class="btn sm ghost" @click="setFilter('')">{{ t('sub.filterAll') }}</button>
-    </div>
+    <SubscriptionToolbar
+      :filter="filter"
+      :has-items="subs.length > 0"
+      @filter-change="setFilter"
+    />
 
     <div v-if="!subs.length" class="card empty-ledger">
       <div class="empty-orbit" aria-hidden="true"><span></span></div>
@@ -151,6 +147,7 @@ import DeleteSubscriptionModal from '../components/subscriptions/DeleteSubscript
 import RenewSubscriptionModal from '../components/subscriptions/RenewSubscriptionModal.vue'
 import SubscriptionCategoryGroup from '../components/subscriptions/SubscriptionCategoryGroup.vue'
 import SubscriptionFormModal from '../components/subscriptions/SubscriptionFormModal.vue'
+import SubscriptionToolbar from '../components/subscriptions/SubscriptionToolbar.vue'
 import { useAuth } from '../stores/auth'
 import { addCycleDate, parseLocalDate, toISODate } from '../utils/date'
 import { amountOf, hasBaseEquivalent } from '../utils/money'
@@ -537,10 +534,6 @@ h1 { margin-top: 0; }
 .ledger-hero-side { display: flex; flex-direction: column; align-items: flex-end; gap: 12px; }
 .ledger-count { font-size: 13px; font-weight: 700; color: var(--text-soft); }
 
-.ledger-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }
-.ledger-toolbar .drag-hint { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-soft); }
-.signal-note { border: 1px dashed var(--border); border-radius: 999px; padding: 4px 12px; }
-
 /* 空状态：诚实区分无记录 / 筛选无结果，给行动指引 */
 .empty-ledger { display: flex; flex-direction: column; align-items: center; gap: 16px; text-align: center;
   padding: 36px 24px; border-style: dashed; }
@@ -568,12 +561,6 @@ h1 { margin-top: 0; }
   .ledger-hero { padding: 18px; align-items: stretch; }
   .ledger-hero-side { align-items: stretch; width: 100%; }
   .ledger-hero-side .btn { width: 100%; }
-  .ledger-toolbar { align-items: stretch; }
-  .ledger-toolbar .btn { width: 100%; }
-  .ledger-toolbar .drag-hint { display: none; }
-  .ledger-seg { width: 100%; }
-  .ledger-seg button { flex: 1 1 0; }
-  .drag-hint { display: none; }
 }
 </style>
 
