@@ -146,79 +146,43 @@
       </div>
     </div>
 
-    <!-- 续费确认弹窗 -->
-    <div v-if="renewTarget" class="modal-mask">
-      <div class="modal" style="width:460px">
-        <button class="modal-x" :aria-label="t('common.close')" @click="renewTarget = null">×</button>
-        <h3>♻️ {{ t('sub.renewTitle') }}</h3>
-        <p style="font-size:14px;line-height:1.6">{{ t('sub.renewMsg', { name: renewTarget.name }) }}</p>
-        <p class="muted" style="font-size:12px;margin-top:-4px">{{ t('sub.renewDisclaimer') }}</p>
-        <label class="opt" :class="{ on: renewMode === 'today' }">
-          <input type="radio" value="today" v-model="renewMode" />
-          <div>
-            <div>{{ t('sub.renewToday') }}</div>
-            <div class="muted opt-d">→ {{ previewToday }}</div>
-          </div>
-        </label>
-        <label class="opt" :class="{ on: renewMode === 'due' }">
-          <input type="radio" value="due" v-model="renewMode" />
-          <div>
-            <div>{{ t('sub.renewDue') }}</div>
-            <div class="muted opt-d">→ {{ previewDue }}</div>
-          </div>
-        </label>
-        <div class="modal-foot">
-          <button class="btn ghost" @click="renewTarget = null">{{ t('sub.cancel') }}</button>
-          <button class="btn" :disabled="renewing" @click="confirmRenew">{{ t('sub.confirm') }}</button>
-        </div>
-      </div>
-    </div>
+    <RenewSubscriptionModal
+      v-if="renewTarget"
+      :target="renewTarget"
+      v-model:mode="renewMode"
+      :renewing="renewing"
+      :preview-today="previewToday"
+      :preview-due="previewDue"
+      @close="renewTarget = null"
+      @confirm="confirmRenew"
+    />
 
-    <!-- 删除确认（需验证密码） -->
-    <div v-if="delTarget" class="modal-mask">
-      <div class="modal" style="width:420px">
-        <button class="modal-x" :aria-label="t('common.close')" @click="delTarget = null">×</button>
-        <h3>🗑️ {{ t('sub.deleteTitle') }}</h3>
-        <p style="font-size:14px;line-height:1.6">{{ t('sub.deletePwdTip', { name: delTarget.name }) }}</p>
-        <input v-model="delPwd" type="password" :placeholder="t('sub.pwdPh')" @keyup.enter="confirmDelete" />
-        <p v-if="delErr" class="err">{{ delErr }}</p>
-        <div class="modal-foot">
-          <button class="btn ghost" @click="delTarget = null">{{ t('sub.cancel') }}</button>
-          <button class="btn danger" :disabled="deleting || !delPwd" @click="confirmDelete">{{ t('sub.delete') }}</button>
-        </div>
-      </div>
-    </div>
+    <DeleteSubscriptionModal
+      v-if="delTarget"
+      :target="delTarget"
+      v-model:password="delPwd"
+      :error="delErr"
+      :deleting="deleting"
+      @close="delTarget = null"
+      @confirm="confirmDelete"
+    />
 
     <!-- 移动端更多操作 -->
     <div v-if="actionTarget && !isDesktopActionMode" class="action-mask" @click="closeCardActions">
       <div ref="actionSheetRef" class="action-sheet" role="dialog" aria-modal="true"
            :aria-labelledby="actionSheetTitleId(actionTarget.id)" tabindex="-1" @click.stop>
-        <div class="action-head">
-          <ServiceIcon :src="actionTarget.icon" :name="actionTarget.name" :fallback="actionTarget.icon || '🔖'"
-                       class="action-ico" loading="lazy" decoding="async" />
-          <div class="action-copy">
-            <div :id="actionSheetTitleId(actionTarget.id)" class="action-name">{{ actionTarget.name }}</div>
-            <div class="action-plan muted">{{ textOrDash(actionTarget.plan) }}</div>
-          </div>
-          <button type="button" class="action-close" :aria-label="t('common.close')" @click="closeCardActions">×</button>
-        </div>
-        <div v-if="!filter" class="action-move">
-          <button type="button" class="action-move-btn" @click="moveFromActions(-1)">↑ {{ t('sub.moveUp') }}</button>
-          <button type="button" class="action-move-btn" @click="moveFromActions(1)">↓ {{ t('sub.moveDown') }}</button>
-        </div>
-        <button class="action-item" @click="editFromActions">
-          <span>✎</span><span>{{ t('sub.edit') }}</span>
-        </button>
-        <button v-if="actionTarget.billing_type === 'recurring'" class="action-item action-item-renew" :title="t('sub.renewHint')" @click="renewFromActions">
-          <span aria-hidden="true">♻</span>
-          <span class="action-item-main">
-            <span>{{ t('sub.renewMark') }}</span>
-            <span class="action-item-hint">{{ t('sub.renewDisclaimer') }}</span>
-          </span>
-        </button>
-        <button class="action-item danger" @click="deleteFromActions">
-          <span>×</span><span>{{ t('sub.delete') }}</span>
-        </button>
+        <ActionMenuContent
+          :target="actionTarget"
+          :title-id="actionSheetTitleId(actionTarget.id)"
+          :plan-text="textOrDash(actionTarget.plan)"
+          :show-move="!filter"
+          :show-renew="actionTarget.billing_type === 'recurring'"
+          @close="closeCardActions"
+          @move="moveFromActions"
+          @edit="editFromActions"
+          @renew="renewFromActions"
+          @delete="deleteFromActions"
+        />
       </div>
     </div>
 
@@ -227,32 +191,18 @@
       <div v-if="actionTarget && isDesktopActionMode" class="action-popover-backdrop" @click="closeCardActions"></div>
       <div v-if="actionTarget && isDesktopActionMode" ref="actionPopoverRef" class="action-popover" role="dialog" aria-modal="false"
            :aria-labelledby="actionSheetTitleId(actionTarget.id)" :style="actionPopoverStyle" tabindex="-1" @click.stop>
-        <div class="action-head">
-          <ServiceIcon :src="actionTarget.icon" :name="actionTarget.name" :fallback="actionTarget.icon || '🔖'"
-                       class="action-ico" loading="lazy" decoding="async" />
-          <div class="action-copy">
-            <div :id="actionSheetTitleId(actionTarget.id)" class="action-name">{{ actionTarget.name }}</div>
-            <div class="action-plan muted">{{ textOrDash(actionTarget.plan) }}</div>
-          </div>
-          <button type="button" class="action-close" :aria-label="t('common.close')" @click="closeCardActions">×</button>
-        </div>
-        <div v-if="!filter" class="action-move">
-          <button type="button" class="action-move-btn" @click="moveFromActions(-1)">↑ {{ t('sub.moveUp') }}</button>
-          <button type="button" class="action-move-btn" @click="moveFromActions(1)">↓ {{ t('sub.moveDown') }}</button>
-        </div>
-        <button class="action-item" @click="editFromActions">
-          <span>✎</span><span>{{ t('sub.edit') }}</span>
-        </button>
-        <button v-if="actionTarget.billing_type === 'recurring'" class="action-item action-item-renew" :title="t('sub.renewHint')" @click="renewFromActions">
-          <span aria-hidden="true">♻</span>
-          <span class="action-item-main">
-            <span>{{ t('sub.renewMark') }}</span>
-            <span class="action-item-hint">{{ t('sub.renewDisclaimer') }}</span>
-          </span>
-        </button>
-        <button class="action-item danger" @click="deleteFromActions">
-          <span>×</span><span>{{ t('sub.delete') }}</span>
-        </button>
+        <ActionMenuContent
+          :target="actionTarget"
+          :title-id="actionSheetTitleId(actionTarget.id)"
+          :plan-text="textOrDash(actionTarget.plan)"
+          :show-move="!filter"
+          :show-renew="actionTarget.billing_type === 'recurring'"
+          @close="closeCardActions"
+          @move="moveFromActions"
+          @edit="editFromActions"
+          @renew="renewFromActions"
+          @delete="deleteFromActions"
+        />
       </div>
     </Teleport>
 
@@ -495,6 +445,9 @@ import api from '../api'
 import MoneyText from '../components/MoneyText.vue'
 import ServiceIcon from '../components/ServiceIcon.vue'
 import StatusChip from '../components/StatusChip.vue'
+import ActionMenuContent from '../components/subscriptions/ActionMenuContent.vue'
+import DeleteSubscriptionModal from '../components/subscriptions/DeleteSubscriptionModal.vue'
+import RenewSubscriptionModal from '../components/subscriptions/RenewSubscriptionModal.vue'
 import { useAuth } from '../stores/auth'
 import { addCycleDate, daysLeft, parseLocalDate, toISODate } from '../utils/date'
 import { amountOf, hasBaseEquivalent } from '../utils/money'
@@ -1091,13 +1044,6 @@ h1 { margin-top: 0; }
   border-color: color-mix(in srgb, var(--primary) 38%, var(--border)); transform: none; box-shadow: none; }
 .act-ico { display: inline-flex; align-items: center; justify-content: center; line-height: 1; }
 
-/* 续费弹窗单选 */
-.opt { display: flex; align-items: flex-start; gap: 10px; border: 1px solid var(--border); border-radius: 10px;
-  padding: 12px; margin-top: 10px; cursor: pointer; font-size: 14px; color: var(--text); width: auto; }
-.opt.on { border-color: var(--primary); background: var(--primary-soft); }
-.opt input { width: auto; margin-top: 3px; }
-.opt-d { font-size: 12px; margin-top: 3px; }
-
 /* 表单内复用样式 */
 .block { border: 1px solid var(--border); border-radius: 10px; padding: 12px; margin-bottom: 12px; }
 .block-t { font-size: 13px; font-weight: 600; color: var(--primary); margin-bottom: 6px; }
@@ -1137,27 +1083,6 @@ h1 { margin-top: 0; }
 .action-sheet { width: min(430px, 100%); border: 1px solid color-mix(in srgb, var(--border) 76%, transparent); border-radius: 24px;
   padding: 10px; background: linear-gradient(180deg, color-mix(in srgb, var(--surface) 94%, var(--signal-cyan)), var(--surface));
   box-shadow: 0 22px 70px rgba(0, 0, 0, .34); }
-.action-head { display: flex; align-items: center; gap: 10px; padding: 8px 8px 12px; border-bottom: 1px solid var(--border); margin-bottom: 4px; }
-.action-ico { width: 36px; height: 36px; border-radius: 10px; object-fit: contain; border: 1px solid var(--border); background: var(--surface-2); flex-shrink: 0; }
-.action-ico.emoji { display: flex; align-items: center; justify-content: center; font-size: 22px; }
-.action-copy { flex: 1; min-width: 0; }
-.action-name { font-weight: 800; line-height: 1.25; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.action-plan { font-size: 12px; margin-top: 2px; }
-.action-close { width: 36px; height: 36px; flex-shrink: 0; border: none; border-radius: 999px; background: var(--surface-2); color: var(--text-soft); cursor: pointer; font-size: 18px; line-height: 1; }
-.action-close:hover { color: var(--text); }
-.action-move { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; padding: 6px 0 8px; }
-.action-move-btn { min-height: 42px; border: 1px solid var(--border); border-radius: 14px; background: color-mix(in srgb, var(--surface-2) 72%, transparent);
-  color: var(--text-soft); font-size: 13px; font-weight: 750; cursor: pointer; }
-.action-move-btn:hover { color: var(--text); border-color: color-mix(in srgb, var(--primary) 36%, var(--border)); }
-.action-item { width: 100%; min-height: 48px; display: flex; align-items: center; gap: 10px; padding: 0 12px; border: none;
-  border-radius: 16px; background: transparent; color: var(--text); font-size: 15px; font-weight: 700; text-align: left; cursor: pointer; }
-.action-item-main { display: grid; gap: 2px; min-width: 0; }
-.action-item-hint { color: var(--text-soft); font-size: 12px; font-weight: 500; line-height: 1.35; }
-.action-item:hover { background: var(--surface-2); }
-.action-item.danger { color: var(--danger); }
-@media (min-width: 721px) {
-  .action-item-renew { display: none; }
-}
 .action-popover { position: fixed; z-index: 80; width: 300px; max-width: calc(100vw - 24px);
   max-height: var(--action-popover-max-h, 70vh); overflow: auto; overscroll-behavior: contain;
   border: 1px solid color-mix(in srgb, var(--border) 76%, transparent); border-radius: 18px; padding: 8px;
