@@ -134,20 +134,12 @@
             </div>
           </Transition>
 
-          <div class="sc-acts" @click.stop>
-            <button class="btn sm ghost act-btn act-edit" @click.stop="openEdit(s)">
-              <span class="act-ico" aria-hidden="true">✎</span>
-              <span class="act-label">{{ t('sub.edit') }}</span>
-            </button>
-            <button v-if="s.billing_type === 'recurring'" class="btn sm ghost act-btn act-renew"
+          <div v-if="s.billing_type === 'recurring'" class="sc-acts" @click.stop>
+            <button class="btn sm ghost act-btn act-renew"
                     :title="t('sub.renewHint')"
                     @click.stop="askRenew(s)">
               <span class="act-ico" aria-hidden="true">♻</span>
               <span class="act-label">{{ t('sub.renew') }}</span>
-            </button>
-            <button class="btn sm danger act-btn act-delete" @click.stop="askDelete(s)">
-              <span class="act-ico" aria-hidden="true">×</span>
-              <span class="act-label">{{ t('sub.delete') }}</span>
             </button>
           </div>
         </div>
@@ -217,7 +209,7 @@
         <button class="action-item" @click="editFromActions">
           <span>✎</span><span>{{ t('sub.edit') }}</span>
         </button>
-        <button v-if="actionTarget.billing_type === 'recurring'" class="action-item" @click="renewFromActions">
+        <button v-if="actionTarget.billing_type === 'recurring'" class="action-item action-item-renew" @click="renewFromActions">
           <span>♻</span><span>{{ t('sub.renew') }}</span>
         </button>
         <button class="action-item danger" @click="deleteFromActions">
@@ -1031,7 +1023,7 @@ h1 { margin-top: 0; }
 .card-grip:focus-visible { opacity: 1; }
 .card-grip:hover { background: var(--surface-2); color: var(--text); }
 .card-grip:active { cursor: grabbing; }
-.card-more { display: none; flex-shrink: 0; align-items: center; justify-content: center; width: 32px; height: 32px;
+.card-more { display: inline-flex; flex-shrink: 0; align-items: center; justify-content: center; width: 32px; height: 32px;
   border: none; border-radius: 999px; background: transparent; color: var(--text-soft); cursor: pointer; font-size: 20px; line-height: 1; }
 .card-more:hover { background: var(--surface-2); color: var(--text); }
 .card-detail-toggle { flex-shrink: 0; border: none; background: transparent; color: var(--text-soft); cursor: pointer;
@@ -1074,7 +1066,7 @@ h1 { margin-top: 0; }
 .due.overdue { color: var(--danger); font-weight: 700; }
 .tag.one_time { background: #fef3c7; color: #b45309; }
 .sc-acts { display: flex; gap: 8px; margin-top: auto; padding-top: 10px; border-top: 1px dashed color-mix(in srgb, var(--border) 80%, transparent); }
-.sc-acts .btn { flex: 1; }
+.sc-acts .btn { flex: 0 1 auto; }
 .act-btn { display: inline-flex; align-items: center; justify-content: center; gap: 4px; }
 .btn.act-renew { background: var(--primary-soft); color: var(--primary);
   border: 1px solid color-mix(in srgb, var(--primary) 24%, var(--border)); box-shadow: none; }
@@ -1144,13 +1136,15 @@ h1 { margin-top: 0; }
   border-radius: 16px; background: transparent; color: var(--text); font-size: 15px; font-weight: 700; text-align: left; cursor: pointer; }
 .action-item:hover { background: var(--surface-2); }
 .action-item.danger { color: var(--danger); }
+@media (min-width: 721px) {
+  .action-item-renew { display: none; }
+}
 
 @media (max-width: 720px) {
   .bar { align-items: stretch; }
   .bar .btn { width: 100%; }
   .sub-grid { grid-template-columns: 1fr; }
   .sc-head { align-items: flex-start; gap: 10px; }
-  .card-more { display: inline-flex; }
   .sc-name { font-size: 16px; white-space: normal; line-height: 1.3; }
   .sc-amount { font-size: 24px; overflow-wrap: anywhere; }
   .sc-due { align-items: flex-start; flex-wrap: wrap; }
