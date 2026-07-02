@@ -3,7 +3,7 @@
     <!-- 移动端顶部栏 -->
     <header class="topbar">
       <button ref="hambRef" class="hamb" @click="openDrawer" :aria-expanded="drawer ? 'true' : 'false'" aria-controls="mobile-sidebar" :aria-label="t('nav.menu')">☰</button>
-      <div class="brand sm"><span class="brand-mark">⌁</span><span>Subly</span></div>
+      <div class="brand sm"><span class="brand-mark"><img src="/brand-icon.png" alt="" /></span><span>Subly</span></div>
       <div style="width:44px"></div>
     </header>
 
@@ -12,7 +12,7 @@
 
     <aside id="mobile-sidebar" ref="drawerRef" class="sidebar" :class="{ open: drawer }" :aria-label="t('nav.menu')" tabindex="-1">
       <div class="brand-block">
-        <div class="brand"><span class="brand-mark">⌁</span><span>Subly</span></div>
+        <div class="brand"><span class="brand-mark"><img src="/brand-icon.png" alt="" /></span><span>Subly</span></div>
         <div class="brand-tag"><span class="signal-dot"></span>{{ t('nav.brandTag') }}</div>
       </div>
       <nav class="nav-list" :aria-label="t('nav.menu')" @click="closeDrawer">
@@ -121,7 +121,8 @@ function logout() {
   color: var(--text); }
 .brand-mark { width: 28px; height: 28px; border-radius: 9px; display: inline-flex; align-items: center; justify-content: center;
   background: linear-gradient(135deg, var(--signal-cyan), var(--primary)); color: #06101f; font-weight: 900;
-  box-shadow: 0 0 22px color-mix(in srgb, var(--signal-cyan) 42%, transparent); }
+  box-shadow: 0 0 22px color-mix(in srgb, var(--signal-cyan) 42%, transparent); overflow: hidden; }
+.brand-mark img { width: 100%; height: 100%; display: block; object-fit: cover; border-radius: inherit; }
 .brand-tag { margin-top: 7px; display: flex; align-items: center; gap: 7px; color: var(--text-soft); font-size: 11px;
   text-transform: uppercase; letter-spacing: .12em; }
 .nav-list { display: flex; flex-direction: column; gap: 16px; }
