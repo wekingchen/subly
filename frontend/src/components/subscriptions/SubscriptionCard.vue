@@ -48,7 +48,7 @@
     </div>
 
     <div class="sc-quick">
-      <span v-if="paymentName" class="quick-chip">💳 {{ paymentName }}</span>
+      <span v-if="paymentName" class="quick-chip">{{ paymentName }}</span>
       <span v-if="subscription.billing_type === 'recurring'" class="quick-chip">🔁 {{ boolText(subscription.auto_renew) }}</span>
       <span v-if="subscription.family_members && subscription.family_members.length" class="quick-chip">👨‍👩‍👧 {{ subscription.family_members.length }}</span>
       <span v-if="bundleName" class="quick-chip">📦 {{ bundleName }}</span>

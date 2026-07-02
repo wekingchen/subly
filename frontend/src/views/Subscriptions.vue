@@ -18,7 +18,7 @@
         <button :class="{ on: filter === 'recurring' }" @click="setFilter('recurring')">{{ t('sub.filterRecurring') }}</button>
         <button :class="{ on: filter === 'one_time' }" @click="setFilter('one_time')">{{ t('sub.filterOneTime') }}</button>
       </div>
-      <span v-if="!filter" class="drag-hint signal-note"><span aria-hidden="true">⠿</span> {{ t('sub.dragHint') }}</span>
+      <span v-if="!filter && subs.length" class="drag-hint signal-note"><span aria-hidden="true">⠿</span> {{ t('sub.dragHint') }}</span>
       <button v-else class="btn sm ghost" @click="setFilter('')">{{ t('sub.filterAll') }}</button>
     </div>
 
