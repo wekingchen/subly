@@ -22,14 +22,14 @@
          @dragover.prevent="onCatDragOver(g.key)"
          @drop="onCatDrop(g.key)">
       <div class="cat-head"
-           :draggable="!filter"
+           :draggable="!filter && canSortCategory(g.key)"
            @dragstart="onCatDragStart(g.key, $event)"
            @dragend="clearDrag">
-        <span class="grip">⠿</span>
+        <span v-if="canSortCategory(g.key)" class="grip">⠿</span>
         <span class="cat-ico">{{ g.icon }}</span>
         <span class="cat-name">{{ g.name }}</span>
         <span class="cat-count">{{ g.items.length }}</span>
-        <span v-if="!filter" class="mobile-sort">
+        <span v-if="!filter && canSortCategory(g.key)" class="mobile-sort">
           <button class="btn sm ghost" @click.stop="moveCat(g.key, -1)" :aria-label="t('sub.moveUp')">↑</button>
           <button class="btn sm ghost" @click.stop="moveCat(g.key, 1)" :aria-label="t('sub.moveDown')">↓</button>
         </span>
@@ -39,8 +39,8 @@
         <div v-for="s in g.items" :key="s.id" class="card sub-card signal-card"
              :class="{ inactive: !s.is_active, expired: isExpired(s), soon: isSoon(s), 'drop-card': dragOverSub === s.id, expanded: isExpanded(s.id) }"
              @click="onCardClick(s, $event)"
-             @dragover.prevent.stop="onCardDragOver(g.key, s.id)"
-             @drop.stop="onCardDrop(g.key, s.id)">
+             @dragover.prevent="onCardDragOver(g.key, s.id, $event)"
+             @drop.prevent="onCardDrop(g.key, s.id, $event)">
           <div class="status-strip" :class="statusOf(s)"></div>
           <div class="sc-head">
             <ServiceIcon :src="s.icon" :name="s.name" :fallback="s.icon || '🔖'"
@@ -499,6 +499,9 @@ import { useAuth } from '../stores/auth'
 import { addCycleDate, daysLeft, parseLocalDate, toISODate } from '../utils/date'
 import { amountOf, hasBaseEquivalent } from '../utils/money'
 import { isExpired, isSoon, renewalStatus } from '../utils/renewal'
+import { buildServicePickPatch, findCategoryIdByServiceKey, getServiceCategoryKeys, getServiceCategoryLabel, groupServicesByCategory, isVpsCategory as isVpsServiceCategory, suggestServicesByName } from '../utils/serviceLibrary'
+import { buildGroupedSubscriptions, buildSubscriptionOrderState, categoryOrderToPersistedIds, getCategoryMeta, getSubscriptionCategoryKey, moveCategoryByOffset, moveCategoryToTarget, moveValueByOffset, moveValueToTarget, UNCATEGORIZED_KEY } from '../utils/subscriptionOrdering'
+import { buildSubscriptionPayload, cloneSubscriptionForEdit, computeNextRenewalDate, createBlankSubscriptionForm } from '../utils/subscriptionForm'
 
 const { t } = useI18n()
 const auth = useAuth()
@@ -665,23 +668,11 @@ function statusChip(s) {
 
 /* ---------- 客户端续费日计算复用共享工具（utils/date.js，与后端 billing.add_cycle 对齐） ---------- */
 
-function blank() {
-  return {
-    id: null, name: '', plan: '', icon: '', amount: 0, currency: 'CNY',
-    category_id: null, payment_method_id: null, bundle_id: null, billing_type: 'recurring',
-    cycle: 'month', cycle_count: 1, start_date: toISODate(new Date()),
-    next_renewal_date: '', end_date: null, url: '', notes: '', remark: '', ipv4: '', ipv6: '',
-    remind_days_before: '7,1', auto_renew: true, is_active: true,
-    show_in_calendar: true, family_members: []
-  }
-}
+function blank() { return createBlankSubscriptionForm() }
 
 let suppressAuto = false
 function recomputeNext() {
-  if (form.value.billing_type !== 'recurring') { form.value.next_renewal_date = ''; return }
-  if (form.value.start_date) {
-    form.value.next_renewal_date = toISODate(addCycleDate(form.value.start_date, form.value.cycle, form.value.cycle_count))
-  }
+  form.value.next_renewal_date = computeNextRenewalDate(form.value, form.value.next_renewal_date)
 }
 watch(
   () => [form.value.start_date, form.value.cycle, form.value.cycle_count, form.value.billing_type],
@@ -692,50 +683,21 @@ watch(
 // orderMap: { catKey: [subId, ...] } ; catOrder: [catKey, ...]
 const orderMap = reactive({})
 const catOrder = ref([])
-const NONE = 'none'
+const NONE = UNCATEGORIZED_KEY
 
-function catKeyOf(s) { return s.category_id == null ? NONE : String(s.category_id) }
-function catMeta(key) {
-  if (key === NONE) return { icon: '🗂️', name: t('sub.uncategorized') }
-  const c = categories.value.find((x) => String(x.id) === key)
-  return c ? { icon: c.icon || '📁', name: c.name } : { icon: '📁', name: key }
-}
+function catKeyOf(s) { return getSubscriptionCategoryKey(s) }
+function catMeta(key) { return getCategoryMeta(key, categories.value, { uncategorizedName: t('sub.uncategorized') }) }
+function canSortCategory(key) { return key !== NONE }
 
 function rebuild() {
+  const next = buildSubscriptionOrderState(subs.value, categories.value, auth.user?.category_order || [])
   Object.keys(orderMap).forEach((k) => delete orderMap[k])
-  const byCat = {}
-  for (const s of subs.value) {
-    const k = catKeyOf(s)
-    ;(byCat[k] ||= []).push(s)
-  }
-  for (const k of Object.keys(byCat)) {
-    byCat[k].sort((a, b) => (a.sort - b.sort) || (a.id - b.id))
-    orderMap[k] = byCat[k].map((s) => s.id)
-  }
-  // 分类顺序：用户保存的顺序 → 其余出现的分类 → 未分类置底
-  const present = new Set(Object.keys(orderMap))
-  const saved = (auth.user?.category_order || []).map(String)
-  const order = []
-  for (const k of saved) if (present.has(k)) { order.push(k); present.delete(k) }
-  const rest = [...present].filter((k) => k !== NONE)
-    .sort((a, b) => {
-      const ca = categories.value.find((x) => String(x.id) === a)
-      const cb = categories.value.find((x) => String(x.id) === b)
-      return ((ca?.sort ?? 999) - (cb?.sort ?? 999)) || (Number(a) - Number(b))
-    })
-  order.push(...rest)
-  if (present.has(NONE)) order.push(NONE)
-  catOrder.value = order
+  Object.entries(next.orderMap).forEach(([key, ids]) => { orderMap[key] = ids })
+  catOrder.value = next.catOrder
 }
 
 const grouped = computed(() =>
-  catOrder.value
-    .filter((k) => orderMap[k] && orderMap[k].length)
-    .map((k) => {
-      const meta = catMeta(k)
-      const items = orderMap[k].map((id) => subs.value.find((s) => s.id === id)).filter(Boolean)
-      return { key: k, icon: meta.icon, name: meta.name, items }
-    })
+  buildGroupedSubscriptions(subs.value, orderMap, catOrder.value, categories.value, { uncategorizedName: t('sub.uncategorized') })
 )
 
 // 拖拽状态
@@ -746,30 +708,25 @@ const dragOverSub = ref(null)
 function clearDrag() { dragCatKey = null; dragCard = null; dragOverCat.value = null; dragOverSub.value = null }
 
 async function moveCat(key, dir) {
-  if (filter.value) return
-  const arr = [...catOrder.value]
-  const from = arr.indexOf(key)
-  const to = from + dir
-  if (from < 0 || to < 0 || to >= arr.length) return
-  arr.splice(to, 0, arr.splice(from, 1)[0])
+  if (filter.value || !canSortCategory(key)) return
+  const arr = moveCategoryByOffset(catOrder.value, key, dir)
+  if (arr === catOrder.value) return
   catOrder.value = arr
-  const ids = arr.filter((k) => k !== NONE).map(Number)
+  const ids = categoryOrderToPersistedIds(arr)
   try { await auth.updateMe({ category_order: ids }) } catch { /* ignore */ }
 }
 
 async function moveSub(catKey, id, dir) {
   if (filter.value) return
-  const arr = [...(orderMap[catKey] || [])]
-  const from = arr.indexOf(id)
-  const to = from + dir
-  if (from < 0 || to < 0 || to >= arr.length) return
-  arr.splice(to, 0, arr.splice(from, 1)[0])
+  const current = orderMap[catKey] || []
+  const arr = moveValueByOffset(current, id, dir)
+  if (arr === current) return
   orderMap[catKey] = arr
   try { await api.post('/api/subscriptions/reorder', { ordered_ids: arr }) } catch { /* ignore */ }
 }
 
 function onCatDragStart(key, e) {
-  if (filter.value) {
+  if (filter.value || !canSortCategory(key)) {
     e.preventDefault()
     return
   }
@@ -782,18 +739,17 @@ function onCatDragStart(key, e) {
   dragCatKey = key
   if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move'
 }
-function onCatDragOver(key) { if (!filter.value && dragCatKey && !dragCard) dragOverCat.value = key }
+function onCatDragOver(key) {
+  if (!filter.value && canSortCategory(key) && dragCatKey && !dragCard) dragOverCat.value = key
+}
 async function onCatDrop(key) {
-  if (filter.value || !dragCatKey || dragCard || dragCatKey === key) return clearDrag()
-  const arr = [...catOrder.value]
-  const from = arr.indexOf(dragCatKey)
-  const to = arr.indexOf(key)
-  if (from < 0 || to < 0) return clearDrag()
-  arr.splice(to, 0, arr.splice(from, 1)[0])
+  if (filter.value || !canSortCategory(key) || !dragCatKey || dragCard || dragCatKey === key) return clearDrag()
+  const arr = moveCategoryToTarget(catOrder.value, dragCatKey, key)
+  if (arr === catOrder.value) return clearDrag()
   catOrder.value = arr
   clearDrag()
   // 持久化（只保存真实分类 id，未分类不存）
-  const ids = arr.filter((k) => k !== NONE).map(Number)
+  const ids = categoryOrderToPersistedIds(arr)
   try { await auth.updateMe({ category_order: ids }) } catch { /* ignore */ }
 }
 
@@ -805,16 +761,19 @@ function onCardDragStart(catKey, id, e) {
   dragCard = { catKey, id }
   if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move'
 }
-function onCardDragOver(catKey, id) {
-  if (!filter.value && dragCard && dragCard.catKey === catKey) dragOverSub.value = id
+function onCardDragOver(catKey, id, e) {
+  if (!filter.value && dragCard && dragCard.catKey === catKey) {
+    e?.stopPropagation()
+    dragOverSub.value = id
+  }
 }
-async function onCardDrop(catKey, id) {
-  if (filter.value || !dragCard || dragCard.catKey !== catKey || dragCard.id === id) return clearDrag()
-  const arr = [...orderMap[catKey]]
-  const from = arr.indexOf(dragCard.id)
-  const to = arr.indexOf(id)
-  if (from < 0 || to < 0) return clearDrag()
-  arr.splice(to, 0, arr.splice(from, 1)[0])
+async function onCardDrop(catKey, id, e) {
+  if (!dragCard) return
+  e?.stopPropagation()
+  if (filter.value || dragCard.catKey !== catKey || dragCard.id === id) return clearDrag()
+  const current = orderMap[catKey] || []
+  const arr = moveValueToTarget(current, dragCard.id, id)
+  if (arr === current) return clearDrag()
   orderMap[catKey] = arr
   clearDrag()
   try { await api.post('/api/subscriptions/reorder', { ordered_ids: arr }) } catch { /* ignore */ }
@@ -885,7 +844,7 @@ function moveFromActions(dir) {
 
 function openEdit(s) {
   suppressAuto = true
-  form.value = { ...s, next_renewal_date: s.next_renewal_date || '', family_members: [...(s.family_members || [])] }
+  form.value = cloneSubscriptionForEdit(s)
   formErr.value = ''; suggestions.value = []
   bundleMode.value = s.bundle_id ? 'join' : 'none'
   newBundleName.value = ''
@@ -896,46 +855,18 @@ function openEdit(s) {
 }
 
 function onNameInput() {
-  const q = (form.value.name || '').toLowerCase().trim()
-  suggestions.value = q.length < 1 ? []
-    : iconLib.value.filter((s) => s.name.toLowerCase().includes(q)).slice(0, 6)
+  suggestions.value = suggestServicesByName(iconLib.value, form.value.name, 6)
 }
-// 服务库分类 key -> 在用户分类名中查找的关键字
-const CAT_KEYWORDS = {
-  streaming: 'streaming', music: 'music', ai: 'ai', gaming: 'gaming', vps: 'vps',
-  carrier: 'carrier', cloud: 'cloud', software: 'software', domain: 'domain',
-  education: 'education', news: 'news', fitness: 'fitness', membership: 'membership', other: 'other'
-}
-function findCategoryByKey(key) {
-  const kw = CAT_KEYWORDS[key]
-  if (!kw) return null
-  const hit = categories.value.find((c) => (c.name || '').toLowerCase().includes(kw))
-  return hit ? hit.id : null
-}
-function serviceCategoryKeys(svc) {
-  const keys = Array.isArray(svc?.category_keys) ? svc.category_keys : []
-  const clean = keys.map((x) => String(x || '').trim()).filter(Boolean)
-  return clean.length ? clean : [svc?.category || 'other']
-}
-function serviceCategoryLabel(svc, key, index) {
-  const labels = Array.isArray(svc?.category_labels) ? svc.category_labels : []
-  return labels[index] || (svc?.category === key ? svc.category_label : '') || key
-}
+function findCategoryByKey(key) { return findCategoryIdByServiceKey(key, categories.value) }
+function serviceCategoryKeys(svc) { return getServiceCategoryKeys(svc) }
+function serviceCategoryLabel(svc, key, index) { return getServiceCategoryLabel(svc, key, index) }
 const isVpsCategory = computed(() => {
   const c = categories.value.find((x) => x.id === form.value.category_id)
-  if (!c) return false
-  return (c.name || '').toLowerCase().includes('vps') || (c.name || '').includes('服务器')
+  return isVpsServiceCategory(c)
 })
 
 function pickService(s) {
-  form.value.name = s.name
-  form.value.icon = s.icon
-  if (!form.value.url && s.website) form.value.url = s.website
-  // 自动带出分类（按服务库分类映射到用户分类）
-  for (const key of serviceCategoryKeys(s)) {
-    const cid = findCategoryByKey(key)
-    if (cid) { form.value.category_id = cid; break }
-  }
+  Object.assign(form.value, buildServicePickPatch(form.value, s, categories.value))
   suggestions.value = []
 }
 
@@ -952,18 +883,7 @@ function toggleBrowserGroup(key) {
   else next.add(key)
   openBrowserGroups.value = next
 }
-const groupedLib = computed(() => {
-  const q = browserQ.value.toLowerCase().trim()
-  const groups = new Map()
-  for (const s of iconLib.value) {
-    if (q && !s.name.toLowerCase().includes(q)) continue
-    serviceCategoryKeys(s).forEach((key, index) => {
-      if (!groups.has(key)) groups.set(key, { key, label: serviceCategoryLabel(s, key, index), items: [] })
-      groups.get(key).items.push(s)
-    })
-  }
-  return [...groups.values()]
-})
+const groupedLib = computed(() => groupServicesByCategory(iconLib.value, browserQ.value))
 function pickFromBrowser(s) { pickService(s); showBrowser.value = false }
 
 function addMember() {
@@ -997,8 +917,7 @@ async function save() {
     } else if (bundleMode.value === 'none') {
       form.value.bundle_id = null
     }
-    const payload = { ...form.value }
-    if (!payload.next_renewal_date) delete payload.next_renewal_date
+    const payload = buildSubscriptionPayload(form.value)
     if (payload.id) await api.put(`/api/subscriptions/${payload.id}`, payload)
     else await api.post('/api/subscriptions', payload)
     showForm.value = false
