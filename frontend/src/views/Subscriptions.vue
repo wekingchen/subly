@@ -36,113 +36,32 @@
       </div>
 
       <div class="sub-grid">
-        <div v-for="s in g.items" :key="s.id" class="card sub-card signal-card"
-             :class="{ inactive: !s.is_active, expired: isExpired(s), soon: isSoon(s), 'drop-card': dragOverSub === s.id, expanded: isExpanded(s.id) }"
-             @click="onCardClick(s, $event)"
-             @dragover.prevent="onCardDragOver(g.key, s.id, $event)"
-             @drop.prevent="onCardDrop(g.key, s.id, $event)">
-          <div class="status-strip" :class="statusOf(s)"></div>
-          <div class="sc-head">
-            <ServiceIcon :src="s.icon" :name="s.name" :fallback="s.icon || '🔖'"
-                         class="sc-ico" loading="lazy" decoding="async" />
-            <div class="sc-title">
-              <div class="sc-name">{{ s.name }}</div>
-              <div class="muted sc-plan" v-if="s.plan">{{ s.plan }}</div>
-            </div>
-            <StatusChip :status="statusOf(s)">{{ statusChip(s) }}</StatusChip>
-            <button type="button" class="card-more"
-                    :aria-label="`${s.name || t('nav.subscriptions')}：更多操作`"
-                    @click.stop="openCardActions(s, g.key, $event)">⋯</button>
-            <button type="button" class="card-detail-toggle" :aria-expanded="isExpanded(s.id)"
-                    :aria-controls="detailId(s.id)"
-                    :aria-label="`${s.name || t('nav.subscriptions')}：${isExpanded(s.id) ? t('sub.collapse') : t('sub.expand')}`"
-                    @click.stop="toggleDetails(s.id)">{{ isExpanded(s.id) ? '▾' : '▸' }}</button>
-            <span v-if="!filter" class="card-grip" draggable="true" :title="t('sub.dragCard')" aria-hidden="true"
-                  @click.stop
-                  @dragstart.stop="onCardDragStart(g.key, s.id, $event)"
-                  @dragend="clearDrag">⠿</span>
-          </div>
-
-          <div class="sc-signal">
-            <div class="sc-amount mono-data">
-              <MoneyText :value="s.amount" :currency="s.currency" position="suffix" />
-              <span v-if="s.billing_type === 'recurring'" class="muted cycle">/ {{ cycleText(s) }}</span>
-            </div>
-            <div v-if="shouldShowBaseAmount(s)" class="sc-base-amount">
-              <span class="muted">{{ t('sub.baseAmountPrefix') }}</span>
-              <MoneyText :value="baseAmount(s)" :currency="baseCurrency" position="prefix" muted />
-            </div>
-
-            <div class="sc-due" :class="statusOf(s)" v-if="s.billing_type === 'recurring' && s.next_renewal_date">
-              <span class="due mono-data">{{ s.next_renewal_date }}</span>
-              <span class="sc-due-text">{{ dueText(s) }}</span>
-            </div>
-            <div class="sc-due oneTime" v-else-if="s.billing_type === 'one_time'">
-              <span class="sc-due-text">{{ t('sub.lifetime') }}</span>
-            </div>
-
-            <div class="sc-meter" :class="statusOf(s)" aria-hidden="true"><span></span></div>
-          </div>
-
-          <div class="sc-quick">
-            <span v-if="payName(s)" class="quick-chip">💳 {{ payName(s) }}</span>
-            <span v-if="s.billing_type === 'recurring'" class="quick-chip">🔁 {{ boolText(s.auto_renew) }}</span>
-            <span v-if="s.family_members && s.family_members.length" class="quick-chip">👨‍👩‍👧 {{ s.family_members.length }}</span>
-            <span v-if="bundleName(s)" class="quick-chip">📦 {{ bundleName(s) }}</span>
-          </div>
-
-          <Transition name="detail">
-            <div v-if="isExpanded(s.id)" :id="detailId(s.id)" class="sc-detail" @click.stop>
-              <div class="detail-section">
-                <div class="detail-title">{{ t('sub.detailIdentityCost') }}</div>
-                <div class="detail-grid">
-                  <div class="detail-item"><div class="detail-label">{{ t('sub.category') }}</div><div class="detail-value">{{ categoryName(s) }}</div></div>
-                  <div class="detail-item"><div class="detail-label">{{ t('sub.plan') }}</div><div class="detail-value">{{ textOrDash(s.plan) }}</div></div>
-                  <div class="detail-item"><div class="detail-label">{{ t('sub.originalAmount') }}</div><div class="detail-value mono-data"><MoneyText :value="s.amount" :currency="s.currency" position="suffix" /></div></div>
-                  <div v-if="shouldShowBaseAmount(s)" class="detail-item"><div class="detail-label">{{ t('sub.baseCurrencyAmount') }} · {{ baseCurrency }}</div><div class="detail-value mono-data"><MoneyText :value="baseAmount(s)" :currency="baseCurrency" position="suffix" muted /></div></div>
-                  <div class="detail-item"><div class="detail-label">{{ t('sub.billingType') }}</div><div class="detail-value">{{ s.billing_type === 'one_time' ? t('sub.oneTime') : t('sub.recurring') }}</div></div>
-                  <div class="detail-item"><div class="detail-label">{{ t('sub.cycle') }}</div><div class="detail-value">{{ s.billing_type === 'recurring' ? cycleText(s) : DASH }}</div></div>
-                  <div class="detail-item detail-item--full"><div class="detail-label">{{ t('sub.website') }}</div><div class="detail-value"><a v-if="s.url" :href="s.url" target="_blank" rel="noopener noreferrer" @click.stop>{{ s.url }}</a><span v-else>{{ DASH }}</span></div></div>
-                  <div class="detail-item detail-item--full"><div class="detail-label">{{ t('sub.remark') }}</div><div class="detail-value">{{ textOrDash(s.remark) }}</div></div>
-                </div>
-              </div>
-
-              <div class="detail-section">
-                <div class="detail-title">{{ t('sub.detailRiskReminder') }}</div>
-                <div class="detail-grid">
-                  <div class="detail-item"><div class="detail-label">{{ t('sub.startDate') }}</div><div class="detail-value mono-data">{{ textOrDash(s.start_date) }}</div></div>
-                  <div class="detail-item"><div class="detail-label">{{ t('sub.nextRenewal') }}</div><div class="detail-value mono-data">{{ s.billing_type === 'recurring' ? textOrDash(s.next_renewal_date) : t('sub.lifetime') }}</div></div>
-                  <div class="detail-item"><div class="detail-label">{{ t('sub.endDate') }}</div><div class="detail-value mono-data">{{ textOrDash(s.end_date) }}</div></div>
-                  <div class="detail-item"><div class="detail-label">{{ t('sub.lastRenewedAt') }}</div><div class="detail-value mono-data">{{ textOrDash(s.last_renewed_at) }}</div></div>
-                  <div class="detail-item"><div class="detail-label">{{ t('sub.remindDays') }}</div><div class="detail-value mono-data">{{ textOrDash(s.remind_days_before) }}</div></div>
-                  <div class="detail-item"><div class="detail-label">{{ t('sub.autoRenew') }}</div><div class="detail-value">{{ boolText(s.auto_renew) }}</div></div>
-                  <div class="detail-item"><div class="detail-label">{{ t('sub.calendarVisible') }}</div><div class="detail-value">{{ boolText(s.show_in_calendar) }}</div></div>
-                </div>
-              </div>
-
-              <div class="detail-section">
-                <div class="detail-title">{{ t('sub.detailAccountingOwner') }}</div>
-                <div class="detail-grid">
-                  <div class="detail-item"><div class="detail-label">{{ t('sub.payment') }}</div><div class="detail-value">{{ payName(s) || DASH }}</div></div>
-                  <div class="detail-item"><div class="detail-label">{{ t('sub.bundle') }}</div><div class="detail-value">{{ bundleName(s) || DASH }}</div></div>
-                  <div class="detail-item detail-item--full"><div class="detail-label">{{ t('sub.family') }}</div><div class="detail-value">{{ familyText(s) }}</div></div>
-                  <div class="detail-item"><div class="detail-label">{{ t('sub.ipv4') }}</div><div class="detail-value mono-data">{{ textOrDash(s.ipv4) }}</div></div>
-                  <div class="detail-item"><div class="detail-label">{{ t('sub.ipv6') }}</div><div class="detail-value mono-data">{{ textOrDash(s.ipv6) }}</div></div>
-                  <div class="detail-item detail-item--full"><div class="detail-label">{{ t('sub.notes') }}</div><div class="detail-value">{{ textOrDash(s.notes) }}</div></div>
-                </div>
-              </div>
-            </div>
-          </Transition>
-
-          <div v-if="s.billing_type === 'recurring'" class="sc-acts" @click.stop>
-            <button class="btn sm ghost act-btn act-renew"
-                    :title="t('sub.renewHint')"
-                    @click.stop="askRenew(s)">
-              <span class="act-ico" aria-hidden="true">♻</span>
-              <span class="act-label">{{ t('sub.renew') }}</span>
-            </button>
-          </div>
-        </div>
+        <SubscriptionCard
+          v-for="s in g.items"
+          :key="s.id"
+          :subscription="s"
+          :category-key="g.key"
+          :expanded="isExpanded(s.id)"
+          :drag-over="dragOverSub === s.id"
+          :sortable="!filter"
+          :detail-id="detailId(s.id)"
+          :nav-label="t('nav.subscriptions')"
+          :base-currency="baseCurrency"
+          :base-amount="baseAmount(s)"
+          :show-base-amount="shouldShowBaseAmount(s)"
+          :category-name="categoryName(s)"
+          :payment-name="payName(s)"
+          :bundle-name="bundleName(s)"
+          :family-text="familyText(s)"
+          @toggle="toggleDetails"
+          @card-click="onCardClickPayload"
+          @open-actions="onOpenActionsPayload"
+          @renew="askRenew"
+          @drag-start="onCardDragStartPayload"
+          @drag-over="onCardDragOverPayload"
+          @drop="onCardDropPayload"
+          @drag-end="clearDrag"
+        />
       </div>
     </div>
 
@@ -442,16 +361,14 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import api from '../api'
-import MoneyText from '../components/MoneyText.vue'
 import ServiceIcon from '../components/ServiceIcon.vue'
-import StatusChip from '../components/StatusChip.vue'
 import ActionMenuContent from '../components/subscriptions/ActionMenuContent.vue'
 import DeleteSubscriptionModal from '../components/subscriptions/DeleteSubscriptionModal.vue'
 import RenewSubscriptionModal from '../components/subscriptions/RenewSubscriptionModal.vue'
+import SubscriptionCard from '../components/subscriptions/SubscriptionCard.vue'
 import { useAuth } from '../stores/auth'
-import { addCycleDate, daysLeft, parseLocalDate, toISODate } from '../utils/date'
+import { addCycleDate, parseLocalDate, toISODate } from '../utils/date'
 import { amountOf, hasBaseEquivalent } from '../utils/money'
-import { isExpired, isSoon, renewalStatus } from '../utils/renewal'
 import { buildServicePickPatch, findCategoryIdByServiceKey, getServiceCategoryKeys, getServiceCategoryLabel, groupServicesByCategory, isVpsCategory as isVpsServiceCategory, suggestServicesByName } from '../utils/serviceLibrary'
 import { buildGroupedSubscriptions, buildSubscriptionOrderState, categoryOrderToPersistedIds, getCategoryMeta, getSubscriptionCategoryKey, moveCategoryByOffset, moveCategoryToTarget, moveValueByOffset, moveValueToTarget, UNCATEGORIZED_KEY } from '../utils/subscriptionOrdering'
 import { buildSubscriptionPayload, cloneSubscriptionForEdit, computeNextRenewalDate, createBlankSubscriptionForm } from '../utils/subscriptionForm'
@@ -534,13 +451,12 @@ const expandedSubId = ref(null)
 function isExpanded(id) { return expandedSubId.value === id }
 function toggleDetails(id) { expandedSubId.value = expandedSubId.value === id ? null : id }
 function detailId(id) { return `sub-detail-${id}` }
+function onCardClickPayload({ subscription }) { toggleDetails(subscription.id) }
+function onOpenActionsPayload({ subscription, categoryKey, event }) { openCardActions(subscription, categoryKey, event) }
+function onCardDragStartPayload({ categoryKey, id, event }) { onCardDragStart(categoryKey, id, event) }
+function onCardDragOverPayload({ categoryKey, id, event }) { onCardDragOver(categoryKey, id, event) }
+function onCardDropPayload({ categoryKey, id, event }) { onCardDrop(categoryKey, id, event) }
 function closestElement(target) { return target?.closest ? target : target?.parentElement }
-function onCardClick(s, e) {
-  // 点击卡片空白处展开/收起；点中按钮、链接、详情区等交互控件则交给控件自身（它们已 @click.stop）
-  const target = closestElement(e.target)
-  if (target?.closest('button, a, input, select, textarea, label, summary, .sc-detail, .quick-chip')) return
-  toggleDetails(s.id)
-}
 
 // 基准货币
 const baseCurrency = computed(() => {
@@ -552,7 +468,6 @@ const baseCurrency = computed(() => {
 // 详情字段 helper
 const DASH = '—'
 function textOrDash(v) { return (v === null || v === undefined || v === '') ? DASH : v }
-function boolText(v) { return v ? '✓' : '✗' }
 function bundleName(s) {
   const b = bundles.value.find((x) => x.id === s.bundle_id)
   return b ? b.name : ''
@@ -600,24 +515,6 @@ function payName(s) {
 }
 function shouldShowBaseAmount(s) { return hasBaseEquivalent(s, baseCurrency.value) }
 function baseAmount(s) { return amountOf(s) }
-function cycleText(s) {
-  const n = s.cycle_count > 1 ? s.cycle_count + ' ' : ''
-  return n + t('sub.' + s.cycle)
-}
-function dueText(s) {
-  const d = daysLeft(s)
-  if (d === null) return ''
-  if (d < 0) return t('sub.expiredTag')
-  return d === 0 ? t('dashboard.today') : t('dashboard.daysLeft', { n: d })
-}
-function statusOf(s) { return renewalStatus(s) }
-function statusChip(s) {
-  const st = statusOf(s)
-  if (st === 'overdue') return t('sub.statusOverdue')
-  if (st === 'soon') return t('sub.statusSoon') + ' · ' + Math.abs(daysLeft(s)) + 'D'
-  if (st === 'oneTime') return t('sub.statusLifetime')
-  return t('sub.statusSafe')
-}
 
 /* ---------- 客户端续费日计算复用共享工具（utils/date.js，与后端 billing.add_cycle 对齐） ---------- */
 
@@ -961,88 +858,6 @@ h1 { margin-top: 0; }
 
 /* 信号卡 */
 .sub-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 16px; }
-.sub-card { display: flex; flex-direction: column; padding: 18px; cursor: pointer; position: relative; overflow: hidden;
-  transition: transform .22s cubic-bezier(.2,.8,.2,1), box-shadow .22s ease, border-color .18s ease, background .18s ease; }
-.sub-card:not(.expanded) { min-height: 240px; }
-.sub-card:focus-visible { outline: 2px solid var(--primary); outline-offset: 3px; }
-.sub-card.expanded { border-color: color-mix(in srgb, var(--primary) 45%, var(--border)); box-shadow: var(--shadow-lg);
-  background: linear-gradient(180deg, color-mix(in srgb, var(--signal-cyan) 4%, var(--surface)), var(--surface)); }
-/* 续费状态信号轨：safe / soon / overdue */
-.status-strip { position: absolute; left: 0; top: 0; bottom: 0; width: 4px; }
-.status-strip.ok { background: var(--success); opacity: .35; }
-.status-strip.soon { background: var(--warning); opacity: .85; }
-.status-strip.overdue { background: var(--danger); }
-.status-strip.oneTime { background: var(--text-soft); opacity: .22; }
-.sub-card:hover { transform: translateY(-3px); box-shadow: var(--shadow-lg);
-  border-color: color-mix(in srgb, var(--primary) 40%, var(--border)); }
-.sub-card:hover .sc-ico { transform: scale(1.05) rotate(-2deg); }
-.sub-card.inactive { opacity: .55; }
-.sub-card.expired { border-color: var(--danger); box-shadow: 0 0 0 1px var(--danger), var(--shadow); }
-.sub-card.soon { border-color: var(--warning); box-shadow: 0 0 0 1px var(--warning), var(--shadow); }
-.sub-card.drop-card { border-color: var(--primary); box-shadow: 0 0 0 2px var(--primary-soft); }
-.sc-head { display: flex; align-items: center; gap: 12px; }
-.sc-ico { width: 44px; height: 44px; border-radius: 12px; object-fit: contain; border: 1px solid var(--border);
-  flex-shrink: 0; background: var(--surface-2); transition: transform .25s cubic-bezier(.2,.8,.2,1); }
-.sc-ico.emoji { display: flex; align-items: center; justify-content: center; font-size: 26px; }
-.sc-title { flex: 1; min-width: 0; }
-.sc-name { font-weight: 700; font-size: 17px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.sc-plan { font-size: 12px; overflow-wrap: anywhere; }
-.card-grip { flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center; border: none; background: transparent; color: var(--text-soft); cursor: grab;
-  padding: 5px 6px; border-radius: 8px; line-height: 1; user-select: none; opacity: .35; transition: opacity .15s ease, background .12s ease, color .12s ease; }
-.sub-card:hover .card-grip,
-.card-grip:focus-visible { opacity: 1; }
-.card-grip:hover { background: var(--surface-2); color: var(--text); }
-.card-grip:active { cursor: grabbing; }
-.card-more { display: inline-flex; flex-shrink: 0; align-items: center; justify-content: center; width: 32px; height: 32px;
-  border: none; border-radius: 999px; background: transparent; color: var(--text-soft); cursor: pointer; font-size: 20px; line-height: 1; }
-.card-more:hover { background: var(--surface-2); color: var(--text); }
-.card-detail-toggle { flex-shrink: 0; border: none; background: transparent; color: var(--text-soft); cursor: pointer;
-  padding: 5px 8px; border-radius: 8px; line-height: 1; font-size: 14px; }
-.card-detail-toggle:hover { background: var(--surface-2); color: var(--text); }
-.sc-signal { display: grid; gap: 6px; margin-top: 14px; }
-.sc-amount { font-size: 28px; font-weight: 800; letter-spacing: -.02em; }
-.sc-amount .cur { font-size: 15px; font-weight: 500; }
-.sc-amount .cycle { font-size: 14px; font-weight: 500; }
-.sc-base-amount { display: flex; align-items: baseline; gap: 6px; font-size: 12px; color: var(--text-soft); }
-.sc-due { display: flex; align-items: center; gap: 8px; font-size: 14px; }
-.sc-due .due { font-weight: 700; }
-.sc-due-text { font-size: 12px; color: var(--text-soft); }
-.sc-due.ok .due { color: var(--text); }
-.sc-due.soon .due, .sc-due.soon .sc-due-text { color: var(--warning); }
-.sc-due.overdue .due, .sc-due.overdue .sc-due-text { color: var(--danger); }
-.sc-due.oneTime .sc-due-text { color: var(--text-soft); font-style: italic; }
-.sc-meter { height: 3px; border-radius: 999px; overflow: hidden; background: color-mix(in srgb, var(--surface-2) 48%, transparent); }
-.sc-meter span { display: block; width: 54%; height: 100%; border-radius: inherit; background: color-mix(in srgb, var(--success) 62%, var(--signal-cyan)); }
-.sc-meter.soon span { width: 82%; background: var(--warning); }
-.sc-meter.overdue span { width: 100%; background: var(--danger); }
-.sc-meter.oneTime span { width: 38%; background: color-mix(in srgb, var(--text-soft) 46%, transparent); }
-.sc-quick { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
-.quick-chip { display: inline-flex; align-items: center; max-width: 100%; border: 1px solid var(--border); border-radius: 999px;
-  padding: 3px 8px; color: var(--text-soft); background: color-mix(in srgb, var(--surface-2) 76%, transparent); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.sc-detail { margin-top: 14px; padding-top: 14px; border-top: 1px dashed var(--border); display: grid; gap: 12px; }
-.detail-section { border: 1px solid var(--border); border-radius: 14px; padding: 12px;
-  background: color-mix(in srgb, var(--surface-2) 76%, transparent); }
-.detail-title { font-size: 13px; font-weight: 850; color: var(--primary); margin-bottom: 9px; letter-spacing: -.01em; }
-.detail-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px 12px; }
-.detail-item { min-width: 0; }
-.detail-item--full { grid-column: 1 / -1; }
-.detail-label { font-size: 11px; color: var(--text-soft); margin-bottom: 2px; }
-.detail-value { font-size: 13px; line-height: 1.45; word-break: break-word; }
-.detail-value a { color: var(--primary); text-decoration: none; }
-.detail-value a:hover { text-decoration: underline; }
-.detail-enter-active, .detail-leave-active { transition: opacity .16s ease, transform .16s ease; }
-.detail-enter-from, .detail-leave-to { opacity: 0; transform: translateY(-4px); }
-.due.soon { color: var(--warning); font-weight: 600; }
-.due.overdue { color: var(--danger); font-weight: 700; }
-.tag.one_time { background: #fef3c7; color: #b45309; }
-.sc-acts { display: flex; gap: 8px; margin-top: auto; padding-top: 10px; border-top: 1px dashed color-mix(in srgb, var(--border) 80%, transparent); }
-.sc-acts .btn { flex: 0 1 auto; }
-.act-btn { display: inline-flex; align-items: center; justify-content: center; gap: 4px; }
-.btn.act-renew { background: var(--primary-soft); color: var(--primary);
-  border: 1px solid color-mix(in srgb, var(--primary) 24%, var(--border)); box-shadow: none; }
-.btn.act-renew:hover { background: color-mix(in srgb, var(--primary-soft) 70%, var(--primary) 14%);
-  border-color: color-mix(in srgb, var(--primary) 38%, var(--border)); transform: none; box-shadow: none; }
-.act-ico { display: inline-flex; align-items: center; justify-content: center; line-height: 1; }
 
 /* 表单内复用样式 */
 .block { border: 1px solid var(--border); border-radius: 10px; padding: 12px; margin-bottom: 12px; }
@@ -1094,21 +909,10 @@ h1 { margin-top: 0; }
   .bar { align-items: stretch; }
   .bar .btn { width: 100%; }
   .sub-grid { grid-template-columns: 1fr; }
-  .sc-head { align-items: flex-start; gap: 10px; }
-  .sc-name { font-size: 16px; white-space: normal; line-height: 1.3; }
-  .sc-amount { font-size: 24px; overflow-wrap: anywhere; }
-  .sc-due { align-items: flex-start; flex-wrap: wrap; }
-  .quick-chip { white-space: normal; line-height: 1.35; border-radius: 12px; }
   .drag-hint { display: none; }
   .cat-head { cursor: default; flex-wrap: wrap; }
   .cat-head .grip { display: none; }
   .mobile-sort { display: inline-flex; margin-left: auto; }
-  .sub-card { cursor: pointer; padding: 16px; }
-  .card-grip { display: none; }
-  .detail-section { padding: 10px; }
-  .detail-grid { grid-template-columns: 1fr; }
-  .detail-value { overflow-wrap: anywhere; }
-  .sc-acts { display: none; }
   .card-sort { display: none; }
   .block { padding: 10px; margin-bottom: 10px; background: color-mix(in srgb, var(--surface-2) 42%, transparent); }
   .block-t { margin-bottom: 8px; }
