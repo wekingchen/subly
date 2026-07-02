@@ -32,53 +32,36 @@
     </div>
 
     <!-- 按分类分组 -->
-    <div v-for="g in grouped" :key="g.key" class="cat-group"
-         :class="{ 'drop-cat': dragOverCat === g.key }"
-         @dragover.prevent="onCatDragOver(g.key)"
-         @drop="onCatDrop(g.key)">
-      <div class="cat-head"
-           :draggable="!filter && canSortCategory(g.key)"
-           @dragstart="onCatDragStart(g.key, $event)"
-           @dragend="clearDrag">
-        <span v-if="canSortCategory(g.key)" class="grip">⠿</span>
-        <span class="cat-ico">{{ g.icon }}</span>
-        <span class="cat-name">{{ g.name }}</span>
-        <span class="cat-count">{{ g.items.length }}</span>
-        <span v-if="!filter && canSortCategory(g.key)" class="mobile-sort">
-          <button class="btn sm ghost" @click.stop="moveCat(g.key, -1)" :aria-label="t('sub.moveUp')">↑</button>
-          <button class="btn sm ghost" @click.stop="moveCat(g.key, 1)" :aria-label="t('sub.moveDown')">↓</button>
-        </span>
-      </div>
-
-      <div class="sub-grid">
-        <SubscriptionCard
-          v-for="s in g.items"
-          :key="s.id"
-          :subscription="s"
-          :category-key="g.key"
-          :expanded="isExpanded(s.id)"
-          :drag-over="dragOverSub === s.id"
-          :sortable="!filter"
-          :detail-id="detailId(s.id)"
-          :nav-label="t('nav.subscriptions')"
-          :base-currency="baseCurrency"
-          :base-amount="baseAmount(s)"
-          :show-base-amount="shouldShowBaseAmount(s)"
-          :category-name="categoryName(s)"
-          :payment-name="payName(s)"
-          :bundle-name="bundleName(s)"
-          :family-text="familyText(s)"
-          @toggle="toggleDetails"
-          @card-click="onCardClickPayload"
-          @open-actions="onOpenActionsPayload"
-          @renew="askRenew"
-          @drag-start="onCardDragStartPayload"
-          @drag-over="onCardDragOverPayload"
-          @drop="onCardDropPayload"
-          @drag-end="clearDrag"
-        />
-      </div>
-    </div>
+    <SubscriptionCategoryGroup
+      v-for="g in grouped"
+      :key="g.key"
+      :group="g"
+      :sort-enabled="!filter"
+      :category-sortable="canSortCategory(g.key)"
+      :drop-active="dragOverCat === g.key"
+      :drag-over-sub-id="dragOverSub"
+      :expanded-id="expandedSubId"
+      :nav-label="t('nav.subscriptions')"
+      :base-currency="baseCurrency"
+      :base-amount="baseAmount"
+      :show-base-amount="shouldShowBaseAmount"
+      :category-name="categoryName"
+      :payment-name="payName"
+      :bundle-name="bundleName"
+      :family-text="familyText"
+      @move-category="onMoveCategoryPayload"
+      @category-drag-start="onCategoryDragStartPayload"
+      @category-drag-over="onCategoryDragOverPayload"
+      @category-drop="onCategoryDropPayload"
+      @toggle="toggleDetails"
+      @card-click="onCardClickPayload"
+      @open-actions="onOpenActionsPayload"
+      @renew="askRenew"
+      @card-drag-start="onCardDragStartPayload"
+      @card-drag-over="onCardDragOverPayload"
+      @card-drop="onCardDropPayload"
+      @drag-end="clearDrag"
+    />
 
     <RenewSubscriptionModal
       v-if="renewTarget"
@@ -166,7 +149,7 @@ import api from '../api'
 import ActionMenuContent from '../components/subscriptions/ActionMenuContent.vue'
 import DeleteSubscriptionModal from '../components/subscriptions/DeleteSubscriptionModal.vue'
 import RenewSubscriptionModal from '../components/subscriptions/RenewSubscriptionModal.vue'
-import SubscriptionCard from '../components/subscriptions/SubscriptionCard.vue'
+import SubscriptionCategoryGroup from '../components/subscriptions/SubscriptionCategoryGroup.vue'
 import SubscriptionFormModal from '../components/subscriptions/SubscriptionFormModal.vue'
 import { useAuth } from '../stores/auth'
 import { addCycleDate, parseLocalDate, toISODate } from '../utils/date'
@@ -235,9 +218,11 @@ const actionPopoverStyle = computed(() => {
 
 // 卡片内联详情：同时只展开一张
 const expandedSubId = ref(null)
-function isExpanded(id) { return expandedSubId.value === id }
 function toggleDetails(id) { expandedSubId.value = expandedSubId.value === id ? null : id }
-function detailId(id) { return `sub-detail-${id}` }
+function onMoveCategoryPayload({ key, dir }) { moveCat(key, dir) }
+function onCategoryDragStartPayload({ key, event }) { onCatDragStart(key, event) }
+function onCategoryDragOverPayload({ key }) { onCatDragOver(key) }
+function onCategoryDropPayload({ key }) { onCatDrop(key) }
 function onCardClickPayload({ subscription }) { toggleDetails(subscription.id) }
 function onOpenActionsPayload({ subscription, categoryKey, event }) { openCardActions(subscription, categoryKey, event) }
 function onCardDragStartPayload({ categoryKey, id, event }) { onCardDragStart(categoryKey, id, event) }
@@ -567,20 +552,6 @@ h1 { margin-top: 0; }
 .empty-orbit span::after { content: ''; position: absolute; top: 50%; left: 50%; width: 10px; height: 10px;
   transform: translate(-50%, -50%); border-radius: 50%; background: color-mix(in srgb, var(--signal-cyan) 60%, var(--primary)); }
 
-/* 分类分组 */
-.cat-group { margin-bottom: 22px; border-radius: 14px; transition: outline .12s; outline: 2px dashed transparent; }
-.cat-group.drop-cat { outline-color: var(--primary); outline-offset: 4px; }
-.cat-head { display: flex; align-items: center; gap: 8px; padding: 6px 4px 12px; cursor: grab; }
-.cat-head .grip { color: var(--text-soft); cursor: grab; }
-.cat-ico { font-size: 18px; }
-.cat-name { font-weight: 700; font-size: 16px; }
-.cat-count { background: var(--surface-2); color: var(--text-soft); border-radius: 20px;
-  padding: 1px 9px; font-size: 12px; }
-.mobile-sort, .card-sort { display: none; gap: 6px; }
-
-/* 信号卡 */
-.sub-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 16px; }
-
 .action-mask { position: fixed; inset: 0; z-index: 70; display: flex; align-items: flex-end; justify-content: center;
   padding: 14px; background: rgba(2, 6, 23, .54); backdrop-filter: blur(8px); }
 .action-sheet { width: min(430px, 100%); border: 1px solid color-mix(in srgb, var(--border) 76%, transparent); border-radius: 24px;
@@ -602,12 +573,7 @@ h1 { margin-top: 0; }
   .ledger-toolbar .drag-hint { display: none; }
   .ledger-seg { width: 100%; }
   .ledger-seg button { flex: 1 1 0; }
-  .sub-grid { grid-template-columns: 1fr; }
   .drag-hint { display: none; }
-  .cat-head { cursor: default; flex-wrap: wrap; }
-  .cat-head .grip { display: none; }
-  .mobile-sort { display: inline-flex; margin-left: auto; }
-  .card-sort { display: none; }
 }
 </style>
 
