@@ -57,6 +57,7 @@ const zh = {
     renewTitle: '确认续费', renewMsg: '为「{name}」选择续费方式：',
     renewHint: '标记当期已续费，推进下次到期日；此操作不会触发付款。',
     renewDisclaimer: '此操作只更新你的续费记录与下次到期日，不会向任何服务付款。',
+    renewMark: '标记已续费',
     renewToday: '保号 / 提前续费：从今天起 +1 个周期（重新计周期）',
     renewDue: '常规循环：从原到期日 +1 个周期（不浪费已付时间）',
     renewNext: '续费后下次到期：', renewOk: '已续费，下次到期 {date}', confirm: '确认续费',

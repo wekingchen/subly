@@ -52,7 +52,7 @@
             <StatusChip :status="statusOf(s)">{{ statusChip(s) }}</StatusChip>
             <button type="button" class="card-more"
                     :aria-label="`${s.name || t('nav.subscriptions')}：更多操作`"
-                    @click.stop="openCardActions(s, g.key)">⋯</button>
+                    @click.stop="openCardActions(s, g.key, $event)">⋯</button>
             <button type="button" class="card-detail-toggle" :aria-expanded="isExpanded(s.id)"
                     :aria-controls="detailId(s.id)"
                     :aria-label="`${s.name || t('nav.subscriptions')}：${isExpanded(s.id) ? t('sub.collapse') : t('sub.expand')}`"
@@ -190,7 +190,7 @@
     </div>
 
     <!-- 移动端更多操作 -->
-    <div v-if="actionTarget" class="action-mask" @click="closeCardActions">
+    <div v-if="actionTarget && !isDesktopActionMode" class="action-mask" @click="closeCardActions">
       <div ref="actionSheetRef" class="action-sheet" role="dialog" aria-modal="true"
            :aria-labelledby="actionSheetTitleId(actionTarget.id)" tabindex="-1" @click.stop>
         <div class="action-head">
@@ -209,14 +209,52 @@
         <button class="action-item" @click="editFromActions">
           <span>✎</span><span>{{ t('sub.edit') }}</span>
         </button>
-        <button v-if="actionTarget.billing_type === 'recurring'" class="action-item action-item-renew" @click="renewFromActions">
-          <span>♻</span><span>{{ t('sub.renew') }}</span>
+        <button v-if="actionTarget.billing_type === 'recurring'" class="action-item action-item-renew" :title="t('sub.renewHint')" @click="renewFromActions">
+          <span aria-hidden="true">♻</span>
+          <span class="action-item-main">
+            <span>{{ t('sub.renewMark') }}</span>
+            <span class="action-item-hint">{{ t('sub.renewDisclaimer') }}</span>
+          </span>
         </button>
         <button class="action-item danger" @click="deleteFromActions">
           <span>×</span><span>{{ t('sub.delete') }}</span>
         </button>
       </div>
     </div>
+
+    <!-- 桌面端更多操作：贴近原卡片按钮弹出 -->
+    <Teleport to="body">
+      <div v-if="actionTarget && isDesktopActionMode" class="action-popover-backdrop" @click="closeCardActions"></div>
+      <div v-if="actionTarget && isDesktopActionMode" ref="actionPopoverRef" class="action-popover" role="dialog" aria-modal="false"
+           :aria-labelledby="actionSheetTitleId(actionTarget.id)" :style="actionPopoverStyle" tabindex="-1" @click.stop>
+        <div class="action-head">
+          <ServiceIcon :src="actionTarget.icon" :name="actionTarget.name" :fallback="actionTarget.icon || '🔖'"
+                       class="action-ico" loading="lazy" decoding="async" />
+          <div class="action-copy">
+            <div :id="actionSheetTitleId(actionTarget.id)" class="action-name">{{ actionTarget.name }}</div>
+            <div class="action-plan muted">{{ textOrDash(actionTarget.plan) }}</div>
+          </div>
+          <button type="button" class="action-close" :aria-label="t('common.close')" @click="closeCardActions">×</button>
+        </div>
+        <div v-if="!filter" class="action-move">
+          <button type="button" class="action-move-btn" @click="moveFromActions(-1)">↑ {{ t('sub.moveUp') }}</button>
+          <button type="button" class="action-move-btn" @click="moveFromActions(1)">↓ {{ t('sub.moveDown') }}</button>
+        </div>
+        <button class="action-item" @click="editFromActions">
+          <span>✎</span><span>{{ t('sub.edit') }}</span>
+        </button>
+        <button v-if="actionTarget.billing_type === 'recurring'" class="action-item action-item-renew" :title="t('sub.renewHint')" @click="renewFromActions">
+          <span aria-hidden="true">♻</span>
+          <span class="action-item-main">
+            <span>{{ t('sub.renewMark') }}</span>
+            <span class="action-item-hint">{{ t('sub.renewDisclaimer') }}</span>
+          </span>
+        </button>
+        <button class="action-item danger" @click="deleteFromActions">
+          <span>×</span><span>{{ t('sub.delete') }}</span>
+        </button>
+      </div>
+    </Teleport>
 
     <!-- 添加/编辑订阅 -->
     <div v-if="showForm" class="modal-mask">
@@ -499,6 +537,41 @@ const deleting = ref(false)
 const actionTarget = ref(null)
 const actionCatKey = ref(null)
 const actionSheetRef = ref(null)
+// 桌面端 ⋯ 菜单走 anchored popover，移动端走底部 sheet
+const actionAnchor = ref(null)
+const actionPopoverRef = ref(null)
+const isDesktopActionMode = ref(false)
+let actionMq = null
+function syncActionMode() { isDesktopActionMode.value = !!actionMq?.matches }
+function clamp(n, min, max) { return Math.min(Math.max(n, min), max) }
+const ACTION_EDGE = 12
+const ACTION_GAP = 8
+const ACTION_MIN_H = 80
+const actionPopoverStyle = computed(() => {
+  const a = actionAnchor.value
+  if (!a || typeof window === 'undefined') return {}
+  const vw = window.innerWidth
+  const vh = window.innerHeight
+  const width = Math.min(300, vw - ACTION_EDGE * 2)
+  const maxLeft = Math.max(ACTION_EDGE, vw - width - ACTION_EDGE)
+  const left = clamp(a.right - width, ACTION_EDGE, maxLeft)
+  const below = vh - a.bottom - ACTION_GAP - ACTION_EDGE
+  const above = a.top - ACTION_GAP - ACTION_EDGE
+  if (below < 220 && above > below) {
+    const bottom = clamp(vh - a.top + ACTION_GAP, ACTION_EDGE, Math.max(ACTION_EDGE, vh - ACTION_EDGE - ACTION_MIN_H))
+    return {
+      left: `${left}px`,
+      bottom: `${bottom}px`,
+      '--action-popover-max-h': `${Math.max(ACTION_MIN_H, vh - bottom - ACTION_EDGE)}px`
+    }
+  }
+  const top = clamp(a.bottom + ACTION_GAP, ACTION_EDGE, Math.max(ACTION_EDGE, vh - ACTION_EDGE - ACTION_MIN_H))
+  return {
+    left: `${left}px`,
+    top: `${top}px`,
+    '--action-popover-max-h': `${Math.max(ACTION_MIN_H, vh - top - ACTION_EDGE)}px`
+  }
+})
 
 // 卡片内联详情：同时只展开一张
 const expandedSubId = ref(null)
@@ -531,17 +604,29 @@ function bundleName(s) {
 function categoryName(s) { return catMeta(catKeyOf(s)).name }
 function familyText(s) { return s.family_members && s.family_members.length ? s.family_members.join('、') : DASH }
 
-watch([showForm, renewTarget, delTarget, showBrowser, actionTarget], () => {
-  const open = showForm.value || renewTarget.value || delTarget.value || showBrowser.value || actionTarget.value
-  document.body.classList.toggle('modal-open', !!open)
-  if (actionTarget.value) nextTick(() => actionSheetRef.value?.focus())
+watch([showForm, renewTarget, delTarget, showBrowser, actionTarget, isDesktopActionMode], () => {
+  const modalOpen = showForm.value || renewTarget.value || delTarget.value || showBrowser.value
+  const mobileActionOpen = actionTarget.value && !isDesktopActionMode.value
+  document.body.classList.toggle('modal-open', !!(modalOpen || mobileActionOpen))
+  if (actionTarget.value) nextTick(() => {
+    const target = isDesktopActionMode.value ? actionPopoverRef.value : actionSheetRef.value
+    target?.focus?.()
+  })
 })
 function onActionKeydown(e) {
   if (e.key === 'Escape' && actionTarget.value) closeCardActions()
 }
-onMounted(() => window.addEventListener('keydown', onActionKeydown))
+onMounted(() => {
+  window.addEventListener('keydown', onActionKeydown)
+  actionMq = window.matchMedia('(min-width: 721px)')
+  syncActionMode()
+  if (actionMq.addEventListener) actionMq.addEventListener('change', syncActionMode)
+  else actionMq.addListener?.(syncActionMode)
+})
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onActionKeydown)
+  if (actionMq?.removeEventListener) actionMq.removeEventListener('change', syncActionMode)
+  else actionMq?.removeListener?.(syncActionMode)
   document.body.classList.remove('modal-open')
 })
 
@@ -761,8 +846,21 @@ function openNew() {
   recomputeNext()
 }
 function actionSheetTitleId(id) { return `sub-action-title-${id}` }
-function openCardActions(s, catKey) { actionTarget.value = s; actionCatKey.value = catKey }
-function closeCardActions() { actionTarget.value = null; actionCatKey.value = null }
+function readAnchor(el) {
+  if (!el?.getBoundingClientRect) return null
+  const r = el.getBoundingClientRect()
+  return { top: r.top, right: r.right, bottom: r.bottom, left: r.left, width: r.width, height: r.height }
+}
+function openCardActions(s, catKey, evt) {
+  actionTarget.value = s
+  actionCatKey.value = catKey
+  const el = evt?.currentTarget
+  actionAnchor.value = readAnchor(el)
+  if (el?.getBoundingClientRect) {
+    requestAnimationFrame(() => { actionAnchor.value = readAnchor(el) })
+  }
+}
+function closeCardActions() { actionTarget.value = null; actionCatKey.value = null; actionAnchor.value = null }
 function editFromActions() {
   const target = actionTarget.value
   closeCardActions()
@@ -1134,11 +1232,19 @@ h1 { margin-top: 0; }
 .action-move-btn:hover { color: var(--text); border-color: color-mix(in srgb, var(--primary) 36%, var(--border)); }
 .action-item { width: 100%; min-height: 48px; display: flex; align-items: center; gap: 10px; padding: 0 12px; border: none;
   border-radius: 16px; background: transparent; color: var(--text); font-size: 15px; font-weight: 700; text-align: left; cursor: pointer; }
+.action-item-main { display: grid; gap: 2px; min-width: 0; }
+.action-item-hint { color: var(--text-soft); font-size: 12px; font-weight: 500; line-height: 1.35; }
 .action-item:hover { background: var(--surface-2); }
 .action-item.danger { color: var(--danger); }
 @media (min-width: 721px) {
   .action-item-renew { display: none; }
 }
+.action-popover { position: fixed; z-index: 80; width: 300px; max-width: calc(100vw - 24px);
+  max-height: var(--action-popover-max-h, 70vh); overflow: auto; overscroll-behavior: contain;
+  border: 1px solid color-mix(in srgb, var(--border) 76%, transparent); border-radius: 18px; padding: 8px;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--surface) 94%, var(--signal-cyan)), var(--surface));
+  box-shadow: 0 18px 50px rgba(0, 0, 0, .22); }
+.action-popover-backdrop { position: fixed; inset: 0; z-index: 79; background: transparent; }
 
 @media (max-width: 720px) {
   .bar { align-items: stretch; }
