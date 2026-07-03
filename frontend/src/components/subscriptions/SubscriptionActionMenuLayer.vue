@@ -56,6 +56,7 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import ActionMenuContent from './ActionMenuContent.vue'
+import { useDialogFocus } from '../../composables/useDialogFocus'
 
 const props = defineProps({
   target: { type: Object, default: null },
@@ -67,6 +68,8 @@ const emit = defineEmits(['close', 'move', 'edit', 'renew', 'delete', 'mobile-lo
 
 const actionSheetRef = ref(null)
 const actionPopoverRef = ref(null)
+// 始终指向当前活跃容器（sheet 或 popover），供 useDialogFocus 做 Tab 环绕。
+const dialogRef = ref(null)
 const isDesktopActionMode = ref(false)
 let actionMq = null
 
@@ -79,6 +82,7 @@ const titleId = computed(() => props.target?.id != null ? `sub-action-title-${pr
 const planText = computed(() => textOrDash(props.target?.plan))
 const showRenew = computed(() => props.target?.billing_type === 'recurring')
 const mobileActionOpen = computed(() => !!props.target && !isDesktopActionMode.value)
+const actionOpen = computed(() => !!props.target)
 
 const actionPopoverStyle = computed(() => {
   const a = props.anchor
@@ -118,26 +122,36 @@ function syncActionMode() {
   isDesktopActionMode.value = !!actionMq?.matches
 }
 
-function focusCurrentActionLayer() {
-  if (!props.target) return
+// 把 dialogRef 同步到当前活跃容器，并聚焦它（处理打开与断点切换重聚焦）。
+// 初始聚焦由本层显式控制，避免与 composable 的 enter nextTick 时序耦合；
+// composable 只负责 Escape / Tab 环绕 / 栈管理。
+function syncActiveDialog() {
+  if (!props.target) {
+    dialogRef.value = null
+    return
+  }
   nextTick(() => {
-    const target = isDesktopActionMode.value ? actionPopoverRef.value : actionSheetRef.value
-    target?.focus?.()
+    const el = isDesktopActionMode.value ? actionPopoverRef.value : actionSheetRef.value
+    dialogRef.value = el
+    el?.focus?.()
   })
-}
-
-function onActionKeydown(e) {
-  if (e.key === 'Escape' && props.target) emit('close')
 }
 
 watch(mobileActionOpen, (open) => {
   emit('mobile-lock-change', open)
 }, { immediate: true })
 
-watch([() => props.target, isDesktopActionMode], focusCurrentActionLayer)
+watch([() => props.target, isDesktopActionMode], syncActiveDialog, { immediate: true })
+
+useDialogFocus({
+  open: actionOpen,
+  dialogRef,
+  onClose: () => emit('close'),
+  restoreFocus: false,
+  trap: true
+})
 
 onMounted(() => {
-  window.addEventListener('keydown', onActionKeydown)
   actionMq = window.matchMedia('(min-width: 721px)')
   syncActionMode()
   if (actionMq.addEventListener) actionMq.addEventListener('change', syncActionMode)
@@ -145,7 +159,6 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
-  window.removeEventListener('keydown', onActionKeydown)
   if (actionMq?.removeEventListener) actionMq.removeEventListener('change', syncActionMode)
   else actionMq?.removeListener?.(syncActionMode)
   emit('mobile-lock-change', false)
