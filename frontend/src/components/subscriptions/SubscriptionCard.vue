@@ -48,6 +48,7 @@
     </div>
 
     <div class="sc-quick">
+      <span v-if="remarkText" class="quick-chip remark-chip" :title="remarkText">📝 {{ remarkText }}</span>
       <span v-if="paymentName" class="quick-chip">{{ paymentName }}</span>
       <span v-if="subscription.billing_type === 'recurring'" class="quick-chip">🔁 {{ boolText(subscription.auto_renew) }}</span>
       <span v-if="subscription.family_members && subscription.family_members.length" class="quick-chip">👨‍👩‍👧 {{ subscription.family_members.length }}</span>
@@ -124,6 +125,7 @@ const dueText = computed(() => {
   if (d < 0) return t('sub.expiredTag')
   return d === 0 ? t('dashboard.today') : t('dashboard.daysLeft', { n: d })
 })
+const remarkText = computed(() => (props.subscription.remark || '').trim())
 const statusChip = computed(() => {
   const st = statusOf.value
   if (st === 'overdue') return t('sub.statusOverdue')
@@ -135,9 +137,9 @@ const statusChip = computed(() => {
 function boolText(v) { return v ? '✓' : '✗' }
 
 function onCardClick(e) {
-  // 点击卡片空白处展开/收起；点中按钮、链接、详情区等交互控件则交给控件自身（它们已 @click.stop）
+  // 点击卡片非交互区域展开/收起；点中按钮、链接、详情区等交互控件则交给控件自身（它们已 @click.stop）
   const target = e.target?.closest ? e.target : e.target?.parentElement
-  if (target?.closest('button, a, input, select, textarea, label, summary, .sc-detail, .quick-chip')) return
+  if (target?.closest('button, a, input, select, textarea, label, summary, .sc-detail')) return
   emit('cardClick', { subscription: props.subscription, event: e })
 }
 </script>
@@ -200,6 +202,8 @@ function onCardClick(e) {
 .sc-quick { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
 .quick-chip { display: inline-flex; align-items: center; max-width: 100%; border: 1px solid var(--border); border-radius: 999px;
   padding: 3px 8px; color: var(--text-soft); background: color-mix(in srgb, var(--surface-2) 76%, transparent); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.remark-chip { flex: 1 1 100%; border-color: color-mix(in srgb, var(--primary) 24%, var(--border));
+  color: color-mix(in srgb, var(--primary) 82%, var(--text)); background: color-mix(in srgb, var(--primary-soft) 54%, transparent); }
 .sc-acts { display: flex; gap: 8px; margin-top: auto; padding-top: 10px; border-top: 1px dashed color-mix(in srgb, var(--border) 80%, transparent); }
 .sc-acts .btn { flex: 0 1 auto; }
 .act-btn { display: inline-flex; align-items: center; justify-content: center; gap: 4px; }
@@ -216,6 +220,7 @@ function onCardClick(e) {
   .sc-amount { font-size: 24px; overflow-wrap: anywhere; }
   .sc-due { align-items: flex-start; flex-wrap: wrap; }
   .quick-chip { white-space: normal; line-height: 1.35; border-radius: 12px; }
+  .remark-chip { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
   .sub-card { cursor: pointer; padding: 16px; }
   .card-grip { display: none; }
   .sc-acts { display: none; }

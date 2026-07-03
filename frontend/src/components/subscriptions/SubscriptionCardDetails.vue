@@ -64,7 +64,11 @@ defineProps({
 })
 
 const { t } = useI18n()
-function textOrDash(v) { return (v === null || v === undefined || v === '') ? DASH : v }
+function textOrDash(v) {
+  if (v === null || v === undefined) return DASH
+  if (typeof v === 'string') return v.trim() || DASH
+  return v
+}
 function boolText(v) { return v ? '✓' : '✗' }
 </script>
 
