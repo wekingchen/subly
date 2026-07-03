@@ -66,7 +66,7 @@
       :renewing="renewing"
       :preview-today="previewToday"
       :preview-due="previewDue"
-      @close="renewTarget = null"
+      @close="closeRenew"
       @confirm="confirmRenew"
     />
 
@@ -76,48 +76,21 @@
       v-model:password="delPwd"
       :error="delErr"
       :deleting="deleting"
-      @close="delTarget = null"
+      @close="closeDelete"
       @confirm="confirmDelete"
     />
 
-    <!-- 移动端更多操作 -->
-    <div v-if="actionTarget && !isDesktopActionMode" class="action-mask" @click="closeCardActions">
-      <div ref="actionSheetRef" class="action-sheet" role="dialog" aria-modal="true"
-           :aria-labelledby="actionSheetTitleId(actionTarget.id)" tabindex="-1" @click.stop>
-        <ActionMenuContent
-          :target="actionTarget"
-          :title-id="actionSheetTitleId(actionTarget.id)"
-          :plan-text="textOrDash(actionTarget.plan)"
-          :show-move="!filter"
-          :show-renew="actionTarget.billing_type === 'recurring'"
-          @close="closeCardActions"
-          @move="moveFromActions"
-          @edit="editFromActions"
-          @renew="renewFromActions"
-          @delete="deleteFromActions"
-        />
-      </div>
-    </div>
-
-    <!-- 桌面端更多操作：贴近原卡片按钮弹出 -->
-    <Teleport to="body">
-      <div v-if="actionTarget && isDesktopActionMode" class="action-popover-backdrop" @click="closeCardActions"></div>
-      <div v-if="actionTarget && isDesktopActionMode" ref="actionPopoverRef" class="action-popover" role="dialog" aria-modal="false"
-           :aria-labelledby="actionSheetTitleId(actionTarget.id)" :style="actionPopoverStyle" tabindex="-1" @click.stop>
-        <ActionMenuContent
-          :target="actionTarget"
-          :title-id="actionSheetTitleId(actionTarget.id)"
-          :plan-text="textOrDash(actionTarget.plan)"
-          :show-move="!filter"
-          :show-renew="actionTarget.billing_type === 'recurring'"
-          @close="closeCardActions"
-          @move="moveFromActions"
-          @edit="editFromActions"
-          @renew="renewFromActions"
-          @delete="deleteFromActions"
-        />
-      </div>
-    </Teleport>
+    <SubscriptionActionMenuLayer
+      :target="actionTarget"
+      :anchor="actionAnchor"
+      :show-move="!filter"
+      @close="closeCardActions"
+      @move="moveFromActions"
+      @edit="editFromActions"
+      @renew="renewFromActions"
+      @delete="deleteFromActions"
+      @mobile-lock-change="actionMobileOpen = $event"
+    />
 
     <SubscriptionFormModal
       v-if="showForm"
@@ -142,9 +115,9 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import api from '../api'
-import ActionMenuContent from '../components/subscriptions/ActionMenuContent.vue'
 import DeleteSubscriptionModal from '../components/subscriptions/DeleteSubscriptionModal.vue'
 import RenewSubscriptionModal from '../components/subscriptions/RenewSubscriptionModal.vue'
+import SubscriptionActionMenuLayer from '../components/subscriptions/SubscriptionActionMenuLayer.vue'
 import SubscriptionCategoryGroup from '../components/subscriptions/SubscriptionCategoryGroup.vue'
 import SubscriptionFormModal from '../components/subscriptions/SubscriptionFormModal.vue'
 import SubscriptionToolbar from '../components/subscriptions/SubscriptionToolbar.vue'
@@ -176,42 +149,11 @@ const deleting = ref(false)
 
 const actionTarget = ref(null)
 const actionCatKey = ref(null)
-const actionSheetRef = ref(null)
-// 桌面端 ⋯ 菜单走 anchored popover，移动端走底部 sheet
 const actionAnchor = ref(null)
-const actionPopoverRef = ref(null)
-const isDesktopActionMode = ref(false)
-let actionMq = null
-function syncActionMode() { isDesktopActionMode.value = !!actionMq?.matches }
-function clamp(n, min, max) { return Math.min(Math.max(n, min), max) }
-const ACTION_EDGE = 12
-const ACTION_GAP = 8
-const ACTION_MIN_H = 80
-const actionPopoverStyle = computed(() => {
-  const a = actionAnchor.value
-  if (!a || typeof window === 'undefined') return {}
-  const vw = window.innerWidth
-  const vh = window.innerHeight
-  const width = Math.min(300, vw - ACTION_EDGE * 2)
-  const maxLeft = Math.max(ACTION_EDGE, vw - width - ACTION_EDGE)
-  const left = clamp(a.right - width, ACTION_EDGE, maxLeft)
-  const below = vh - a.bottom - ACTION_GAP - ACTION_EDGE
-  const above = a.top - ACTION_GAP - ACTION_EDGE
-  if (below < 220 && above > below) {
-    const bottom = clamp(vh - a.top + ACTION_GAP, ACTION_EDGE, Math.max(ACTION_EDGE, vh - ACTION_EDGE - ACTION_MIN_H))
-    return {
-      left: `${left}px`,
-      bottom: `${bottom}px`,
-      '--action-popover-max-h': `${Math.max(ACTION_MIN_H, vh - bottom - ACTION_EDGE)}px`
-    }
-  }
-  const top = clamp(a.bottom + ACTION_GAP, ACTION_EDGE, Math.max(ACTION_EDGE, vh - ACTION_EDGE - ACTION_MIN_H))
-  return {
-    left: `${left}px`,
-    top: `${top}px`,
-    '--action-popover-max-h': `${Math.max(ACTION_MIN_H, vh - top - ACTION_EDGE)}px`
-  }
-})
+const actionAnchorEl = ref(null)
+const actionReturnFocusEl = ref(null)
+const actionMobileOpen = ref(false)
+let actionAnchorFrame = null
 
 // 卡片内联详情：同时只展开一张
 const expandedSubId = ref(null)
@@ -236,7 +178,6 @@ const baseCurrency = computed(() => {
 
 // 详情字段 helper
 const DASH = '—'
-function textOrDash(v) { return (v === null || v === undefined || v === '') ? DASH : v }
 function bundleName(s) {
   const b = bundles.value.find((x) => x.id === s.bundle_id)
   return b ? b.name : ''
@@ -244,29 +185,28 @@ function bundleName(s) {
 function categoryName(s) { return catMeta(catKeyOf(s)).name }
 function familyText(s) { return s.family_members && s.family_members.length ? s.family_members.join('、') : DASH }
 
-watch([showForm, renewTarget, delTarget, actionTarget, isDesktopActionMode], () => {
+watch([showForm, renewTarget, delTarget, actionMobileOpen], () => {
   const modalOpen = showForm.value || renewTarget.value || delTarget.value
-  const mobileActionOpen = actionTarget.value && !isDesktopActionMode.value
-  document.body.classList.toggle('modal-open', !!(modalOpen || mobileActionOpen))
-  if (actionTarget.value) nextTick(() => {
-    const target = isDesktopActionMode.value ? actionPopoverRef.value : actionSheetRef.value
-    target?.focus?.()
+  document.body.classList.toggle('modal-open', !!(modalOpen || actionMobileOpen.value))
+})
+
+function scheduleActionAnchorRefresh() {
+  if (!actionTarget.value || !actionAnchorEl.value || actionAnchorFrame !== null) return
+  actionAnchorFrame = requestAnimationFrame(() => {
+    actionAnchorFrame = null
+    refreshActionAnchor()
   })
-})
-function onActionKeydown(e) {
-  if (e.key === 'Escape' && actionTarget.value) closeCardActions()
 }
+
 onMounted(() => {
-  window.addEventListener('keydown', onActionKeydown)
-  actionMq = window.matchMedia('(min-width: 721px)')
-  syncActionMode()
-  if (actionMq.addEventListener) actionMq.addEventListener('change', syncActionMode)
-  else actionMq.addListener?.(syncActionMode)
+  window.addEventListener('resize', scheduleActionAnchorRefresh)
+  window.addEventListener('scroll', scheduleActionAnchorRefresh, true)
 })
+
 onBeforeUnmount(() => {
-  window.removeEventListener('keydown', onActionKeydown)
-  if (actionMq?.removeEventListener) actionMq.removeEventListener('change', syncActionMode)
-  else actionMq?.removeListener?.(syncActionMode)
+  window.removeEventListener('resize', scheduleActionAnchorRefresh)
+  window.removeEventListener('scroll', scheduleActionAnchorRefresh, true)
+  if (actionAnchorFrame !== null) cancelAnimationFrame(actionAnchorFrame)
   document.body.classList.remove('modal-open')
 })
 
@@ -394,39 +334,71 @@ async function load() {
 }
 function setFilter(f) { filter.value = f; load() }
 
+function focusDialog(titleId) {
+  nextTick(() => {
+    const dialog = document.getElementById(titleId)?.closest('[role="dialog"]')
+    const target = dialog?.querySelector('input:not([type="hidden"]), select, textarea') || dialog
+    target?.focus?.()
+  })
+}
+
 function openNew() {
   formTarget.value = null
   showForm.value = true
+  focusDialog('subscription-form-title')
 }
-function actionSheetTitleId(id) { return `sub-action-title-${id}` }
 function readAnchor(el) {
   if (!el?.getBoundingClientRect) return null
   const r = el.getBoundingClientRect()
   return { top: r.top, right: r.right, bottom: r.bottom, left: r.left, width: r.width, height: r.height }
 }
+function refreshActionAnchor() {
+  if (!actionTarget.value || !actionAnchorEl.value) return
+  actionAnchor.value = readAnchor(actionAnchorEl.value)
+}
 function openCardActions(s, catKey, evt) {
   actionTarget.value = s
   actionCatKey.value = catKey
   const el = evt?.currentTarget
-  actionAnchor.value = readAnchor(el)
-  if (el?.getBoundingClientRect) {
-    requestAnimationFrame(() => { actionAnchor.value = readAnchor(el) })
-  }
+  actionAnchorEl.value = el?.getBoundingClientRect ? el : null
+  actionAnchor.value = readAnchor(actionAnchorEl.value)
+  if (actionAnchorEl.value) scheduleActionAnchorRefresh()
 }
-function closeCardActions() { actionTarget.value = null; actionCatKey.value = null; actionAnchor.value = null }
+function focusActionTrigger(trigger) {
+  requestAnimationFrame(() => { trigger?.focus?.() })
+}
+function rememberActionReturnFocus(trigger) {
+  actionReturnFocusEl.value = trigger || null
+}
+function restoreActionReturnFocus() {
+  const trigger = actionReturnFocusEl.value
+  actionReturnFocusEl.value = null
+  focusActionTrigger(trigger)
+}
+function closeCardActions(options = {}) {
+  const restoreFocus = options?.restoreFocus !== false
+  const rememberFocus = options?.rememberFocus === true
+  const trigger = actionAnchorEl.value
+  actionTarget.value = null
+  actionCatKey.value = null
+  actionAnchor.value = null
+  actionAnchorEl.value = null
+  if (rememberFocus) rememberActionReturnFocus(trigger)
+  if (restoreFocus) focusActionTrigger(trigger)
+}
 function editFromActions() {
   const target = actionTarget.value
-  closeCardActions()
+  closeCardActions({ restoreFocus: false, rememberFocus: true })
   if (target) openEdit(target)
 }
 function renewFromActions() {
   const target = actionTarget.value
-  closeCardActions()
+  closeCardActions({ restoreFocus: false, rememberFocus: true })
   if (target) askRenew(target)
 }
 function deleteFromActions() {
   const target = actionTarget.value
-  closeCardActions()
+  closeCardActions({ restoreFocus: false, rememberFocus: true })
   if (target) askDelete(target)
 }
 function moveFromActions(dir) {
@@ -439,11 +411,13 @@ function moveFromActions(dir) {
 function openEdit(s) {
   formTarget.value = s
   showForm.value = true
+  focusDialog('subscription-form-title')
 }
 
 function closeForm() {
   showForm.value = false
   formTarget.value = null
+  restoreActionReturnFocus()
 }
 
 function onFormSaved() {
@@ -457,7 +431,15 @@ function onBundleCreated(bundle) {
 }
 
 /* ---------- 续费 ---------- */
-function askRenew(s) { renewTarget.value = s; renewMode.value = 'today' }
+function askRenew(s) {
+  renewTarget.value = s
+  renewMode.value = 'today'
+  focusDialog('renew-title')
+}
+function closeRenew() {
+  renewTarget.value = null
+  restoreActionReturnFocus()
+}
 const previewToday = computed(() =>
   renewTarget.value ? toISODate(addCycleDate(new Date(), renewTarget.value.cycle, renewTarget.value.cycle_count)) : ''
 )
@@ -472,7 +454,7 @@ async function confirmRenew() {
   try {
     const { data } = await api.post(`/api/subscriptions/${renewTarget.value.id}/renew`, { mode: renewMode.value })
     toast(t('sub.renewOk', { date: data.next_renewal_date }))
-    renewTarget.value = null
+    closeRenew()
     load()
   } catch (e) {
     toast(e.response?.data?.detail || 'Error', 'err')
@@ -481,14 +463,23 @@ async function confirmRenew() {
   }
 }
 
-function askDelete(s) { delTarget.value = s; delPwd.value = ''; delErr.value = '' }
+function askDelete(s) {
+  delTarget.value = s
+  delPwd.value = ''
+  delErr.value = ''
+  focusDialog('delete-title')
+}
+function closeDelete() {
+  delTarget.value = null
+  restoreActionReturnFocus()
+}
 async function confirmDelete() {
   if (!delTarget.value || deleting.value || !delPwd.value) return
   deleting.value = true
   delErr.value = ''
   try {
     await api.delete(`/api/subscriptions/${delTarget.value.id}`, { data: { password: delPwd.value } })
-    delTarget.value = null
+    closeDelete()
     toast(t('sub.delete'))
     load()
   } catch (e) {
@@ -544,18 +535,6 @@ h1 { margin-top: 0; }
   border: 1px dashed color-mix(in srgb, var(--primary) 40%, var(--border)); }
 .empty-orbit span::after { content: ''; position: absolute; top: 50%; left: 50%; width: 10px; height: 10px;
   transform: translate(-50%, -50%); border-radius: 50%; background: color-mix(in srgb, var(--signal-cyan) 60%, var(--primary)); }
-
-.action-mask { position: fixed; inset: 0; z-index: 70; display: flex; align-items: flex-end; justify-content: center;
-  padding: 14px; background: rgba(2, 6, 23, .54); backdrop-filter: blur(8px); }
-.action-sheet { width: min(430px, 100%); border: 1px solid color-mix(in srgb, var(--border) 76%, transparent); border-radius: 24px;
-  padding: 10px; background: linear-gradient(180deg, color-mix(in srgb, var(--surface) 94%, var(--signal-cyan)), var(--surface));
-  box-shadow: 0 22px 70px rgba(0, 0, 0, .34); }
-.action-popover { position: fixed; z-index: 80; width: 300px; max-width: calc(100vw - 24px);
-  max-height: var(--action-popover-max-h, 70vh); overflow: auto; overscroll-behavior: contain;
-  border: 1px solid color-mix(in srgb, var(--border) 76%, transparent); border-radius: 18px; padding: 8px;
-  background: linear-gradient(180deg, color-mix(in srgb, var(--surface) 94%, var(--signal-cyan)), var(--surface));
-  box-shadow: 0 18px 50px rgba(0, 0, 0, .22); }
-.action-popover-backdrop { position: fixed; inset: 0; z-index: 79; background: transparent; }
 
 @media (max-width: 720px) {
   .ledger-hero { padding: 18px; align-items: stretch; }
