@@ -1,13 +1,28 @@
 <template>
   <div class="modal-mask browser">
-    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="service-browser-title">
+    <div
+      ref="dialogRef"
+      class="modal"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="service-browser-title"
+      tabindex="-1"
+    >
       <div class="browser-head">
         <h3 id="service-browser-title" class="browser-title">📚 {{ t('sub.browseTitle') }}</h3>
         <button type="button" class="btn ghost sm" @click="emit('close')">{{ t('common.close') }}</button>
       </div>
 
       <p class="muted browser-hint">{{ t('sub.pickHint') }}</p>
-      <input v-model="query" class="browser-search" :placeholder="t('sub.searchPh')" :aria-label="t('sub.searchPh')" />
+      <input
+        id="service-browser-search"
+        ref="searchRef"
+        v-model="query"
+        class="browser-search"
+        name="service_browser_search"
+        :placeholder="t('sub.searchPh')"
+        :aria-label="t('sub.searchPh')"
+      />
 
       <div v-for="g in groupedServices" :key="g.key" class="lib-group">
         <button
@@ -38,6 +53,7 @@
 import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import ServiceIcon from '../ServiceIcon.vue'
+import { useDialogFocus } from '../../composables/useDialogFocus'
 import { groupServicesByCategory } from '../../utils/serviceLibrary'
 
 const props = defineProps({
@@ -48,6 +64,18 @@ const emit = defineEmits(['close', 'pick'])
 const { t } = useI18n()
 
 const query = ref('')
+const dialogRef = ref(null)
+const searchRef = ref(null)
+
+// 浏览器由父级 v-if 控制挂载，挂载即打开；关闭后把焦点还给外层表单的“浏览服务”按钮。
+useDialogFocus({
+  open: () => true,
+  dialogRef,
+  initialFocus: searchRef,
+  onClose: () => emit('close'),
+  restoreFocus: true,
+  trap: true
+})
 const openGroupKeys = ref(new Set())
 const hasQuery = computed(() => query.value.trim().length > 0)
 const groupedServices = computed(() => groupServicesByCategory(props.services, query.value))

@@ -1,6 +1,13 @@
 <template>
   <div class="modal-mask">
-    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="subscription-form-title">
+    <div
+      ref="dialogRef"
+      class="modal"
+      role="dialog"
+      :aria-modal="!showBrowser"
+      aria-labelledby="subscription-form-title"
+      tabindex="-1"
+    >
       <button type="button" class="modal-x" :aria-label="t('common.close')" @click="emit('close')">×</button>
       <h3 id="subscription-form-title">{{ form.id ? t('sub.edit') : t('sub.add') }}</h3>
 
@@ -11,8 +18,8 @@
             <ServiceIcon :src="form.icon" :name="form.name" :fallback="form.icon || '🔖'" class="ico-lg" />
           </div>
           <div style="flex:2;position:relative">
-            <label>{{ t('sub.name') }}</label>
-            <input v-model="form.name" @input="onNameInput" autocomplete="off" />
+            <label for="sub-name">{{ t('sub.name') }}</label>
+            <input id="sub-name" ref="nameInputRef" v-model="form.name" name="name" @input="onNameInput" autocomplete="off" />
             <div v-if="suggestions.length" class="suggest">
               <button type="button" v-for="s in suggestions" :key="s.slug" class="suggest-i" @click="pickService(s)">
                 <ServiceIcon :src="s.icon" :name="s.name" class="ico" loading="lazy" decoding="async" /> {{ s.name }}
@@ -20,22 +27,22 @@
             </div>
           </div>
           <div style="flex:1">
-            <label>{{ t('sub.plan') }}</label>
-            <input v-model="form.plan" :placeholder="t('sub.planPh')" />
+            <label for="sub-plan">{{ t('sub.plan') }}</label>
+            <input id="sub-plan" v-model="form.plan" name="plan" :placeholder="t('sub.planPh')" />
           </div>
         </div>
-        <label>{{ t('sub.remark') }}</label>
-        <input v-model="form.remark" :placeholder="t('sub.remarkPh')" />
+        <label for="sub-remark">{{ t('sub.remark') }}</label>
+        <input id="sub-remark" v-model="form.remark" name="remark" :placeholder="t('sub.remarkPh')" />
 
         <!-- VPS：IP 地址（选填） -->
         <template v-if="isVpsCategory">
-          <label>{{ t('sub.ipLabel') }}</label>
+          <label for="sub-ipv4">{{ t('sub.ipLabel') }}</label>
           <div class="row">
             <div style="flex:1">
-              <input v-model="form.ipv4" :placeholder="t('sub.ipv4')" />
+              <input id="sub-ipv4" v-model="form.ipv4" name="ipv4" :placeholder="t('sub.ipv4')" />
             </div>
             <div style="flex:1">
-              <input v-model="form.ipv6" :placeholder="t('sub.ipv6')" />
+              <input id="sub-ipv6" v-model="form.ipv6" name="ipv6" :aria-label="t('sub.ipv6')" :placeholder="t('sub.ipv6')" />
             </div>
           </div>
         </template>
@@ -44,9 +51,9 @@
 
         <details class="icon-lib" @toggle="onIconLibraryToggle">
           <summary>{{ t('sub.icon') }} — {{ t('sub.iconLibrary') }} / URL / {{ t('sub.uploadIcon') }}</summary>
-          <input v-model="form.icon" placeholder="🔖 emoji / /static/... / https://..." style="margin:8px 0" />
+          <input id="sub-icon" v-model="form.icon" name="icon" :aria-label="t('sub.icon')" placeholder="🔖 emoji / /static/... / https://..." style="margin:8px 0" />
           <div class="row" style="margin-bottom:8px">
-            <input v-model="iconUrl" :placeholder="t('sub.iconUrl')" style="flex:1" />
+            <input id="sub-icon-url" v-model="iconUrl" name="icon_url" :aria-label="t('sub.iconUrl')" :placeholder="t('sub.iconUrl')" style="flex:1" />
             <button type="button" class="btn ghost sm" @click="importIconUrl">{{ t('sub.iconUrlImport') }}</button>
             <label class="btn ghost sm" style="width:auto">{{ t('sub.uploadIcon') }}
               <input type="file" accept="image/*" hidden @change="uploadIcon" />
@@ -67,12 +74,12 @@
         <div class="block-t">{{ t('sub.secPrice') }}</div>
         <div class="row">
           <div style="flex:1">
-            <label>{{ t('sub.amount') }}</label>
-            <input v-model.number="form.amount" type="number" step="0.01" />
+            <label for="sub-amount">{{ t('sub.amount') }}</label>
+            <input id="sub-amount" v-model.number="form.amount" name="amount" type="number" step="0.01" />
           </div>
           <div style="flex:1">
-            <label>{{ t('sub.currency') }}</label>
-            <select v-model="form.currency">
+            <label for="sub-currency">{{ t('sub.currency') }}</label>
+            <select id="sub-currency" v-model="form.currency" name="currency">
               <option v-for="c in currencies" :key="c.code" :value="c.code">{{ c.code }} {{ c.symbol }}</option>
             </select>
           </div>
@@ -83,20 +90,20 @@
         <div class="block-t">{{ t('sub.secBilling') }}</div>
         <div class="row">
           <div style="flex:1">
-            <label>{{ t('sub.billingType') }}</label>
-            <select v-model="form.billing_type">
+            <label for="sub-billing-type">{{ t('sub.billingType') }}</label>
+            <select id="sub-billing-type" v-model="form.billing_type" name="billing_type">
               <option value="recurring">{{ t('sub.recurring') }}</option>
               <option value="one_time">{{ t('sub.oneTime') }}</option>
             </select>
           </div>
           <template v-if="form.billing_type === 'recurring'">
             <div style="flex:1">
-              <label>{{ t('sub.cycleCount') }}</label>
-              <input v-model.number="form.cycle_count" type="number" min="1" />
+              <label for="sub-cycle-count">{{ t('sub.cycleCount') }}</label>
+              <input id="sub-cycle-count" v-model.number="form.cycle_count" name="cycle_count" type="number" min="1" />
             </div>
             <div style="flex:1">
-              <label>{{ t('sub.cycle') }}</label>
-              <select v-model="form.cycle">
+              <label for="sub-cycle">{{ t('sub.cycle') }}</label>
+              <select id="sub-cycle" v-model="form.cycle" name="cycle">
                 <option value="day">{{ t('sub.day') }}</option>
                 <option value="week">{{ t('sub.week') }}</option>
                 <option value="month">{{ t('sub.month') }}</option>
@@ -107,26 +114,26 @@
         </div>
         <div class="row">
           <div style="flex:1">
-            <label>{{ t('sub.startDate') }}</label>
-            <input v-model="form.start_date" type="date" />
+            <label for="sub-start-date">{{ t('sub.startDate') }}</label>
+            <input id="sub-start-date" v-model="form.start_date" name="start_date" type="date" />
           </div>
           <div style="flex:1" v-if="form.billing_type === 'recurring'">
-            <label>{{ t('sub.nextRenewal') }} <span class="auto-tip">· 自动</span></label>
-            <input v-model="form.next_renewal_date" type="date" />
+            <label for="sub-next-renewal">{{ t('sub.nextRenewal') }} <span class="auto-tip">· 自动</span></label>
+            <input id="sub-next-renewal" v-model="form.next_renewal_date" name="next_renewal_date" type="date" />
           </div>
         </div>
         <div class="row" v-if="form.billing_type === 'recurring'">
           <div style="flex:1">
-            <label>{{ t('sub.remindDays') }}</label>
-            <input v-model="form.remind_days_before" placeholder="7,1" />
+            <label for="sub-remind-days">{{ t('sub.remindDays') }}</label>
+            <input id="sub-remind-days" v-model="form.remind_days_before" name="remind_days_before" placeholder="7,1" />
           </div>
           <div style="flex:1">
-            <label>{{ t('sub.active') }}</label>
-            <select v-model="form.is_active"><option :value="true">✓</option><option :value="false">✗</option></select>
+            <label for="sub-active">{{ t('sub.active') }}</label>
+            <select id="sub-active" v-model="form.is_active" name="is_active"><option :value="true">✓</option><option :value="false">✗</option></select>
           </div>
           <div style="flex:1">
-            <label>{{ t('sub.autoRenew') }}</label>
-            <select v-model="form.auto_renew"><option :value="true">✓</option><option :value="false">✗</option></select>
+            <label for="sub-auto-renew">{{ t('sub.autoRenew') }}</label>
+            <select id="sub-auto-renew" v-model="form.auto_renew" name="auto_renew"><option :value="true">✓</option><option :value="false">✗</option></select>
           </div>
         </div>
       </div>
@@ -135,15 +142,15 @@
         <div class="block-t">{{ t('sub.secClassify') }}</div>
         <div class="row">
           <div style="flex:1">
-            <label>{{ t('sub.category') }}</label>
-            <select v-model="form.category_id">
+            <label for="sub-category">{{ t('sub.category') }}</label>
+            <select id="sub-category" v-model="form.category_id" name="category_id">
               <option :value="null">—</option>
               <option v-for="c in categories" :key="c.id" :value="c.id">{{ c.icon }} {{ c.name }}</option>
             </select>
           </div>
           <div style="flex:1">
-            <label>{{ t('sub.payment') }}</label>
-            <select v-model="form.payment_method_id">
+            <label for="sub-payment">{{ t('sub.payment') }}</label>
+            <select id="sub-payment" v-model="form.payment_method_id" name="payment_method_id">
               <option :value="null">—</option>
               <option v-for="p in methods" :key="p.id" :value="p.id">{{ p.icon }} {{ p.name }}</option>
             </select>
@@ -159,7 +166,7 @@
           </span>
         </div>
         <div class="row">
-          <input v-model="newMember" :placeholder="t('sub.familyPh')" @keyup.enter="addMember" style="flex:1" />
+          <input id="sub-family-add" v-model="newMember" name="family_member" :aria-label="t('sub.familyPh')" :placeholder="t('sub.familyPh')" @keyup.enter="addMember" style="flex:1" />
           <button type="button" class="btn ghost sm" @click="addMember">{{ t('sub.familyAdd') }}</button>
         </div>
       </div>
@@ -171,27 +178,27 @@
           <label class="rb"><input type="radio" value="join" v-model="bundleMode" /> {{ t('sub.bundleJoin') }}</label>
           <label class="rb"><input type="radio" value="create" v-model="bundleMode" /> {{ t('sub.bundleCreate') }}</label>
         </div>
-        <select v-if="bundleMode === 'join'" v-model="form.bundle_id">
+        <select v-if="bundleMode === 'join'" id="sub-bundle-join" v-model="form.bundle_id" name="bundle_id" :aria-label="t('sub.bundleJoin')">
           <option :value="null">—</option>
           <option v-for="b in bundles" :key="b.id" :value="b.id">{{ b.name }}</option>
         </select>
-        <input v-if="bundleMode === 'create'" v-model="newBundleName" :placeholder="t('sub.bundleName')" />
+        <input v-if="bundleMode === 'create'" id="sub-bundle-name" v-model="newBundleName" name="new_bundle_name" :aria-label="t('sub.bundleName')" :placeholder="t('sub.bundleName')" />
       </div>
 
       <div class="block">
         <div class="block-t">{{ t('sub.secExtra') }}</div>
-        <label>{{ t('sub.website') }}</label>
-        <input v-model="form.url" placeholder="https://..." />
-        <label>{{ t('sub.notes') }}</label>
-        <textarea v-model="form.notes" rows="2"></textarea>
+        <label for="sub-website">{{ t('sub.website') }}</label>
+        <input id="sub-website" v-model="form.url" name="url" placeholder="https://..." />
+        <label for="sub-notes">{{ t('sub.notes') }}</label>
+        <textarea id="sub-notes" v-model="form.notes" name="notes" rows="2"></textarea>
       </div>
 
       <div class="block">
         <div class="block-t">{{ t('sub.secCalendar') }}</div>
-        <label class="rb"><input type="checkbox" v-model="form.show_in_calendar" /> {{ t('sub.showInCalendar') }}</label>
+        <label class="rb"><input type="checkbox" v-model="form.show_in_calendar" name="show_in_calendar" /> {{ t('sub.showInCalendar') }}</label>
       </div>
 
-      <p v-if="formErr" class="err">{{ formErr }}</p>
+      <p v-if="formErr" class="err" role="alert">{{ formErr }}</p>
       <div class="modal-foot">
         <button type="button" class="btn ghost" @click="emit('close')">{{ t('sub.cancel') }}</button>
         <button type="button" class="btn" @click="save">{{ t('sub.save') }}</button>
@@ -213,6 +220,7 @@ import { useI18n } from 'vue-i18n'
 import api from '../../api'
 import ServiceIcon from '../ServiceIcon.vue'
 import ServiceBrowserModal from './ServiceBrowserModal.vue'
+import { useDialogFocus } from '../../composables/useDialogFocus'
 import { buildServicePickPatch, isVpsCategory as isVpsServiceCategory, suggestServicesByName } from '../../utils/serviceLibrary'
 import { buildSubscriptionPayload, cloneSubscriptionForEdit, computeNextRenewalDate, createBlankSubscriptionForm } from '../../utils/subscriptionForm'
 
@@ -238,8 +246,21 @@ const suggestions = ref([])
 const showIconLibrary = ref(false)
 const visibleIconCount = ref(0)
 const showBrowser = ref(false)
+const dialogRef = ref(null)
+const nameInputRef = ref(null)
 const ICON_BATCH_SIZE = 18
 let suppressAuto = false
+
+// 表单由父级 v-if 控制挂载，挂载即打开；关闭后由本 composable 把焦点还给打开前元素
+// （+新增按钮 / action 触发按钮，父级在打开前已同步聚焦触发按钮）。
+useDialogFocus({
+  open: () => true,
+  dialogRef,
+  initialFocus: nameInputRef,
+  onClose: () => emit('close'),
+  restoreFocus: true,
+  trap: true
+})
 
 const visibleIconLib = computed(() => props.iconLibrary.slice(0, visibleIconCount.value))
 const isVpsCategory = computed(() => {

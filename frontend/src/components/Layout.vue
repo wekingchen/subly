@@ -44,6 +44,7 @@ import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { useAuth } from '../stores/auth'
 import { icon } from '../icons'
+import { useBodyLock } from '../composables/useBodyLock'
 
 const { t } = useI18n()
 const auth = useAuth()
@@ -58,8 +59,8 @@ function openDrawer() {
 function closeDrawer() {
   drawer.value = false
 }
+useBodyLock(drawer, 'layout-drawer')
 watch(drawer, (open) => {
-  document.body.classList.toggle('modal-open', open)
   nextTick(() => (open ? drawerRef.value : hambRef.value)?.focus?.())
 })
 function onKey(e) {
@@ -70,7 +71,6 @@ if (typeof window !== 'undefined') {
 }
 onBeforeUnmount(() => {
   if (typeof window !== 'undefined') window.removeEventListener('keydown', onKey)
-  document.body.classList.remove('modal-open')
 })
 
 const navGroups = computed(() => {

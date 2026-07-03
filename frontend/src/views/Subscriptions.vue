@@ -112,7 +112,7 @@
 </template>
 
 <script setup>
-import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import api from '../api'
 import DeleteSubscriptionModal from '../components/subscriptions/DeleteSubscriptionModal.vue'
@@ -122,6 +122,7 @@ import SubscriptionCategoryGroup from '../components/subscriptions/SubscriptionC
 import SubscriptionFormModal from '../components/subscriptions/SubscriptionFormModal.vue'
 import SubscriptionToolbar from '../components/subscriptions/SubscriptionToolbar.vue'
 import { useAuth } from '../stores/auth'
+import { useBodyLock } from '../composables/useBodyLock'
 import { addCycleDate, parseLocalDate, toISODate } from '../utils/date'
 import { amountOf, hasBaseEquivalent } from '../utils/money'
 import { buildGroupedSubscriptions, buildSubscriptionOrderState, categoryOrderToPersistedIds, getCategoryMeta, getSubscriptionCategoryKey, moveCategoryByOffset, moveCategoryToTarget, moveValueByOffset, moveValueToTarget, UNCATEGORIZED_KEY } from '../utils/subscriptionOrdering'
@@ -151,7 +152,6 @@ const actionTarget = ref(null)
 const actionCatKey = ref(null)
 const actionAnchor = ref(null)
 const actionAnchorEl = ref(null)
-const actionReturnFocusEl = ref(null)
 const actionMobileOpen = ref(false)
 let actionAnchorFrame = null
 
@@ -185,10 +185,12 @@ function bundleName(s) {
 function categoryName(s) { return catMeta(catKeyOf(s)).name }
 function familyText(s) { return s.family_members && s.family_members.length ? s.family_members.join('、') : DASH }
 
-watch([showForm, renewTarget, delTarget, actionMobileOpen], () => {
-  const modalOpen = showForm.value || renewTarget.value || delTarget.value
-  document.body.classList.toggle('modal-open', !!(modalOpen || actionMobileOpen.value))
-})
+// 统一汇总订阅页所有 overlay 状态，交给引用计数式 body lock 管理，
+// 避免 modal / action sheet 之间互相提前解锁。
+const subscriptionBodyLocked = computed(() =>
+  !!showForm.value || !!renewTarget.value || !!delTarget.value || !!actionMobileOpen.value
+)
+useBodyLock(subscriptionBodyLocked, 'subscriptions-overlays')
 
 function scheduleActionAnchorRefresh() {
   if (!actionTarget.value || !actionAnchorEl.value || actionAnchorFrame !== null) return
@@ -207,7 +209,6 @@ onBeforeUnmount(() => {
   window.removeEventListener('resize', scheduleActionAnchorRefresh)
   window.removeEventListener('scroll', scheduleActionAnchorRefresh, true)
   if (actionAnchorFrame !== null) cancelAnimationFrame(actionAnchorFrame)
-  document.body.classList.remove('modal-open')
 })
 
 const toasts = ref([])
@@ -334,18 +335,9 @@ async function load() {
 }
 function setFilter(f) { filter.value = f; load() }
 
-function focusDialog(titleId) {
-  nextTick(() => {
-    const dialog = document.getElementById(titleId)?.closest('[role="dialog"]')
-    const target = dialog?.querySelector('input:not([type="hidden"]), select, textarea') || dialog
-    target?.focus?.()
-  })
-}
-
 function openNew() {
   formTarget.value = null
   showForm.value = true
-  focusDialog('subscription-form-title')
 }
 function readAnchor(el) {
   if (!el?.getBoundingClientRect) return null
@@ -365,40 +357,32 @@ function openCardActions(s, catKey, evt) {
   if (actionAnchorEl.value) scheduleActionAnchorRefresh()
 }
 function focusActionTrigger(trigger) {
-  requestAnimationFrame(() => { trigger?.focus?.() })
-}
-function rememberActionReturnFocus(trigger) {
-  actionReturnFocusEl.value = trigger || null
-}
-function restoreActionReturnFocus() {
-  const trigger = actionReturnFocusEl.value
-  actionReturnFocusEl.value = null
-  focusActionTrigger(trigger)
+  // 同步聚焦触发按钮：action layer 卸载前先把焦点固定在 trigger，
+  // 这样随后打开的 modal 能把 trigger 记为返回焦点；普通关闭也能立即回焦。
+  trigger?.focus?.()
 }
 function closeCardActions(options = {}) {
   const restoreFocus = options?.restoreFocus !== false
-  const rememberFocus = options?.rememberFocus === true
   const trigger = actionAnchorEl.value
   actionTarget.value = null
   actionCatKey.value = null
   actionAnchor.value = null
   actionAnchorEl.value = null
-  if (rememberFocus) rememberActionReturnFocus(trigger)
   if (restoreFocus) focusActionTrigger(trigger)
 }
 function editFromActions() {
   const target = actionTarget.value
-  closeCardActions({ restoreFocus: false, rememberFocus: true })
+  closeCardActions()
   if (target) openEdit(target)
 }
 function renewFromActions() {
   const target = actionTarget.value
-  closeCardActions({ restoreFocus: false, rememberFocus: true })
+  closeCardActions()
   if (target) askRenew(target)
 }
 function deleteFromActions() {
   const target = actionTarget.value
-  closeCardActions({ restoreFocus: false, rememberFocus: true })
+  closeCardActions()
   if (target) askDelete(target)
 }
 function moveFromActions(dir) {
@@ -411,13 +395,11 @@ function moveFromActions(dir) {
 function openEdit(s) {
   formTarget.value = s
   showForm.value = true
-  focusDialog('subscription-form-title')
 }
 
 function closeForm() {
   showForm.value = false
   formTarget.value = null
-  restoreActionReturnFocus()
 }
 
 function onFormSaved() {
@@ -434,11 +416,9 @@ function onBundleCreated(bundle) {
 function askRenew(s) {
   renewTarget.value = s
   renewMode.value = 'today'
-  focusDialog('renew-title')
 }
 function closeRenew() {
   renewTarget.value = null
-  restoreActionReturnFocus()
 }
 const previewToday = computed(() =>
   renewTarget.value ? toISODate(addCycleDate(new Date(), renewTarget.value.cycle, renewTarget.value.cycle_count)) : ''
@@ -467,11 +447,9 @@ function askDelete(s) {
   delTarget.value = s
   delPwd.value = ''
   delErr.value = ''
-  focusDialog('delete-title')
 }
 function closeDelete() {
   delTarget.value = null
-  restoreActionReturnFocus()
 }
 async function confirmDelete() {
   if (!delTarget.value || deleting.value || !delPwd.value) return

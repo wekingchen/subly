@@ -1,6 +1,14 @@
 <template>
   <div v-if="modelValue" class="modal-mask" @click.self="onMaskClick">
-    <div class="modal" :style="width ? { width } : null" role="dialog" aria-modal="true" :aria-labelledby="titleId">
+    <div
+      ref="dialogRef"
+      class="modal"
+      :style="width ? { width } : null"
+      role="dialog"
+      aria-modal="true"
+      :aria-labelledby="titleId"
+      tabindex="-1"
+    >
       <button class="modal-x" :aria-label="closeLabel" @click="close">×</button>
       <h3 v-if="title" :id="titleId">{{ title }}</h3>
       <slot />
@@ -12,7 +20,9 @@
 </template>
 
 <script setup>
-import { onBeforeUnmount, watch } from 'vue'
+import { ref } from 'vue'
+import { useBodyLock } from '../composables/useBodyLock'
+import { useDialogFocus } from '../composables/useDialogFocus'
 
 const props = defineProps({
   modelValue: { type: Boolean, default: false },
@@ -23,6 +33,7 @@ const props = defineProps({
 })
 const emit = defineEmits(['update:modelValue', 'close'])
 const titleId = `modal-${Math.random().toString(36).slice(2)}`
+const dialogRef = ref(null)
 
 function close() {
   emit('update:modelValue', false)
@@ -33,9 +44,12 @@ function onMaskClick() {
   if (!props.persistent) close()
 }
 
-watch(() => props.modelValue, (open) => {
-  document.body.classList.toggle('modal-open', open)
-}, { immediate: true })
-
-onBeforeUnmount(() => document.body.classList.remove('modal-open'))
+useBodyLock(() => props.modelValue, 'app-modal')
+useDialogFocus({
+  open: () => props.modelValue,
+  dialogRef,
+  onClose: close,
+  restoreFocus: true,
+  trap: true
+})
 </script>

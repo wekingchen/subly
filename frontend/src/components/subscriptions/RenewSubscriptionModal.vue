@@ -1,39 +1,50 @@
 <template>
   <div class="modal-mask">
-    <div class="modal renew-modal" role="dialog" aria-modal="true" aria-labelledby="renew-title">
-      <button class="modal-x" :aria-label="t('common.close')" @click="emit('close')">×</button>
+    <div
+      ref="dialogRef"
+      class="modal renew-modal"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="renew-title"
+      aria-describedby="renew-note"
+      tabindex="-1"
+    >
+      <button type="button" class="modal-x" :aria-label="t('common.close')" @click="emit('close')">×</button>
       <div class="renew-kicker" aria-hidden="true">♻️</div>
       <h3 id="renew-title">{{ t('sub.renewTitle') }}</h3>
       <p class="renew-copy">{{ t('sub.renewMsg', { name: target?.name }) }}</p>
-      <p class="renew-note">{{ t('sub.renewDisclaimer') }}</p>
+      <p id="renew-note" class="renew-note">{{ t('sub.renewDisclaimer') }}</p>
 
-      <div class="renew-options">
+      <fieldset class="renew-options">
+        <legend class="renew-options-legend">{{ t('sub.renewTitle') }}</legend>
         <label class="renew-option" :class="{ on: mode === 'today' }">
-          <input type="radio" value="today" :checked="mode === 'today'" @change="emit('update:mode', 'today')" />
+          <input type="radio" name="renew_mode" value="today" :checked="mode === 'today'" @change="emit('update:mode', 'today')" />
           <span class="renew-option-copy">
             <span class="renew-option-title">{{ t('sub.renewToday') }}</span>
             <span class="renew-option-date mono-data">→ {{ previewToday }}</span>
           </span>
         </label>
         <label class="renew-option" :class="{ on: mode === 'due' }">
-          <input type="radio" value="due" :checked="mode === 'due'" @change="emit('update:mode', 'due')" />
+          <input type="radio" name="renew_mode" value="due" :checked="mode === 'due'" @change="emit('update:mode', 'due')" />
           <span class="renew-option-copy">
             <span class="renew-option-title">{{ t('sub.renewDue') }}</span>
             <span class="renew-option-date mono-data">→ {{ previewDue }}</span>
           </span>
         </label>
-      </div>
+      </fieldset>
 
       <div class="modal-foot">
-        <button class="btn ghost" @click="emit('close')">{{ t('sub.cancel') }}</button>
-        <button class="btn" :disabled="renewing" @click="emit('confirm')">{{ t('sub.renewMark') }}</button>
+        <button type="button" class="btn ghost" @click="emit('close')">{{ t('sub.cancel') }}</button>
+        <button type="button" class="btn" :disabled="renewing" @click="emit('confirm')">{{ t('sub.renewMark') }}</button>
       </div>
     </div>
   </div>
 </template>
 
 <script setup>
+import { ref } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { useDialogFocus } from '../../composables/useDialogFocus'
 
 defineProps({
   target: { type: Object, default: null },
@@ -45,6 +56,16 @@ defineProps({
 
 const emit = defineEmits(['close', 'update:mode', 'confirm'])
 const { t } = useI18n()
+const dialogRef = ref(null)
+
+// 续费弹窗由父级 v-if 控制挂载；关闭后把焦点还给触发按钮（卡片内联续费 / action 触发按钮）。
+useDialogFocus({
+  open: () => true,
+  dialogRef,
+  onClose: () => emit('close'),
+  restoreFocus: true,
+  trap: true
+})
 </script>
 
 <style scoped>
@@ -54,7 +75,9 @@ const { t } = useI18n()
 .renew-modal h3 { margin: 0 48px 8px 0; }
 .renew-copy { margin: 0; font-size: 14px; line-height: 1.6; }
 .renew-note { margin: 8px 0 0; color: var(--text-soft); font-size: 12px; line-height: 1.5; }
-.renew-options { display: grid; gap: 10px; margin-top: 14px; }
+.renew-options { display: grid; gap: 10px; margin: 14px 0 0; border: none; padding: 0; min-width: 0; }
+.renew-options-legend { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden;
+  clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 .renew-option { display: flex; align-items: flex-start; gap: 10px; border: 1px solid var(--border); border-radius: 14px;
   padding: 12px; cursor: pointer; font-size: 14px; color: var(--text); width: auto; background: color-mix(in srgb, var(--surface-2) 42%, transparent);
   transition: border-color .15s ease, background .15s ease, box-shadow .15s ease; }
