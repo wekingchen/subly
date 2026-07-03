@@ -1,0 +1,35 @@
+# Claude / local agent state
+/.claude/
+
+# Python caches and virtual environments
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# Frontend dependencies and build output
+/frontend/node_modules/
+/frontend/dist/
+
+# Local app data: SQLite DB, uploaded icons, icon cache, backups
+/data/
+/backend/data/
+
+# SQLite databases
+*.db
+*.sqlite
+*.sqlite3
+
+# Local backup/export artifacts
+/backups/
+/backup/
+*.backup
+*.bak
+subly-backup*.json
+subly-export*.json

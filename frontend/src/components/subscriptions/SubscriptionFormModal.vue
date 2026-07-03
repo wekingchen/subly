@@ -394,7 +394,7 @@ async function save() {
 .block-t { font-size: 13px; font-weight: 600; color: var(--primary); margin-bottom: 6px; }
 .icon-pick { display: flex; align-items: flex-end; }
 .ico-lg { width: 40px; height: 40px; border-radius: 8px; object-fit: contain; border: 1px solid var(--border); }
-.ico-lg.emoji { display: flex; align-items: center; justify-content: center; font-size: 24px; }
+.ico-lg.service-icon-fallback { display: flex; align-items: center; justify-content: center; font-size: 24px; }
 .suggest { position: absolute; z-index: 5; left: 0; right: 0; background: var(--surface);
   border: 1px solid var(--border); border-radius: 8px; box-shadow: var(--shadow); margin-top: 2px; }
 .suggest-i { display: flex; align-items: center; gap: 8px; padding: 7px 10px; cursor: pointer; font-size: 14px;

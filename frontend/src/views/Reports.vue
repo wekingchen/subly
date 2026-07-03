@@ -123,7 +123,8 @@
             <ServiceIcon :src="s.icon" :name="s.name" :fallback="emojiOf(s)" class="ld-ico" />
             <div class="ld-main">
               <div class="ld-n">{{ s.name }}</div>
-              <div class="muted ld-s">{{ catName(s.category_id) }}</div>
+              <div class="ld-meta">{{ ledgerMeta(s) }}</div>
+              <div v-if="cleanText(s.remark)" class="ld-remark">📝 {{ cleanText(s.remark) }}</div>
             </div>
             <div class="ld-amt mono-data">{{ money(s.amount_in_base || 0) }}<span class="muted">/ {{ t('reports.monthly') }}</span></div>
           </div>
@@ -152,7 +153,9 @@
               <ServiceIcon :src="s.icon" :name="s.name" :fallback="emojiOf(s)" class="ld-ico" />
               <div class="ld-main">
                 <div class="ld-n">{{ s.name }}</div>
-                <div class="muted ld-s mono-data">{{ s.next_renewal_date }}</div>
+                <div class="ld-meta">{{ ledgerMeta(s) }}</div>
+                <div v-if="s.next_renewal_date" class="ld-date mono-data">{{ s.next_renewal_date }}</div>
+                <div v-if="cleanText(s.remark)" class="ld-remark">📝 {{ cleanText(s.remark) }}</div>
               </div>
               <div class="ld-amt mono-data">{{ money(s.amount, s.currency, { position: 'suffix' }) }}</div>
             </div>
@@ -179,7 +182,9 @@
               <ServiceIcon :src="s.icon" :name="s.name" :fallback="emojiOf(s)" class="ld-ico" />
               <div class="ld-main">
                 <div class="ld-n">{{ s.name }}</div>
-                <div class="muted ld-s mono-data">{{ s.next_renewal_date }}</div>
+                <div class="ld-meta">{{ ledgerMeta(s) }}</div>
+                <div v-if="s.next_renewal_date" class="ld-date mono-data">{{ s.next_renewal_date }}</div>
+                <div v-if="cleanText(s.remark)" class="ld-remark">📝 {{ cleanText(s.remark) }}</div>
               </div>
               <div class="ld-amt mono-data">{{ money(s.amount, s.currency, { position: 'suffix' }) }}</div>
             </div>
@@ -210,7 +215,9 @@
             <ServiceIcon :src="s.icon" :name="s.name" :fallback="emojiOf(s)" class="ld-ico" />
             <div class="ld-main">
               <div class="ld-n">{{ s.name }}</div>
-              <div class="muted ld-s">{{ catName(s.category_id) }} · <span class="mono-data">{{ s.start_date }}</span></div>
+              <div class="ld-meta">{{ ledgerMeta(s) }}</div>
+              <div v-if="s.start_date" class="ld-date mono-data">{{ s.start_date }}</div>
+              <div v-if="cleanText(s.remark)" class="ld-remark">📝 {{ cleanText(s.remark) }}</div>
             </div>
             <div class="ld-amt mono-data">{{ money(s.amount, s.currency, { position: 'suffix' }) }}</div>
           </div>
@@ -315,6 +322,12 @@ const PALETTE = ['#5b5bd6', '#06b6d4', '#16a34a', '#f59e0b', '#ef4444', '#a855f7
 function color(i) { return PALETTE[i % PALETTE.length] }
 function isImg(v) { return typeof v === 'string' && (v.startsWith('/') || v.startsWith('http')) }
 function money(value, currency = cur.value, options = {}) { return formatMoney(value, currency, options) }
+function cleanText(value) {
+  if (value === null || value === undefined) return ''
+  return String(value).trim()
+}
+function joinMeta(...parts) { return parts.map(cleanText).filter(Boolean).join(' · ') }
+function ledgerMeta(s) { return joinMeta(s?.plan, catName(s?.category_id)) }
 function statusOf(s) { return renewalStatus(s, { emptyStatus: 'ok' }) }
 
 const segments = computed(() => (insights.value.breakdown || []).filter((b) => b.percent > 0))
@@ -534,7 +547,7 @@ h1 { margin: 0; }
 .pay-amt { font-weight: 700; font-size: 14px; white-space: nowrap; }
 
 /* 移动端账本列表（默认隐藏，仅移动端显示；desktop 表格同理仅移动端隐藏）*/
-.ledger { display: none; flex-direction: column; }
+.ledger.mobile-only { display: none; flex-direction: column; }
 .ld-row { display: flex; align-items: center; gap: 10px; padding: 11px 4px; border-bottom: 1px solid var(--border);
   min-height: 44px; border-left: 3px solid transparent; padding-left: 8px; }
 .ld-row:last-child { border-bottom: none; }
@@ -549,7 +562,9 @@ h1 { margin: 0; }
   border: 1px solid var(--border); background: var(--surface-2); }
 .ld-main { flex: 1; min-width: 0; }
 .ld-n { font-weight: 600; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.ld-s { font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ld-s, .ld-meta, .ld-date, .ld-remark { font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ld-meta, .ld-date { color: var(--text-soft); }
+.ld-remark { color: var(--primary); }
 .ld-amt { font-weight: 700; font-size: 14px; text-align: right; white-space: nowrap; }
 .ld-amt .muted { font-size: 11px; font-weight: 500; }
 
@@ -567,8 +582,10 @@ h1 { margin: 0; }
   .two { grid-template-columns: 1fr; }
   .desktop-only { display: none; }
   .mobile-only { display: flex; }
+  .ledger.mobile-only { display: flex; }
   .report-head-metrics { grid-template-columns: 1fr; }
-  .rb-label, .rb-amt, .ld-s { white-space: normal; line-height: 1.3; }
+  .rb-label, .rb-amt, .ld-s, .ld-meta, .ld-date, .ld-remark { white-space: normal; line-height: 1.3; }
+  .ld-remark { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
   .ld-row { align-items: flex-start; }
   .ld-n { white-space: normal; line-height: 1.35; overflow-wrap: anywhere; }
   .ld-amt { white-space: normal; overflow-wrap: anywhere; }

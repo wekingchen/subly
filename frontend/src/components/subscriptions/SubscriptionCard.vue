@@ -166,7 +166,7 @@ function onCardClick(e) {
 .sc-head { display: flex; align-items: center; gap: 12px; }
 .sc-ico { width: 44px; height: 44px; border-radius: 12px; object-fit: contain; border: 1px solid var(--border);
   flex-shrink: 0; background: var(--surface-2); transition: transform .25s cubic-bezier(.2,.8,.2,1); }
-.sc-ico.emoji { display: flex; align-items: center; justify-content: center; font-size: 26px; }
+.sc-ico.service-icon-fallback { display: flex; align-items: center; justify-content: center; font-size: 26px; }
 .sc-title { flex: 1; min-width: 0; }
 .sc-name { font-weight: 700; font-size: 17px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .sc-plan { font-size: 12px; overflow-wrap: anywhere; }
@@ -184,7 +184,6 @@ function onCardClick(e) {
 .card-detail-toggle:hover { background: var(--surface-2); color: var(--text); }
 .sc-signal { display: grid; gap: 6px; margin-top: 14px; }
 .sc-amount { font-size: 28px; font-weight: 800; letter-spacing: -.02em; }
-.sc-amount .cur { font-size: 15px; font-weight: 500; }
 .sc-amount .cycle { font-size: 14px; font-weight: 500; }
 .sc-base-amount { display: flex; align-items: baseline; gap: 6px; font-size: 12px; color: var(--text-soft); }
 .sc-due { display: flex; align-items: center; gap: 8px; font-size: 14px; }
