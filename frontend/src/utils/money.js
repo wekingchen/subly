@@ -17,6 +17,18 @@ export function formatMoney(value, currency = 'CNY', options = {}) {
   return `${currency}${hasSpace ? ' ' : ''}${fixed}`
 }
 
+// 拆分金额为「币种段」与「金额段」，供需要差异化字号时使用。
+// 与 formatMoney 严格等价：currencyText + amountText 按规则拼接 === formatMoney 输出。
+// 无币种或 position=none 时 currencyText 为空。
+export function splitMoney(value, currency = 'CNY', options = {}) {
+  const position = options.position || 'prefix'
+  const amount = Number(value)
+  const amountPart = (Number.isFinite(amount) ? amount : 0).toFixed(options.decimals ?? 2)
+  if (!currency || position === 'none') return { currencyPart: '', amountPart }
+  return { currencyPart: currency, amountPart }
+}
+
+
 export function hasBaseEquivalent(item, baseCurrency) {
   if (!item || typeof item.currency === 'boolean' || typeof baseCurrency === 'boolean') return false
   const itemCurrency = String(item.currency || '').trim().toUpperCase()

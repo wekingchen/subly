@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { amountOf, formatMoney, hasBaseEquivalent } from './money'
+import { amountOf, formatMoney, hasBaseEquivalent, splitMoney } from './money'
 
 describe('amountOf', () => {
   it('prefers amount_in_base over amount', () => {
@@ -88,5 +88,46 @@ describe('formatMoney', () => {
 
   it('uses the currency string as a plain label for unknown currencies', () => {
     expect(formatMoney(9.9, 'XYZ')).toBe('XYZ 9.90')
+  })
+})
+
+describe('splitMoney', () => {
+  // 拆分后按规则拼接必须与 formatMoney 严格等价——这是 MoneyText 开启/关闭两条路径一致的保证
+  const equiv = (value, currency, options) => {
+    const { currencyPart, amountPart } = splitMoney(value, currency, options)
+    const pos = options?.position || 'prefix'
+    const space = options?.space !== false
+    const sep = space ? ' ' : ''
+    if (!currencyPart) return amountPart
+    return pos === 'suffix' ? `${amountPart}${sep}${currencyPart}` : `${currencyPart}${sep}${amountPart}`
+  }
+
+  it('splits currency and amount for prefix', () => {
+    expect(splitMoney(12.3, 'CNY')).toEqual({ currencyPart: 'CNY', amountPart: '12.30' })
+  })
+
+  it('splits for suffix position (amount first)', () => {
+    expect(splitMoney(12.3, 'USD', { position: 'suffix' })).toEqual({ currencyPart: 'USD', amountPart: '12.30' })
+  })
+
+  it('returns empty currencyPart when currency is absent or position is none', () => {
+    expect(splitMoney(12.3, '')).toEqual({ currencyPart: '', amountPart: '12.30' })
+    expect(splitMoney(12.3, 'USD', { position: 'none' })).toEqual({ currencyPart: '', amountPart: '12.30' })
+  })
+
+  it('matches formatMoney across prefix/suffix/none/empty for the same inputs', () => {
+    const cases = [
+      [12.3, 'CNY', {}],
+      [12.3, 'USD', { position: 'suffix' }],
+      [12.3, 'USD', { position: 'none' }],
+      [12.3, '', {}],
+      [0, 'CNY', {}],
+      [-12.345, 'CNY', {}],
+      ['bad', 'CNY', {}],
+      [1234567.891, 'USD', {}]
+    ]
+    for (const [v, c, o] of cases) {
+      expect(equiv(v, c, o)).toBe(formatMoney(v, c, o))
+    }
   })
 })
