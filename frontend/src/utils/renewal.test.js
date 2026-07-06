@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  dueText,
   groupRenewalStatus,
   isExpired,
   isSoon,
@@ -114,5 +115,28 @@ describe('groupRenewalStatus', () => {
 
   it('returns ok when all items are safe', () => {
     expect(groupRenewalStatus([recurring('2024-01-09'), recurring('2024-01-10')], { now: NOW })).toBe('ok')
+  })
+})
+
+describe('dueText', () => {
+  // mock t：返回 key + 参数，便于断言走了哪条分支
+  const t = (key, params) => key === 'dashboard.daysLeft' ? `d:${params.n}` : key
+
+  it('returns empty string when daysLeft is null (non-recurring or dateless)', () => {
+    expect(dueText({ billing_type: 'one_time' }, t, { now: NOW })).toBe('')
+    expect(dueText({ billing_type: 'recurring' }, t, { now: NOW })).toBe('')
+    expect(dueText(null, t, { now: NOW })).toBe('')
+  })
+
+  it('returns the expired tag when overdue', () => {
+    expect(dueText(recurring('2023-12-31'), t, { now: NOW })).toBe('sub.expiredTag')
+  })
+
+  it('returns today text when due today', () => {
+    expect(dueText(recurring('2024-01-01'), t, { now: NOW })).toBe('dashboard.today')
+  })
+
+  it('returns daysLeft text with n when in the future', () => {
+    expect(dueText(recurring('2024-01-05'), t, { now: NOW })).toBe('d:4')
   })
 })

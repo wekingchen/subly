@@ -38,7 +38,7 @@
 
       <div class="sc-due" :class="statusOf" v-if="subscription.billing_type === 'recurring' && subscription.next_renewal_date">
         <span class="due mono-data">{{ subscription.next_renewal_date }}</span>
-        <span class="sc-due-text">{{ dueText }}</span>
+        <span class="sc-due-text">{{ dueText(subscription, t) }}</span>
       </div>
       <div class="sc-due oneTime" v-else-if="subscription.billing_type === 'one_time'">
         <span class="sc-due-text">{{ t('sub.lifetime') }}</span>
@@ -88,7 +88,7 @@ import ServiceIcon from '../ServiceIcon.vue'
 import StatusChip from '../StatusChip.vue'
 import SubscriptionCardDetails from './SubscriptionCardDetails.vue'
 import { daysLeft } from '../../utils/date'
-import { isExpired, isSoon, renewalStatus } from '../../utils/renewal'
+import { dueText, isExpired, isSoon, renewalStatus } from '../../utils/renewal'
 
 const props = defineProps({
   subscription: { type: Object, required: true },
@@ -118,12 +118,6 @@ const statusOf = computed(() => renewalStatus(props.subscription))
 const cycleText = computed(() => {
   const n = props.subscription.cycle_count > 1 ? props.subscription.cycle_count + ' ' : ''
   return n + t('sub.' + props.subscription.cycle)
-})
-const dueText = computed(() => {
-  const d = daysLeft(props.subscription)
-  if (d === null) return ''
-  if (d < 0) return t('sub.expiredTag')
-  return d === 0 ? t('dashboard.today') : t('dashboard.daysLeft', { n: d })
 })
 const remarkText = computed(() => (props.subscription.remark || '').trim())
 const statusChip = computed(() => {

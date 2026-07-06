@@ -56,7 +56,7 @@
               <span class="l-txt">{{ s.name }}</span>
             </span>
             <span class="l-right">
-              <span class="tag" :class="dueClass(s)">{{ dueText(s) }}</span>
+              <span class="tag" :class="dueClass(s)">{{ dueText(s, t) }}</span>
               <b class="mono-data">{{ fmt(s.amount_in_base) }}</b>
             </span>
           </div>
@@ -93,7 +93,7 @@
               <span class="cc-dot"></span>
               <ServiceIcon :src="s.icon" :name="s.name" :fallback="emojiOf(s)" class="mini-ico" />
               <span class="cc-n">{{ s.name }}</span>
-              <span class="cc-d">{{ s.next_renewal_date ? dueText(s) : t('sub.oneTime') }}</span>
+              <span class="cc-d">{{ s.next_renewal_date ? dueText(s, t) : t('sub.oneTime') }}</span>
             </div>
           </div>
         </div>
@@ -127,7 +127,7 @@ import { icon } from '../icons'
 import { daysLeft } from '../utils/date'
 import { emojiOf } from '../utils/icon'
 import { amountOf, formatMoney } from '../utils/money'
-import { radarBucket as renewalRadarBucket, renewalStatus } from '../utils/renewal'
+import { radarBucket as renewalRadarBucket, dueText, renewalStatus } from '../utils/renewal'
 
 const { t } = useI18n()
 const auth = useAuth()
@@ -143,12 +143,6 @@ function color(i) { return PALETTE[i % PALETTE.length] }
 
 const cur = computed(() => auth.user?.base_currency || 'CNY')
 function fmt(v) { return formatMoney(v, cur.value) }
-function dueText(s) {
-  const d = daysLeft(s)
-  if (d === null) return ''
-  if (d < 0) return t('dashboard.overdue')
-  return d === 0 ? t('dashboard.today') : t('dashboard.daysLeft', { n: d })
-}
 function dueClass(s) {
   const d = daysLeft(s)
   if (d === null) return ''

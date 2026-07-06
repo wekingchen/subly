@@ -57,3 +57,11 @@ export function groupRenewalStatus(items, options = {}) {
   if (statuses.includes('soon')) return 'soon'
   return 'ok'
 }
+
+// 到期文案：复用 daysLeft，过期/今天/N 天用统一 i18n key（dashboard.today / dashboard.daysLeft / sub.expiredTag）
+export function dueText(item, t, options = {}) {
+  const d = daysLeft(item, options)
+  if (d === null) return ''
+  if (d < 0) return t('sub.expiredTag')
+  return d === 0 ? t('dashboard.today') : t('dashboard.daysLeft', { n: d })
+}
