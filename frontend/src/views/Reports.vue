@@ -103,7 +103,7 @@
 
       <div class="card sect">
         <h3 class="panel-title"><span class="panel-signal"></span>{{ t('reports.ranking') }}</h3>
-        <div class="tbl-wrap desktop-only">
+        <div v-if="isDesktop" class="tbl-wrap">
           <table>
             <thead><tr><th>#</th><th>{{ t('sub.name') }}</th><th>{{ t('reports.category') }}</th><th>{{ t('reports.monthly') }}</th></tr></thead>
             <tbody>
@@ -117,7 +117,7 @@
             </tbody>
           </table>
         </div>
-        <div class="ledger mobile-only">
+        <div v-else class="ledger">
           <div v-for="(s, i) in ranking" :key="s.id" class="ld-row rank-row">
             <span class="ld-rk mono-data">{{ i + 1 }}</span>
             <ServiceIcon :src="s.icon" :name="s.name" :fallback="emojiOf(s)" class="ld-ico" />
@@ -135,7 +135,7 @@
       <div class="grid two">
         <div class="card sect signal-panel soon-panel">
           <h3 class="panel-title"><span class="panel-signal"></span>{{ t('reports.upcoming') }}</h3>
-          <div class="tbl-wrap desktop-only">
+          <div v-if="isDesktop" class="tbl-wrap">
           <table>
             <tbody>
               <tr v-for="s in upcoming" :key="s.id" class="status-row" :class="statusOf(s)">
@@ -147,7 +147,7 @@
             </tbody>
           </table>
           </div>
-          <div class="ledger mobile-only">
+          <div v-else class="ledger">
             <div v-for="s in upcoming" :key="s.id" class="ld-row" :class="statusOf(s)">
               <span class="event-signal"></span>
               <ServiceIcon :src="s.icon" :name="s.name" :fallback="emojiOf(s)" class="ld-ico" />
@@ -164,7 +164,7 @@
         </div>
         <div class="card sect signal-panel overdue-panel">
           <h3 class="panel-title"><span class="panel-signal"></span>{{ t('reports.expired') }}</h3>
-          <div class="tbl-wrap desktop-only">
+          <div v-if="isDesktop" class="tbl-wrap">
           <table>
             <tbody>
               <tr v-for="s in expired" :key="s.id" class="status-row overdue">
@@ -176,7 +176,7 @@
             </tbody>
           </table>
           </div>
-          <div class="ledger mobile-only">
+          <div v-else class="ledger">
             <div v-for="s in expired" :key="s.id" class="ld-row overdue">
               <span class="event-signal"></span>
               <ServiceIcon :src="s.icon" :name="s.name" :fallback="emojiOf(s)" class="ld-ico" />
@@ -195,7 +195,7 @@
 
       <div class="card sect signal-panel lifetime-panel">
         <h3 class="panel-title"><span class="panel-signal"></span>{{ t('reports.oneTime') }}</h3>
-        <div class="tbl-wrap desktop-only">
+        <div v-if="isDesktop" class="tbl-wrap">
         <table>
           <thead><tr><th>{{ t('sub.name') }}</th><th>{{ t('reports.category') }}</th><th>{{ t('sub.amount') }}</th><th>{{ t('sub.startDate') }}</th></tr></thead>
           <tbody>
@@ -209,7 +209,7 @@
           </tbody>
         </table>
         </div>
-        <div class="ledger mobile-only">
+        <div v-else class="ledger">
           <div v-for="s in oneTime" :key="s.id" class="ld-row oneTime">
             <span class="event-signal"></span>
             <ServiceIcon :src="s.icon" :name="s.name" :fallback="emojiOf(s)" class="ld-ico" />
@@ -291,6 +291,7 @@ import api from '../api'
 import RadarBars from '../components/RadarBars.vue'
 import ServiceIcon from '../components/ServiceIcon.vue'
 import SignalDot from '../components/SignalDot.vue'
+import { useBreakpoint } from '../composables/useBreakpoint'
 import { useAuth } from '../stores/auth'
 import { daysLeft } from '../utils/date'
 import { emojiOf } from '../utils/icon'
@@ -299,6 +300,7 @@ import { renewalStatus } from '../utils/renewal'
 
 const { t } = useI18n()
 const auth = useAuth()
+const isDesktop = useBreakpoint('(min-width: 721px)')
 const tabs = ['overview', 'insights', 'categoryDetail', 'recentPayments']
 const active = ref('overview')
 const cur = computed(() => auth.user?.base_currency || 'CNY')
@@ -454,7 +456,6 @@ h1 { margin: 0; }
 .overdue .event-signal { background: var(--danger); box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 14%, transparent); }
 .oneTime .event-signal { background: var(--text-soft); box-shadow: 0 0 0 3px color-mix(in srgb, var(--text-soft) 12%, transparent); }
 
-.mobile-only { display: none; }
 .rk { width: 28px; color: var(--text-soft); font-weight: 700; }
 .nm { display: flex; align-items: center; gap: 9px; min-width: 0; }
 .nm-ico { width: 26px; height: 26px; border-radius: 7px; object-fit: contain; flex-shrink: 0;
@@ -545,8 +546,8 @@ h1 { margin: 0; }
 .pay-d { font-size: 12px; }
 .pay-amt { font-weight: 700; font-size: 14px; white-space: nowrap; }
 
-/* 移动端账本列表（默认隐藏，仅移动端显示；desktop 表格同理仅移动端隐藏）*/
-.ledger.mobile-only { display: none; flex-direction: column; }
+/* 移动端账本列表：由 v-if=isDesktop 控制渲染，此处只管布局 */
+.ledger { display: flex; flex-direction: column; }
 .ld-row { display: flex; align-items: center; gap: 10px; padding: 11px 4px; border-bottom: 1px solid var(--border);
   min-height: 44px; border-left: 3px solid transparent; padding-left: 8px; }
 .ld-row:last-child { border-bottom: none; }
@@ -579,9 +580,6 @@ h1 { margin: 0; }
   .kpis { grid-template-columns: 1fr 1fr; }
   .kpi-v { font-size: 20px; overflow-wrap: anywhere; }
   .two { grid-template-columns: 1fr; }
-  .desktop-only { display: none; }
-  .mobile-only { display: flex; }
-  .ledger.mobile-only { display: flex; }
   .report-head-metrics { grid-template-columns: 1fr; }
   .rb-label, .rb-amt, .ld-s, .ld-meta, .ld-date, .ld-remark { white-space: normal; line-height: 1.3; }
   .ld-remark { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
