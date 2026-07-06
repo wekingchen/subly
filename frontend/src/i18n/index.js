@@ -68,6 +68,7 @@ const zh = {
     detailIdentityCost: '身份与费用', detailRiskReminder: '风险与提醒', detailAccountingOwner: '账务与归属',
     originalAmount: '原始金额', baseCurrencyAmount: '基准货币金额', bundle: '捆绑包', lastRenewedAt: '上次续费', calendarVisible: '日历显示', noneValue: '—',
     statusOverdue: '已过期', statusSoon: '即将到期', statusSafe: '安全', statusLifetime: '永久', lifetime: '永久买断',
+    daysLeftShort: '{n} 天',
     deleteTitle: '删除订阅', deletePwdTip: '为防止误删，请输入你的登录密码以确认删除「{name}」', pwdPh: '登录密码',
     remark: '个性化备注', remarkPh: '如：家庭主力机 / 香港 CN2（会显示在卡片上）',
     ipLabel: 'IP 地址（选填）', ipv4: 'IPv4', ipv6: 'IPv6'

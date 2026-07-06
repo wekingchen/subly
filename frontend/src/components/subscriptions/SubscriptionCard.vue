@@ -129,7 +129,7 @@ const remarkText = computed(() => (props.subscription.remark || '').trim())
 const statusChip = computed(() => {
   const st = statusOf.value
   if (st === 'overdue') return t('sub.statusOverdue')
-  if (st === 'soon') return t('sub.statusSoon') + ' · ' + Math.abs(daysLeft(props.subscription)) + 'D'
+  if (st === 'soon') return t('sub.statusSoon') + ' · ' + t('sub.daysLeftShort', { n: Math.abs(daysLeft(props.subscription)) })
   if (st === 'oneTime') return t('sub.statusLifetime')
   return t('sub.statusSafe')
 })
