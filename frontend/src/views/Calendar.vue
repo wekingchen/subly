@@ -72,6 +72,7 @@ import ServiceIcon from '../components/ServiceIcon.vue'
 import SignalDot from '../components/SignalDot.vue'
 import { useAuth } from '../stores/auth'
 import { toISODate } from '../utils/date'
+import { emojiOf } from '../utils/icon'
 import { amountOf, formatMoney } from '../utils/money'
 import { expandRenewalsInRange, groupRenewalEventsByDate } from '../utils/recurrence'
 import { groupRenewalStatus, radarBucket as renewalRadarBucket, renewalStatus } from '../utils/renewal'
@@ -96,9 +97,6 @@ function evColor(s) {
   for (const ch of (s.name || '')) h = (h * 31 + ch.charCodeAt(0)) >>> 0
   return PALETTE[h % PALETTE.length]
 }
-function isImg(v) { return typeof v === 'string' && (v.startsWith('/') || v.startsWith('http')) }
-function emojiOf(s) { return s.icon && !isImg(s.icon) ? s.icon : '🔖' }
-
 const dows = computed(() => {
   const fmt = new Intl.DateTimeFormat('zh-CN', { weekday: 'short' })
   // 2024-01-07 是周日

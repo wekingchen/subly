@@ -293,6 +293,7 @@ import ServiceIcon from '../components/ServiceIcon.vue'
 import SignalDot from '../components/SignalDot.vue'
 import { useAuth } from '../stores/auth'
 import { daysLeft } from '../utils/date'
+import { emojiOf } from '../utils/icon'
 import { amountOf, formatMoney } from '../utils/money'
 import { renewalStatus } from '../utils/renewal'
 
@@ -316,11 +317,9 @@ function catName(id) {
   const c = cats.value.find((x) => x.id === id)
   return c ? c.name : t('sub.uncategorized')
 }
-function emojiOf(s) { return s.icon && !isImg(s.icon) ? s.icon : '🔖' }
 
 const PALETTE = ['#5b5bd6', '#06b6d4', '#16a34a', '#f59e0b', '#ef4444', '#a855f7', '#0ea5e9', '#ec4899', '#14b8a6', '#f97316', '#8b5cf6', '#22c55e']
 function color(i) { return PALETTE[i % PALETTE.length] }
-function isImg(v) { return typeof v === 'string' && (v.startsWith('/') || v.startsWith('http')) }
 function money(value, currency = cur.value, options = {}) { return formatMoney(value, currency, options) }
 function cleanText(value) {
   if (value === null || value === undefined) return ''

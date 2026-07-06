@@ -125,6 +125,7 @@ import SignalDot from '../components/SignalDot.vue'
 import { useAuth } from '../stores/auth'
 import { icon } from '../icons'
 import { daysLeft } from '../utils/date'
+import { emojiOf } from '../utils/icon'
 import { amountOf, formatMoney } from '../utils/money'
 import { radarBucket as renewalRadarBucket, renewalStatus } from '../utils/renewal'
 
@@ -142,8 +143,6 @@ function color(i) { return PALETTE[i % PALETTE.length] }
 
 const cur = computed(() => auth.user?.base_currency || 'CNY')
 function fmt(v) { return formatMoney(v, cur.value) }
-function isImg(v) { return typeof v === 'string' && (v.startsWith('/') || v.startsWith('http')) }
-function emojiOf(s) { return s.icon && !isImg(s.icon) ? s.icon : '🔖' }
 function dueText(s) {
   const d = daysLeft(s)
   if (d === null) return ''
