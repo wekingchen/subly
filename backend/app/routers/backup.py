@@ -16,6 +16,7 @@ from app.billing import compute_next_renewal
 from app.database import get_db
 from app.deps import get_admin_user, get_current_user
 from app.models import Bundle, Category, Currency, PaymentMethod, Subscription, User
+from app.schemas import sanitize_url
 from app.security import hash_password
 
 router = APIRouter(prefix="/api/backup", tags=["backup"])
@@ -219,7 +220,7 @@ def _restore_entities(db: Session, user: User, data: dict, replace: bool) -> int
             name=s.get("name") or "导入订阅",
             plan=s.get("plan"),
             icon=s.get("icon"),
-            url=s.get("url"),
+            url=sanitize_url(s.get("url")),
             notes=s.get("notes"),
             remark=s.get("remark"),
             ipv4=s.get("ipv4"),

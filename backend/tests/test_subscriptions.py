@@ -169,3 +169,27 @@ def test_delete_subscription_requires_password_and_owner():
     finally:
         db.close()
         engine.dispose()
+
+
+def test_create_sub_sanitizes_auto_filled_url(monkeypatch):
+    """icon_library 自动补全的恶意 url 必须被丢弃，不能绕过白名单落库。"""
+    db, engine = make_db()
+    try:
+        user = add_user(db)
+        monkeypatch.setattr(
+            subscriptions.icon_library,
+            "website_for_name",
+            lambda db, name: "javascript:alert(1)",
+        )
+
+        out = subscriptions.create_sub(
+            SubscriptionIn(name="某服务", start_date=date(2024, 1, 1), cycle="month"),
+            request_stub(),
+            user,
+            db,
+        )
+        saved = db.get(Subscription, out.id)
+        assert saved.url is None  # 恶意 url 被丢弃，未落库
+    finally:
+        db.close()
+        engine.dispose()

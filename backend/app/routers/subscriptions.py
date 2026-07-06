@@ -13,7 +13,7 @@ from app.billing import add_cycle, compute_next_renewal
 from app.database import get_db
 from app.deps import get_current_user
 from app.models import Subscription, User
-from app.schemas import SubscriptionIn, SubscriptionOut, SubscriptionUpdate
+from app.schemas import SubscriptionIn, SubscriptionOut, SubscriptionUpdate, sanitize_url
 from app.security import verify_password
 from app.services import exchange
 
@@ -86,7 +86,7 @@ def create_sub(
     auto_url_filled = False
     # 附加信息：常用订阅名自动补全官方网站
     if not data.get("url"):
-        site = icon_library.website_for_name(db, data.get("name", ""))
+        site = sanitize_url(icon_library.website_for_name(db, data.get("name", "")))
         if site:
             data["url"] = site
             auto_url_filled = True

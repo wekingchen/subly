@@ -1,6 +1,31 @@
 from datetime import date, datetime
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
+
+
+def normalize_url(value: str | None) -> str | None:
+    """订阅官网 URL 归一化与协议白名单校验。
+    空/None → None；仅允许 http/https（大小写不敏感，自动 strip 前后空白），
+    拒绝 javascript:/data:/相对路径等（防 Bark 点击触发 XSS）。返回原始大小写的合法 URL。
+    """
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError("链接必须是字符串")
+    v = value.strip()
+    if v == "":
+        return None
+    if not v.lower().startswith(("http://", "https://")):
+        raise ValueError("链接必须以 http:// 或 https:// 开头")
+    return v
+
+
+def sanitize_url(value: str | None) -> str | None:
+    """宽松版：非法协议的 URL 返回 None 而非抛错，用于备份导入等不希望中断流程的场景。"""
+    try:
+        return normalize_url(value)
+    except ValueError:
+        return None
 
 
 # ---------- Auth ----------
@@ -124,6 +149,11 @@ class SubscriptionIn(BaseModel):
     billing_type: str = "recurring"      # recurring | one_time
     cycle: str = "month"                 # day | week | month | year
     cycle_count: int = 1
+
+    @field_validator("url")
+    @classmethod
+    def _validate_url(cls, v):
+        return normalize_url(v)
     start_date: date | None = None
     next_renewal_date: date | None = None
     end_date: date | None = None
@@ -159,6 +189,11 @@ class SubscriptionUpdate(BaseModel):
     show_in_calendar: bool | None = None
     family_members: list[str] | None = None
     remind_days_before: str | None = None
+
+    @field_validator("url")
+    @classmethod
+    def _validate_url(cls, v):
+        return normalize_url(v)
 
 
 class SubscriptionOut(BaseModel):
