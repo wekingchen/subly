@@ -233,7 +233,7 @@
           <h3 class="panel-title"><span class="panel-signal"></span>{{ t('reports.recurringSubs') }}
             <span class="muted total mono-data">{{ money(detail.recurring_monthly_total || 0) }} / {{ t('reports.monthly') }}</span>
           </h3>
-          <div class="tbl-wrap">
+          <div v-if="isDesktop" class="tbl-wrap">
           <table>
             <thead><tr><th>{{ t('reports.category') }}</th><th>{{ t('reports.count') }}</th><th>{{ t('reports.monthly') }}</th></tr></thead>
             <tbody>
@@ -244,12 +244,22 @@
             </tbody>
           </table>
           </div>
+          <div v-else class="ledger">
+            <div v-for="r in detail.recurring" :key="r.category" class="ld-row">
+              <div class="ld-main">
+                <div class="ld-n">{{ r.category }}</div>
+                <div class="ld-meta">{{ r.count }} {{ t('reports.countUnit') }}</div>
+              </div>
+              <div class="ld-amt mono-data">{{ money(r.monthly) }}</div>
+            </div>
+            <p v-if="!detail.recurring?.length" class="muted">{{ t('reports.empty') }}</p>
+          </div>
         </div>
         <div class="card sect signal-panel detail-lifetime">
           <h3 class="panel-title"><span class="panel-signal"></span>{{ t('reports.permanentBuy') }}
             <span class="muted total mono-data">{{ money(detail.one_time_total || 0) }}</span>
           </h3>
-          <div class="tbl-wrap">
+          <div v-if="isDesktop" class="tbl-wrap">
           <table>
             <thead><tr><th>{{ t('reports.category') }}</th><th>{{ t('reports.count') }}</th><th>{{ t('reports.amount') }}</th></tr></thead>
             <tbody>
@@ -259,6 +269,16 @@
               <tr v-if="!detail.one_time?.length"><td colspan="3" class="muted">{{ t('reports.empty') }}</td></tr>
             </tbody>
           </table>
+          </div>
+          <div v-else class="ledger">
+            <div v-for="r in detail.one_time" :key="r.category" class="ld-row">
+              <div class="ld-main">
+                <div class="ld-n">{{ r.category }}</div>
+                <div class="ld-meta">{{ r.count }} {{ t('reports.countUnit') }}</div>
+              </div>
+              <div class="ld-amt mono-data">{{ money(r.total) }}</div>
+            </div>
+            <p v-if="!detail.one_time?.length" class="muted">{{ t('reports.empty') }}</p>
           </div>
         </div>
       </div>

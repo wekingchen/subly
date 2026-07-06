@@ -22,7 +22,7 @@ const zh = {
     loginBtn: '登录', registerBtn: '注册',
     loginFail: '用户名或密码错误',
     verifyTitle: '邮箱验证', verifyTip: '验证码已发送至 {email}，请查收并填写（10 分钟内有效）',
-    radarKicker: 'Renewal signal live', radarTitle: '续费雷达控制台',
+    radarKicker: '实时续费雷达', radarTitle: '续费雷达控制台',
     radarSubtitle: '把订阅、域名、VPS 和提醒通道放进自己的自托管雷达站。',
     radarScan: '30 天续费扫描', radarAlerts: 'Telegram + Bark 双通道', radarLedger: 'SQLite 本地账本',
     code: '验证码', codePh: '6 位数字', verifyBtn: '验证邮箱', backToLogin: '返回登录',
@@ -82,7 +82,7 @@ const zh = {
     ranking: '支出排行', oneTime: '永久购买', upcoming: '即将续费', expired: '已过期',
     category: '分类', monthly: '月支出', percent: '占比', total: '月支出合计', empty: '暂无数据',
     monthlyTotal: '每月合计', yearlyTotal: '每年合计', byCategory: '分类支出占比', spendTrend: '支出概览',
-    recurringSubs: '循环订阅', permanentBuy: '永久购买', count: '数量', amount: '金额', date: '日期', type: '类型',
+    recurringSubs: '循环订阅', permanentBuy: '永久购买', count: '数量', countUnit: '项', amount: '金额', date: '日期', type: '类型',
     permanentTotal: '永久购买总额', recurringMonthly: '循环订阅月支出', noData: '暂无可视化数据',
     finRadar: '财务雷达', reportSubtitle: '支出结构、续费风险与近期付款信号', riskRadar: '续费压力', riskTotal: '风险信号'
   },
