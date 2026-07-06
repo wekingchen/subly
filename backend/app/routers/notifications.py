@@ -3,6 +3,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app import activity
+from app.config import settings
 from app.database import get_db
 from app.deps import get_current_user
 from app.models import NotificationLog, User
@@ -93,6 +94,7 @@ def bark_test(
             sound=user.bark_sound,
             group=user.bark_group,
             ttl=ttl,
+            url=settings.app_public_url or None,
         )
     except Exception as e:  # noqa: BLE001
         activity.log("bark.test", f"测试推送发送失败：{e}", user=user, level="error")

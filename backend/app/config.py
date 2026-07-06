@@ -38,6 +38,8 @@ class Settings(BaseSettings):
 
     # 提醒
     reminder_scan_time: str = "09:00"
+    # Subly 对外可访问地址（如 https://subly.example.com），用于 Bark 推送点击跳转回应用；留空则不跳转
+    app_public_url: str = ""
 
     # 注册审核 / 邮件（SMTP）
     require_admin_approval: bool = True       # 新用户注册需管理员审核
