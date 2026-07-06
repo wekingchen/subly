@@ -1,9 +1,12 @@
 <template>
-  <span class="money-text mono-data" :class="{ muted }" :style="currencySize ? { '--money-currency-size': currencySize } : null">
-    <template v-if="splitCurrency">
-      <span v-if="position === 'suffix'" class="amt">{{ parts.amountPart }}</span>
-      <span v-if="parts.currencyPart" class="cur">{{ parts.currencyPart }}{{ space ? ' ' : '' }}</span>
-      <span v-if="position !== 'suffix'" class="amt">{{ parts.amountPart }}</span>
+  <span class="money-text mono-data" :class="{ muted }" :style="splitCurrency && currencySize ? { '--money-currency-size': currencySize } : null">
+    <template v-if="splitCurrency && parts.currencyPart">
+      <template v-if="position === 'suffix'">
+        <span class="amt">{{ parts.amountPart }}</span> <span class="cur">{{ parts.currencyPart }}</span>
+      </template>
+      <template v-else>
+        <span class="cur">{{ parts.currencyPart }}</span> <span class="amt">{{ parts.amountPart }}</span>
+      </template>
     </template>
     <template v-else>{{ text }}</template>
   </span>
@@ -19,7 +22,9 @@ const props = defineProps({
   decimals: { type: Number, default: 2 },
   position: { type: String, default: 'prefix' },
   muted: { type: Boolean, default: false },
-  // 开启币种小字号层级：传 CSS 字号字符串（如 '15px'）即拆分币种/金额，留空则保持单字符串现状
+  // 是否拆分币种/金额为独立 span（便于差异化样式）
+  splitCurrency: { type: Boolean, default: false },
+  // 拆分后币种的 CSS 字号（如 '15px'）；仅 splitCurrency 开启时生效
   currencySize: { type: String, default: '' }
 })
 
@@ -29,9 +34,7 @@ const text = computed(() => formatMoney(props.value, props.currency, {
   position: props.position
 }))
 
-// 开启路径：用 splitMoney 拆段，space 与 formatMoney 默认一致
-const splitCurrency = computed(() => !!props.currencySize)
-const space = computed(() => true)
+// 开启路径：用 splitMoney 拆段，空格作为独立文本节点放在两 span 之间（与 formatMoney 一致，无尾随空格）
 const parts = computed(() => splitMoney(props.value, props.currency, {
   decimals: props.decimals,
   position: props.position

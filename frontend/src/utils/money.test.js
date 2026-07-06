@@ -124,7 +124,9 @@ describe('splitMoney', () => {
       [0, 'CNY', {}],
       [-12.345, 'CNY', {}],
       ['bad', 'CNY', {}],
-      [1234567.891, 'USD', {}]
+      [1234567.891, 'USD', {}],
+      [12.3, 'USD', { position: 'suffix', space: false }],
+      [12.3, 'CNY', { space: false }]
     ]
     for (const [v, c, o] of cases) {
       expect(equiv(v, c, o)).toBe(formatMoney(v, c, o))

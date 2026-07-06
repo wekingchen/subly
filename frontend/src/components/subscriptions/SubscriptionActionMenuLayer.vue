@@ -54,8 +54,9 @@
 </template>
 
 <script setup>
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import ActionMenuContent from './ActionMenuContent.vue'
+import { useBreakpoint } from '../../composables/useBreakpoint'
 import { useDialogFocus } from '../../composables/useDialogFocus'
 
 const props = defineProps({
@@ -70,8 +71,7 @@ const actionSheetRef = ref(null)
 const actionPopoverRef = ref(null)
 // 始终指向当前活跃容器（sheet 或 popover），供 useDialogFocus 做 Tab 环绕。
 const dialogRef = ref(null)
-const isDesktopActionMode = ref(false)
-let actionMq = null
+const isDesktopActionMode = useBreakpoint('(min-width: 721px)')
 
 const DASH = '—'
 const ACTION_EDGE = 12
@@ -118,10 +118,6 @@ function clamp(n, min, max) {
   return Math.min(Math.max(n, min), max)
 }
 
-function syncActionMode() {
-  isDesktopActionMode.value = !!actionMq?.matches
-}
-
 // 把 dialogRef 同步到当前活跃容器，并聚焦它（处理打开与断点切换重聚焦）。
 // 初始聚焦由本层显式控制，避免与 composable 的 enter nextTick 时序耦合；
 // composable 只负责 Escape / Tab 环绕 / 栈管理。
@@ -151,16 +147,7 @@ useDialogFocus({
   trap: true
 })
 
-onMounted(() => {
-  actionMq = window.matchMedia('(min-width: 721px)')
-  syncActionMode()
-  if (actionMq.addEventListener) actionMq.addEventListener('change', syncActionMode)
-  else actionMq.addListener?.(syncActionMode)
-})
-
 onBeforeUnmount(() => {
-  if (actionMq?.removeEventListener) actionMq.removeEventListener('change', syncActionMode)
-  else actionMq?.removeListener?.(syncActionMode)
   emit('mobile-lock-change', false)
 })
 </script>

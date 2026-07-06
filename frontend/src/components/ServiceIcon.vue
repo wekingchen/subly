@@ -4,6 +4,7 @@
     v-bind="$attrs"
     :src="src"
     :alt="alt || name || ''"
+    decoding="async"
     @error="markFailed"
     @load="onLoad"
   />
