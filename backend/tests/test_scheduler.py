@@ -179,11 +179,52 @@ def test_reminder_text_includes_core_subscription_context(monkeypatch):
         assert "https://example.com" in telegram_text
 
         title, body = scheduler._build_bark_text(db, sub, user, 0)
-        assert "今天到期" in title
-        assert "Pro VPS" in title
-        assert "金额：12.50 USD" in body
-        assert "分类：云服务器" in body
-        assert "付款：Visa" in body
+        assert title == "⚠️ Pro VPS 今天到期"
+        assert body == "12.50 USD（≈ 88.88 CNY）/月，今天就到期。基础版，Visa扣款，生产节点。"
+        assert "分类" not in body  # 分类移出 Bark 正文（标题已含名称，分类信息量低）
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_bark_text_is_natural_and_omits_empty_fields(monkeypatch):
+    """Bark 文案单行口语化；套餐/付款/备注「有才说」；外币才折算；周期用「月/年」。"""
+    db, engine = make_db()
+    try:
+        monkeypatch.setattr(scheduler.exchange, "convert",
+                            lambda db, amount, from_cur, to_cur: amount if from_cur == to_cur else 88.0)
+        # 同币种：不折算；无套餐/付款/备注：正文停在到期语句
+        user_cny = add_user(db, username="cn", base_currency="CNY")
+        sub_plain = add_subscription(db, user_cny, name="Netflix", amount=88.0, currency="CNY",
+                                     plan=None, next_renewal_date=date(2024, 1, 9))
+        title, body = scheduler._build_bark_text(db, sub_plain, user_cny, 3)
+        assert title == "🔔 Netflix 还有 3 天到期"
+        assert body == "88.00 CNY/月，2024-01-09 到期。"
+
+        # 多年周期用「2 年」
+        sub_biennial = add_subscription(db, user_cny, name="域名", amount=120.0, currency="CNY",
+                                        plan=None, cycle="year", cycle_count=2,
+                                        next_renewal_date=date(2024, 1, 19))
+        _, body_y = scheduler._build_bark_text(db, sub_biennial, user_cny, 10)
+        assert body_y == "120.00 CNY/2 年，2024-01-19 到期。"
+
+        # 外币才显示折算括号
+        user_usd = add_user(db, username="u", email="u@e.com", base_currency="CNY")
+        sub_usd = add_subscription(db, user_usd, name="ChatGPT", amount=20.0, currency="USD",
+                                   plan=None, next_renewal_date=date(2024, 1, 11))
+        _, body_u = scheduler._build_bark_text(db, sub_usd, user_usd, 5)
+        assert body_u == "20.00 USD（≈ 88.00 CNY）/月，2024-01-11 到期。"
+
+        # 有套餐/付款/备注才追加
+        cat = Category(user_id=user_cny.id, name="流媒体", icon="", color="#00f")
+        pm = PaymentMethod(user_id=user_cny.id, name="招行信用卡", icon="")
+        db.add_all([cat, pm]); db.flush()
+        sub_full = add_subscription(db, user_cny, name="Disney+", amount=35.0, currency="CNY",
+                                    plan="标准版", category_id=cat.id, payment_method_id=pm.id,
+                                    remark="家庭共享", next_renewal_date=date(2024, 1, 9))
+        _, body_f = scheduler._build_bark_text(db, sub_full, user_cny, 3)
+        assert body_f == "35.00 CNY/月，2024-01-09 到期。标准版，招行信用卡扣款，家庭共享。"
+        assert "流媒体" not in body_f  # 分类不进正文
     finally:
         db.close()
         engine.dispose()

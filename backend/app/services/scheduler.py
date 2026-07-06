@@ -123,6 +123,7 @@ def run_reminder_scan() -> dict:
                             sound=user.bark_sound,
                             group=user.bark_group,
                             ttl=user.bark_ttl,
+                            url=sub.url,
                         )
                         return f"{title}\n{body}"
 
@@ -135,7 +136,7 @@ def run_reminder_scan() -> dict:
     return {"sent": sent, "failed": failed}
 
 
-_CYCLE_CN = {"day": "天", "week": "周", "month": "个月", "year": "年"}
+_CYCLE_CN = {"day": "天", "week": "周", "month": "月", "year": "年"}
 
 
 def _escape_md(text: str) -> str:
@@ -201,21 +202,30 @@ def _build_telegram_text(db, sub: Subscription, user: User, days_left: int) -> s
 
 
 def _build_bark_text(db, sub: Subscription, user: User, days_left: int) -> tuple[str, str]:
-    """构造 Bark 推送的 (标题, 正文)。Bark 通知栏空间有限，正文保持简洁、不带 Markdown 符号。"""
+    """构造 Bark 推送的 (标题, 正文)。标题只留名称+天数；正文单行口语化，套餐/付款/备注有才说。"""
     f = _renewal_facts(db, sub, user, days_left)
     if days_left <= 0:
-        title = f"⚠️ 今天到期：{f['title']}"
+        title = f"⚠️ {sub.name} 今天到期"
+        due_clause = "今天就到期"
     else:
-        title = f"🔔 还有 {days_left} 天到期：{f['title']}"
+        title = f"🔔 {sub.name} 还有 {days_left} 天到期"
+        due_clause = f"{sub.next_renewal_date} 到期"
 
-    parts = [f"金额：{f['amount']}{f['base_str']} · {f['cycle_str']}", f"到期：{sub.next_renewal_date}"]
-    if f["cat"]:
-        parts.append(f"分类：{f['cat'].name}")
+    # 金额后的简短周期单位：月/年/周/天，count>1 时「2 年」
+    unit = _CYCLE_CN.get(sub.cycle, sub.cycle)
+    per = f"{sub.cycle_count} {unit}" if (sub.cycle_count or 1) > 1 else unit
+
+    # 正文：金额/周期，到期语句。套餐？付款？备注？（有才说，逗号分隔）
+    head = f"{f['amount']}{f['base_str']}/{per}，{due_clause}。"
+    tail_parts = []
+    if sub.plan:
+        tail_parts.append(sub.plan)
     if f["pm"]:
-        parts.append(f"付款：{f['pm'].name}")
+        tail_parts.append(f"{f['pm'].name}扣款")
     if sub.remark:
-        parts.append(f"备注：{sub.remark}")
-    body = " · ".join(parts)
+        tail_parts.append(sub.remark)
+    tail = "，".join(tail_parts)
+    body = head + tail + ("。" if tail else "")
     return title, body
 
 
