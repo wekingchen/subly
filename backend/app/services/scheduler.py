@@ -154,7 +154,7 @@ def _renewal_facts(db, sub: Subscription, user: User, days_left: int):
     in_base = exchange.convert(db, sub.amount, sub.currency, user.base_currency)
     base_str = ""
     if abs(in_base - sub.amount) > 1e-6 or sub.currency != user.base_currency:
-        base_str = f"（≈ {in_base:.2f} {user.base_currency}）"
+        base_str = f"（约 {in_base:.2f} {user.base_currency}）"
     cat = db.get(Category, sub.category_id) if sub.category_id else None
     pm = db.get(PaymentMethod, sub.payment_method_id) if sub.payment_method_id else None
     unit = _CYCLE_CN.get(sub.cycle, sub.cycle)
@@ -201,31 +201,35 @@ def _build_telegram_text(db, sub: Subscription, user: User, days_left: int) -> s
     return "\n".join(lines)
 
 
+def _cn_date(d) -> str:
+    """date → 中文月日，如 7 月 14 日。"""
+    return f"{d.month} 月 {d.day} 日"
+
+
 def _build_bark_text(db, sub: Subscription, user: User, days_left: int) -> tuple[str, str]:
-    """构造 Bark 推送的 (标题, 正文)。标题只留名称+天数；正文单行口语化，套餐/付款/备注有才说。"""
+    """构造 Bark 推送的 (标题, 正文)。
+    标题只留名称+天数；正文是一句完整的话，套餐/付款/备注/分类有才说。"""
     f = _renewal_facts(db, sub, user, days_left)
     if days_left <= 0:
         title = f"⚠️ {sub.name} 今天到期"
         due_clause = "今天就到期"
     else:
         title = f"🔔 {sub.name} 还有 {days_left} 天到期"
-        due_clause = f"{sub.next_renewal_date} 到期"
+        due_clause = f"{_cn_date(sub.next_renewal_date)}到期"
 
-    # 金额后的简短周期单位：月/年/周/天，count>1 时「2 年」
-    unit = _CYCLE_CN.get(sub.cycle, sub.cycle)
-    per = f"{sub.cycle_count} {unit}" if (sub.cycle_count or 1) > 1 else unit
-
-    # 正文：金额/周期，到期语句。套餐？付款？备注？（有才说，逗号分隔）
-    head = f"{f['amount']}{f['base_str']}/{per}，{due_clause}。"
-    tail_parts = []
+    # 句子化正文：套餐起头 → 每月金额（折算） → 到期 → 付款/备注/分类（有才带标签）
+    parts = []
     if sub.plan:
-        tail_parts.append(sub.plan)
+        parts.append(f"{sub.plan} 套餐")
+    parts.append(f"{f['cycle_str']} {f['amount']}{f['base_str']}")
+    parts.append(due_clause)
     if f["pm"]:
-        tail_parts.append(f"{f['pm'].name}扣款")
+        parts.append(f"由{f['pm'].name}扣款")
     if sub.remark:
-        tail_parts.append(sub.remark)
-    tail = "，".join(tail_parts)
-    body = head + tail + ("。" if tail else "")
+        parts.append(f"备注：{sub.remark}")
+    if f["cat"]:
+        parts.append(f"分类：{f['cat'].name}")
+    body = "，".join(parts) + "。"
     return title, body
 
 
