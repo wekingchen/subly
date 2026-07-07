@@ -7,8 +7,12 @@
         <p class="muted">{{ t('diagnostics.subtitle') }}</p>
       </div>
       <div class="hero-actions">
-        <button class="btn ghost" @click="loadDiagnostics">{{ t('diagnostics.run') }}</button>
-        <button class="btn" @click="runSimulation">{{ t('diagnostics.simulate') }}</button>
+        <button class="btn ghost" :disabled="diagLoading" @click="clickDiagnostics">
+          {{ diagLoading ? t('diagnostics.running') : t('diagnostics.run') }}
+        </button>
+        <button class="btn" :disabled="simLoading" @click="clickSimulation">
+          {{ simLoading ? t('diagnostics.simulating') : t('diagnostics.simulate') }}
+        </button>
       </div>
       <div class="diag-metrics">
         <div class="metric-card bad"><span>{{ t('diagnostics.errors') }}</span><b class="mono-data">{{ diagnostic.summary?.errors || 0 }}</b></div>
@@ -18,13 +22,12 @@
       </div>
     </section>
 
-    <p v-if="err" class="err" role="alert">{{ err }}</p>
-
     <section class="card panel-card">
       <div class="panel-head">
         <div>
           <div class="panel-title">{{ t('diagnostics.issueTitle') }}</div>
           <p class="muted">{{ t('diagnostics.issueTip') }}</p>
+          <p v-if="diagRunAt" class="muted run-stamp">{{ t('diagnostics.lastRun', { time: diagRunAt }) }}</p>
         </div>
         <div class="seg">
           <button :class="{ active: issueFilter === 'all' }" @click="issueFilter = 'all'">{{ t('diagnostics.all') }}</button>
@@ -35,7 +38,9 @@
         </div>
       </div>
 
-      <div v-if="filteredIssues.length" class="issue-list">
+      <p v-if="diagErr" class="err" role="alert">{{ diagErr }}</p>
+      <p v-if="diagLoading" class="muted loading-line">{{ t('diagnostics.runningHint') }}</p>
+      <div v-else-if="filteredIssues.length" class="issue-list">
         <article v-for="issue in filteredIssues" :key="issueKey(issue)" class="issue-card" :class="severityClass(issue.severity)">
           <div class="issue-top">
             <span class="tag" :class="severityClass(issue.severity)">{{ severityLabel(issue.severity) }}</span>
@@ -52,7 +57,7 @@
           </div>
         </article>
       </div>
-      <div v-else class="empty-state"><span class="signal-dot"></span><b>{{ t('diagnostics.noIssues') }}</b></div>
+      <div v-else-if="diagLoaded" class="empty-state"><span class="signal-dot"></span><b>{{ t('diagnostics.noIssues') }}</b></div>
     </section>
 
     <section class="card panel-card">
@@ -77,7 +82,12 @@
         <label>{{ t('diagnostics.limit') }}<input v-model.number="simForm.limit" type="number" min="1" max="1000" /></label>
         <label class="check-row"><input v-model="simForm.include_skipped" type="checkbox" /> {{ t('diagnostics.includeSkipped') }}</label>
       </div>
-      <div class="actions-row"><button class="btn" @click="runSimulation">{{ t('diagnostics.runSimulation') }}</button></div>
+      <div class="actions-row">
+        <button class="btn" :disabled="simLoading" @click="clickSimulation">
+          {{ simLoading ? t('diagnostics.simulating') : t('diagnostics.runSimulation') }}
+        </button>
+        <span v-if="simRunAt" class="muted run-stamp">{{ t('diagnostics.lastRun', { time: simRunAt }) }}</span>
+      </div>
 
       <div class="sim-metrics">
         <span>{{ t('diagnostics.scanned') }} <b class="mono-data">{{ simulation.summary?.scanned || 0 }}</b></span>
@@ -87,7 +97,9 @@
         <span>Bark <b class="mono-data">{{ simulation.summary?.bark || 0 }}</b></span>
       </div>
 
-      <div v-if="sortedSimulation.length" class="sim-list">
+      <p v-if="simErr" class="err" role="alert">{{ simErr }}</p>
+      <p v-if="simLoading" class="muted loading-line">{{ t('diagnostics.simulatingHint') }}</p>
+      <div v-else-if="sortedSimulation.length" class="sim-list">
         <article v-for="item in sortedSimulation" :key="simKey(item)" class="sim-card">
           <div class="sim-top">
             <span class="tag" :class="simulationStatusClass(item.status)">{{ simulationStatusLabel(item.status) }}</span>
@@ -104,7 +116,7 @@
           <pre v-if="item.preview" class="preview">{{ item.preview }}</pre>
         </article>
       </div>
-      <div v-else class="empty-state"><span class="signal-dot"></span><b>{{ t('diagnostics.noSimulation') }}</b></div>
+      <div v-else-if="simLoaded" class="empty-state"><span class="signal-dot"></span><b>{{ t('diagnostics.noSimulation') }}</b></div>
     </section>
   </div>
 </template>
@@ -128,7 +140,14 @@ const { t } = useI18n()
 const diagnostic = ref({ summary: {}, issues: [] })
 const simulation = ref({ summary: {}, items: [] })
 const issueFilter = ref('all')
-const err = ref('')
+const diagErr = ref('')
+const simErr = ref('')
+const diagLoading = ref(true)
+const simLoading = ref(true)
+const diagLoaded = ref(false)
+const simLoaded = ref(false)
+const diagRunAt = ref('')
+const simRunAt = ref('')
 const today = toISODate(new Date())
 const simForm = reactive({
   as_of_date: today,
@@ -161,26 +180,44 @@ function simKey(item) {
 }
 
 async function loadDiagnostics() {
-  err.value = ''
+  diagErr.value = ''
+  diagLoading.value = true
+  diagLoaded.value = false
+  diagnostic.value = { summary: {}, issues: [] }
   try {
     diagnostic.value = (await api.get('/api/admin/diagnostics')).data
+    diagRunAt.value = new Date().toLocaleTimeString()
+    diagLoaded.value = true
   } catch (e) {
-    err.value = e.response?.data?.detail || '诊断失败'
+    diagErr.value = e.response?.data?.detail || '诊断失败'
+  } finally {
+    diagLoading.value = false
   }
 }
 
 async function runSimulation() {
-  err.value = ''
+  simErr.value = ''
+  simLoading.value = true
+  simLoaded.value = false
+  simulation.value = { summary: {}, items: [] }
   try {
     simulation.value = (await api.post('/api/admin/diagnostics/reminders/simulate', cleanPayload())).data
+    simRunAt.value = new Date().toLocaleTimeString()
+    simLoaded.value = true
   } catch (e) {
-    err.value = e.response?.data?.detail || '提醒模拟失败'
+    simErr.value = e.response?.data?.detail || '提醒模拟失败'
+  } finally {
+    simLoading.value = false
   }
 }
 
-onMounted(async () => {
-  await loadDiagnostics()
-  await runSimulation()
+// 手动点击时重入保护，避免并发请求复用同一 loading 导致提前复位与结果覆盖
+function clickDiagnostics() { if (diagLoading.value) return; loadDiagnostics() }
+function clickSimulation() { if (simLoading.value) return; runSimulation() }
+
+onMounted(() => {
+  loadDiagnostics()
+  runSimulation()
 })
 </script>
 
@@ -201,6 +238,10 @@ h1 { margin: 8px 0; }
 .metric-card.warn { border-color: color-mix(in srgb, var(--warning) 30%, var(--border)); }
 .metric-card.bad { border-color: color-mix(in srgb, var(--danger) 30%, var(--border)); }
 .err { color: var(--danger); }
+.loading-line { display: flex; align-items: center; gap: 8px; }
+.loading-line::before { content: ''; width: 8px; height: 8px; border-radius: 999px; background: var(--primary); box-shadow: 0 0 12px color-mix(in srgb, var(--primary) 55%, transparent); animation: diag-pulse 1s ease-in-out infinite; }
+.run-stamp { margin-top: 4px; font-size: 12px; }
+@keyframes diag-pulse { 0%,100% { opacity: .35; } 50% { opacity: 1; } }
 .panel-card { display: grid; gap: 14px; }
 .panel-head { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; }
 .panel-title { font-weight: 800; font-size: 18px; }
