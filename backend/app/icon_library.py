@@ -159,6 +159,12 @@ SERVICES = [
     ("中国移动", "10086.cn", "carrier"),
     ("中国联通", "10010.com", "carrier"),
     ("中国电信", "189.cn", "carrier"),
+    ("Skinny", "skinny.co.nz", "carrier"),
+    ("MTN Nigeria", "mtn.ng", "carrier"),
+    ("Club Sim", "clubsim.com.hk", "carrier"),
+    ("CTM 澳门电信", "ctm.net", "carrier"),
+    ("Simyo", "simyo.nl", "carrier"),
+    ("Yallo", "yallo.ch", "carrier"),
     # 云存储 cloud
     ("Google One", "one.google.com", ["cloud", "membership"]),
     ("iCloud+", "icloud.com", ["cloud", "membership"]),

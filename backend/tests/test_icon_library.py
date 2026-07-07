@@ -7,6 +7,19 @@ def test_slug_for_domain_replaces_dots_and_slashes():
     assert icon_library.slug_for_domain("a.b/c") == "a_b_c"
 
 
+def test_services_have_unique_slugs():
+    """内置服务的 slug 必须唯一，否则 seed 幂等导入会漏掉同 slug 条目。"""
+    slugs = [icon_library.slug_for_domain(domain) for _, domain, _ in icon_library.SERVICES]
+    assert len(slugs) == len(set(slugs))
+
+
+def test_carrier_services_include_added_regional_carriers():
+    """新增的区域电信运营商必须在内置 carrier 列表里。"""
+    carriers = {name for name, _, cat in icon_library.SERVICES if cat == "carrier"}
+    for name in ["Skinny", "MTN Nigeria", "Club Sim", "CTM 澳门电信", "Simyo", "Yallo"]:
+        assert name in carriers, f"缺少内置运营商：{name}"
+
+
 def test_valid_category_keys_contains_other():
     keys = icon_library.valid_category_keys()
     assert "other" in keys
