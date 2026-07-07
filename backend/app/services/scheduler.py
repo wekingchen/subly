@@ -5,6 +5,7 @@ from datetime import date, datetime
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from app import activity, database
 from app.config import settings
@@ -252,6 +253,127 @@ def _build_bark_text(db, sub: Subscription, user: User, days_left: int) -> tuple
         parts.append(f"分类：{f['cat'].name}")
     body = "，".join(parts) + "。"
     return title, body
+
+
+def _simulation_channels(channel: str) -> list[str]:
+    if channel == "telegram":
+        return ["telegram"]
+    if channel == "bark":
+        return ["bark"]
+    return ["telegram", "bark"]
+
+
+def _append_simulation_item(items: list[dict], limit: int, item: dict) -> None:
+    if len(items) < limit:
+        items.append(item)
+
+
+def simulate_reminder_scan(
+    db: Session,
+    as_of: date,
+    user_id: int | None = None,
+    subscription_id: int | None = None,
+    channel: str = "all",
+    include_skipped: bool = True,
+    limit: int = 200,
+) -> dict:
+    """提醒 dry-run：复用真实提醒筛选与文案构造，不外发、不写 NotificationLog。"""
+    stmt = select(Subscription).order_by(
+        Subscription.next_renewal_date.is_(None),
+        Subscription.next_renewal_date,
+        Subscription.id,
+    )
+    if user_id is not None:
+        stmt = stmt.where(Subscription.user_id == user_id)
+    if subscription_id is not None:
+        stmt = stmt.where(Subscription.id == subscription_id)
+    subs = db.scalars(stmt).all()
+    channels = _simulation_channels(channel)
+    summary = {
+        "scanned": len(subs),
+        "would_send": 0,
+        "skipped": 0,
+        "telegram": 0,
+        "bark": 0,
+        "already_sent": 0,
+        "channel_not_ready": 0,
+        "invalid": 0,
+        "returned": 0,
+    }
+    items: list[dict] = []
+
+    def add(item: dict) -> None:
+        if item["status"] == "would_send":
+            summary["would_send"] += 1
+            if item["channel"] in ("telegram", "bark"):
+                summary[item["channel"]] += 1
+        else:
+            summary["skipped"] += 1
+            if item["status"] == "already_sent":
+                summary["already_sent"] += 1
+            if item["status"] == "channel_not_ready":
+                summary["channel_not_ready"] += 1
+            if item["status"] in ("invalid_reminder_days", "missing_next_renewal", "inactive", "not_recurring"):
+                summary["invalid"] += 1
+        if include_skipped or item["status"] == "would_send":
+            _append_simulation_item(items, limit, item)
+            summary["returned"] = len(items)
+
+    for sub in subs:
+        user = db.get(User, sub.user_id)
+        if not user:
+            continue
+        base = {
+            "user_id": user.id,
+            "username": user.username,
+            "subscription_id": sub.id,
+            "subscription_name": sub.name,
+            "is_keepalive": sub.is_keepalive,
+            "next_renewal_date": sub.next_renewal_date,
+            "days_left": None,
+            "days_before": None,
+            "title": None,
+            "body": None,
+            "preview": None,
+        }
+        if not sub.is_active:
+            add({**base, "channel": "all", "status": "inactive", "reason": "订阅未启用，提醒扫描会跳过。"})
+            continue
+        if sub.billing_type != "recurring":
+            add({**base, "channel": "all", "status": "not_recurring", "reason": "一次性买断订阅不参与提醒扫描。"})
+            continue
+        if not sub.next_renewal_date:
+            add({**base, "channel": "all", "status": "missing_next_renewal", "reason": "周期订阅缺少下次续费日。"})
+            continue
+        reminder_days = list(dict.fromkeys(_parse_days(sub.remind_days_before)))
+        if not reminder_days:
+            add({**base, "channel": "all", "status": "invalid_reminder_days", "reason": "提前提醒配置中没有有效数字。"})
+            continue
+        days_left = (sub.next_renewal_date - as_of).days
+        due_days = [n for n in reminder_days if n == days_left]
+        if not due_days:
+            add({**base, "days_left": days_left, "channel": "all", "status": "not_due", "reason": f"距离日期为 {days_left} 天，未命中提前提醒配置。"})
+            continue
+        for days_before in due_days:
+            for ch in channels:
+                tg_ready = user.telegram_enabled and user.telegram_bot_token and user.telegram_chat_id
+                bark_ready = user.bark_enabled and user.bark_device_key
+                ready = tg_ready if ch == "telegram" else bark_ready
+                item = {**base, "days_left": days_left, "days_before": days_before, "channel": ch}
+                if not ready:
+                    add({**item, "status": "channel_not_ready", "reason": f"{ch} 通道未启用或配置不完整。"})
+                    continue
+                if _already_sent(db, sub.id, days_before, ch, as_of):
+                    add({**item, "status": "already_sent", "reason": "同一天同通道已有成功提醒记录。"})
+                    continue
+                if ch == "telegram":
+                    text = _build_telegram_text(db, sub, user, days_left)
+                    add({**item, "status": "would_send", "reason": "模拟日期命中提醒规则，且通道配置完整。", "body": text, "preview": text})
+                else:
+                    title, body = _build_bark_text(db, sub, user, days_left)
+                    add({**item, "status": "would_send", "reason": "模拟日期命中提醒规则，且通道配置完整。", "title": title, "body": body, "preview": f"{title}\n{body}"})
+
+    return {"summary": summary, "items": items}
 
 
 def start_scheduler() -> None:

@@ -309,6 +309,80 @@ class AdminUserUpdate(BaseModel):
     password: str | None = None
 
 
+class AdminDiagnosticIssue(BaseModel):
+    severity: str
+    scope: str
+    code: str
+    title: str
+    detail: str
+    suggestion: str
+    user_id: int | None = None
+    username: str | None = None
+    subscription_id: int | None = None
+    subscription_name: str | None = None
+
+
+class AdminDiagnosticSummary(BaseModel):
+    errors: int = 0
+    warnings: int = 0
+    infos: int = 0
+    users: int = 0
+    subscriptions: int = 0
+    active_recurring: int = 0
+    notification_failures_30d: int = 0
+
+
+class AdminDiagnosticOut(BaseModel):
+    summary: AdminDiagnosticSummary
+    issues: list[AdminDiagnosticIssue]
+
+
+class ReminderSimulationIn(BaseModel):
+    as_of_date: date | None = None
+    user_id: int | None = None
+    subscription_id: int | None = None
+    channel: str = "all"
+    include_skipped: bool = True
+    limit: int = Field(default=200, ge=1, le=1000)
+
+
+class ReminderSimulationItem(BaseModel):
+    user_id: int
+    username: str
+    subscription_id: int
+    subscription_name: str
+    is_keepalive: bool = False
+    next_renewal_date: date | None = None
+    days_left: int | None = None
+    days_before: int | None = None
+    channel: str
+    status: str
+    reason: str
+    title: str | None = None
+    body: str | None = None
+    preview: str | None = None
+
+
+class ReminderSimulationSummary(BaseModel):
+    scanned: int = 0
+    would_send: int = 0
+    skipped: int = 0
+    telegram: int = 0
+    bark: int = 0
+    already_sent: int = 0
+    channel_not_ready: int = 0
+    invalid: int = 0
+    returned: int = 0
+
+
+class ReminderSimulationOut(BaseModel):
+    ok: bool = True
+    dry_run: bool = True
+    as_of_date: date
+    summary: ReminderSimulationSummary
+    items: list[ReminderSimulationItem]
+
+
 # ---------- Icon library service (admin) ----------
 class IconServiceIn(BaseModel):
     name: str

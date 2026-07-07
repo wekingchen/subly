@@ -2,7 +2,7 @@ import { createI18n } from 'vue-i18n'
 
 const zh = {
   app: { tagline: '订阅 / 续费 / 保号，一个都不漏' },
-  nav: { dashboard: '雷达总览', subscriptions: '订阅账本', calendar: '续费日历', reports: '支出报表', notifications: '通知中心', logs: '实时日志', settings: '系统设置', iconLibrary: '服务管理', users: '用户管理', groupWorkspace: '雷达工作台', groupSystem: '通知与系统', groupAdmin: '管理员', logout: '退出', menu: '导航菜单', brandTag: '续费雷达' },
+  nav: { dashboard: '雷达总览', subscriptions: '订阅账本', calendar: '续费日历', reports: '支出报表', notifications: '通知中心', logs: '实时日志', settings: '系统设置', iconLibrary: '服务管理', diagnostics: '数据诊断', users: '用户管理', groupWorkspace: '雷达工作台', groupSystem: '通知与系统', groupAdmin: '管理员', logout: '退出', menu: '导航菜单', brandTag: '续费雷达' },
   notify: { title: '通知中心', runScan: '立即扫描提醒', empty: '暂无通知记录', sent: '已发送', failed: '失败', daysBefore: '提前天数' },
   rtlog: { title: '实时日志', live: '实时', paused: '已暂停', empty: '暂无日志', auto: '自动刷新' },
   account: { title: '账号与密码', username: '用户名', email: '邮箱', saveAccount: '保存账号', changePwd: '修改密码', oldPwd: '原密码', newPwd: '新密码', pwdOk: '密码已修改', accountOk: '账号已更新' },
@@ -128,6 +128,13 @@ const zh = {
     importConfirm: '将从整站备份恢复全部成员数据（缺失的账户会自动重建）。确定继续？',
     replaceConfirm: '将先清空每个用户的全部订阅，再从整站备份导入。确定继续？',
     exportOk: '整站备份已下载（{n} 个用户）', importOk: '已恢复 {users} 个用户（新建 {created} 个），共导入 {n} 个订阅'
+  },
+  diagnostics: {
+    kicker: '管理员巡检', title: '数据诊断', subtitle: '检查数据完整性、通知配置与提醒 dry-run；模拟不会真实发送，也不会写入通知日志。',
+    run: '运行诊断', simulate: '模拟提醒', errors: '错误', warnings: '警告', infos: '建议', wouldSend: '将发送', skipped: '跳过', scanned: '扫描', reminders: '提醒', all: '全部',
+    issueTitle: '诊断结果', issueTip: '优先处理错误，再处理警告；建议项用于发现潜在维护风险。', noIssues: '当前没有匹配的诊断项',
+    simTitle: '提醒 dry-run', dryRunTip: '按指定日期模拟提醒扫描，只预览 Telegram / Bark 文案，不触发真实外发。',
+    asOfDate: '模拟日期', userId: '用户 ID（可选）', subscriptionId: '订阅 ID（可选）', channel: '通道', allChannels: '全部通道', limit: '返回上限', includeSkipped: '显示跳过原因', runSimulation: '运行提醒模拟', noSimulation: '暂无模拟结果'
   },
   iconLib: {
     title: '内置服务管理', subtitle: '管理服务清单、分类与图标缓存',

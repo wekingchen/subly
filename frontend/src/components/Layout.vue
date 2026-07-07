@@ -98,6 +98,7 @@ const navGroups = computed(() => {
       title: 'nav.groupAdmin',
       items: [
         { to: '/icon-library', key: 'iconLibrary', label: 'nav.iconLibrary' },
+        { to: '/admin-diagnostics', key: 'diagnostics', label: 'nav.diagnostics' },
         { to: '/users', key: 'users', label: 'nav.users' }
       ]
     })

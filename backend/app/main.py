@@ -14,6 +14,7 @@ from app import database, migrate
 from app.config import settings
 from app.routers import (
     admin,
+    admin_diagnostics,
     auth,
     backup,
     bundles,
@@ -162,6 +163,7 @@ for r in (
     icons.router,
     icon_admin.router,
     admin.router,
+    admin_diagnostics.router,
     logs.router,
     system.router,
     backup.router,
