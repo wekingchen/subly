@@ -11,23 +11,23 @@
     >
       <button type="button" class="modal-x" :aria-label="t('common.close')" @click="emit('close')">×</button>
       <div class="renew-kicker" aria-hidden="true">♻️</div>
-      <h3 id="renew-title">{{ t('sub.renewTitle') }}</h3>
-      <p class="renew-copy">{{ t('sub.renewMsg', { name: target?.name }) }}</p>
-      <p id="renew-note" class="renew-note">{{ t('sub.renewDisclaimer') }}</p>
+      <h3 id="renew-title">{{ t(rt('renewTitle')) }}</h3>
+      <p class="renew-copy">{{ t(rt('renewMsg'), { name: target?.name }) }}</p>
+      <p id="renew-note" class="renew-note">{{ t(rt('renewDisclaimer')) }}</p>
 
       <fieldset class="renew-options">
-        <legend class="renew-options-legend">{{ t('sub.renewTitle') }}</legend>
+        <legend class="renew-options-legend">{{ t(rt('renewTitle')) }}</legend>
         <label class="renew-option" :class="{ on: mode === 'today' }">
           <input type="radio" name="renew_mode" value="today" :checked="mode === 'today'" @change="emit('update:mode', 'today')" />
           <span class="renew-option-copy">
-            <span class="renew-option-title">{{ t('sub.renewToday') }}</span>
+            <span class="renew-option-title">{{ t(rt('renewToday')) }}</span>
             <span class="renew-option-date mono-data">→ {{ previewToday }}</span>
           </span>
         </label>
         <label class="renew-option" :class="{ on: mode === 'due' }">
           <input type="radio" name="renew_mode" value="due" :checked="mode === 'due'" @change="emit('update:mode', 'due')" />
           <span class="renew-option-copy">
-            <span class="renew-option-title">{{ t('sub.renewDue') }}</span>
+            <span class="renew-option-title">{{ t(rt('renewDue')) }}</span>
             <span class="renew-option-date mono-data">→ {{ previewDue }}</span>
           </span>
         </label>
@@ -35,24 +35,27 @@
 
       <div class="modal-foot">
         <button type="button" class="btn ghost" @click="emit('close')">{{ t('sub.cancel') }}</button>
-        <button type="button" class="btn" :disabled="renewing" @click="emit('confirm')">{{ t('sub.renewMark') }}</button>
+        <button type="button" class="btn" :disabled="renewing" @click="emit('confirm')">{{ t(rt('renewMark')) }}</button>
       </div>
     </div>
   </div>
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useDialogFocus } from '../../composables/useDialogFocus'
 
-defineProps({
+const props = defineProps({
   target: { type: Object, default: null },
   mode: { type: String, default: 'today' },
   renewing: { type: Boolean, default: false },
   previewToday: { type: String, default: '' },
   previewDue: { type: String, default: '' }
 })
+
+// 保号订阅切到 sub.keepalive.* 文案前缀；普通订阅走 sub.*
+const rt = (key) => (props.target?.is_keepalive ? `sub.keepalive.${key}` : `sub.${key}`)
 
 const emit = defineEmits(['close', 'update:mode', 'confirm'])
 const { t } = useI18n()

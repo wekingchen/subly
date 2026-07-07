@@ -8,7 +8,7 @@
           <div class="detail-item"><div class="detail-label">{{ t('sub.plan') }}</div><div class="detail-value">{{ textOrDash(subscription?.plan) }}</div></div>
           <div class="detail-item"><div class="detail-label">{{ t('sub.originalAmount') }}</div><div class="detail-value mono-data"><MoneyText :value="subscription?.amount" :currency="subscription?.currency" position="suffix" /></div></div>
           <div v-if="showBaseAmount" class="detail-item"><div class="detail-label">{{ t('sub.baseCurrencyAmount') }} · {{ baseCurrency }}</div><div class="detail-value mono-data"><MoneyText :value="baseAmount" :currency="baseCurrency" position="suffix" muted /></div></div>
-          <div class="detail-item"><div class="detail-label">{{ t('sub.billingType') }}</div><div class="detail-value">{{ subscription?.billing_type === 'one_time' ? t('sub.oneTime') : t('sub.recurring') }}</div></div>
+          <div class="detail-item"><div class="detail-label">{{ t('sub.billingType') }}</div><div class="detail-value">{{ subscription?.billing_type === 'one_time' ? t('sub.oneTime') : (subscription?.is_keepalive ? t('sub.keepalive.label') : t('sub.recurring')) }}</div></div>
           <div class="detail-item"><div class="detail-label">{{ t('sub.cycle') }}</div><div class="detail-value">{{ subscription?.billing_type === 'recurring' ? cycleText : DASH }}</div></div>
           <div class="detail-item detail-item--full"><div class="detail-label">{{ t('sub.website') }}</div><div class="detail-value"><a v-if="subscription?.url" :href="subscription.url" target="_blank" rel="noopener noreferrer" @click.stop>{{ subscription.url }}</a><span v-else>{{ DASH }}</span></div></div>
           <div class="detail-item detail-item--full"><div class="detail-label">{{ t('sub.remark') }}</div><div class="detail-value">{{ textOrDash(subscription?.remark) }}</div></div>
@@ -19,9 +19,9 @@
         <div class="detail-title">{{ t('sub.detailRiskReminder') }}</div>
         <div class="detail-grid">
           <div class="detail-item"><div class="detail-label">{{ t('sub.startDate') }}</div><div class="detail-value mono-data">{{ textOrDash(subscription?.start_date) }}</div></div>
-          <div class="detail-item"><div class="detail-label">{{ t('sub.nextRenewal') }}</div><div class="detail-value mono-data">{{ subscription?.billing_type === 'recurring' ? textOrDash(subscription?.next_renewal_date) : t('sub.lifetime') }}</div></div>
+          <div class="detail-item"><div class="detail-label">{{ subscription?.is_keepalive ? t('sub.keepalive.nextRenewal') : t('sub.nextRenewal') }}</div><div class="detail-value mono-data">{{ subscription?.billing_type === 'recurring' ? textOrDash(subscription?.next_renewal_date) : t('sub.lifetime') }}</div></div>
           <div class="detail-item"><div class="detail-label">{{ t('sub.endDate') }}</div><div class="detail-value mono-data">{{ textOrDash(subscription?.end_date) }}</div></div>
-          <div class="detail-item"><div class="detail-label">{{ t('sub.lastRenewedAt') }}</div><div class="detail-value mono-data">{{ textOrDash(subscription?.last_renewed_at) }}</div></div>
+          <div class="detail-item"><div class="detail-label">{{ subscription?.is_keepalive ? t('sub.keepalive.lastRenewedAt') : t('sub.lastRenewedAt') }}</div><div class="detail-value mono-data">{{ textOrDash(subscription?.last_renewed_at) }}</div></div>
           <div class="detail-item"><div class="detail-label">{{ t('sub.remindDays') }}</div><div class="detail-value mono-data">{{ textOrDash(subscription?.remind_days_before) }}</div></div>
           <div class="detail-item"><div class="detail-label">{{ t('sub.autoRenew') }}</div><div class="detail-value">{{ boolText(subscription?.auto_renew) }}</div></div>
           <div class="detail-item"><div class="detail-label">{{ t('sub.calendarVisible') }}</div><div class="detail-value">{{ boolText(subscription?.show_in_calendar) }}</div></div>

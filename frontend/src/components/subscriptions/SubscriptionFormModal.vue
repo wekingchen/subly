@@ -112,13 +112,19 @@
             </div>
           </template>
         </div>
+        <div class="row" v-if="form.billing_type === 'recurring'">
+          <label class="rb" style="flex:1">
+            <input type="checkbox" v-model="form.is_keepalive" name="is_keepalive" />
+            {{ t('sub.keepalive.toggleLabel') }}
+          </label>
+        </div>
         <div class="row">
           <div style="flex:1">
             <label for="sub-start-date">{{ t('sub.startDate') }}</label>
             <input id="sub-start-date" v-model="form.start_date" name="start_date" type="date" />
           </div>
           <div style="flex:1" v-if="form.billing_type === 'recurring'">
-            <label for="sub-next-renewal">{{ t('sub.nextRenewal') }} <span class="auto-tip">· 自动</span></label>
+            <label for="sub-next-renewal">{{ form.is_keepalive ? t('sub.keepalive.nextRenewal') : t('sub.nextRenewal') }} <span class="auto-tip">· 自动</span></label>
             <input id="sub-next-renewal" v-model="form.next_renewal_date" name="next_renewal_date" type="date" />
           </div>
         </div>
@@ -304,6 +310,11 @@ watch(
   () => [form.value.start_date, form.value.cycle, form.value.cycle_count, form.value.billing_type],
   () => { if (!suppressAuto) recomputeNext() }
 )
+
+// 切到一次性买断时清空保号标记（保号仅适用于周期订阅）
+watch(() => form.value.billing_type, (bt) => {
+  if (bt !== 'recurring') form.value.is_keepalive = false
+})
 
 function onIconLibraryToggle(e) {
   showIconLibrary.value = e.target.open

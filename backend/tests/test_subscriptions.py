@@ -3,13 +3,14 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
+from pydantic import ValidationError
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
 from app.database import Base
 from app.models import ActivityLog, Subscription, User
 from app.routers import subscriptions
-from app.schemas import SubscriptionIn
+from app.schemas import SubscriptionIn, SubscriptionUpdate
 from app.security import hash_password
 
 
@@ -190,6 +191,41 @@ def test_create_sub_sanitizes_auto_filled_url(monkeypatch):
         )
         saved = db.get(Subscription, out.id)
         assert saved.url is None  # 恶意 url 被丢弃，未落库
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_keepalive_requires_recurring():
+    """保号标记仅适用于 recurring；one_time + is_keepalive 必须被 schema 拒绝。"""
+    # recurring + 保号：合法
+    sub = SubscriptionIn(name="保号卡", billing_type="recurring", is_keepalive=True)
+    assert sub.is_keepalive is True
+    # one_time + 保号：拒绝
+    with pytest.raises(ValidationError):
+        SubscriptionIn(name="x", billing_type="one_time", is_keepalive=True)
+    # Update：两者都显式传入且冲突才拒
+    with pytest.raises(ValidationError):
+        SubscriptionUpdate(is_keepalive=True, billing_type="one_time")
+    # Update：只传 is_keepalive 不传 billing_type（不改动计费类型）应通过
+    assert SubscriptionUpdate(is_keepalive=True).is_keepalive is True
+
+
+def test_create_recurring_keepalive_persists(monkeypatch):
+    """创建 recurring + is_keepalive 订阅，字段正确落库。"""
+    db, engine = make_db()
+    try:
+        user = add_user(db)
+        out = subscriptions.create_sub(
+            SubscriptionIn(name="保号卡", billing_type="recurring", is_keepalive=True,
+                           cycle="day", cycle_count=90, start_date=date(2024, 1, 1)),
+            request_stub(),
+            user,
+            db,
+        )
+        saved = db.get(Subscription, out.id)
+        assert saved.is_keepalive is True
+        assert saved.billing_type == "recurring"
     finally:
         db.close()
         engine.dispose()

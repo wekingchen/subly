@@ -1,6 +1,6 @@
 from datetime import date, datetime
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
 
 
 def normalize_url(value: str | None) -> str | None:
@@ -147,6 +147,7 @@ class SubscriptionIn(BaseModel):
     amount: float = 0.0
     currency: str = "CNY"
     billing_type: str = "recurring"      # recurring | one_time
+    is_keepalive: bool = False           # 保号套餐（短信保号），仅 recurring 可用
     cycle: str = "month"                 # day | week | month | year
     cycle_count: int = 1
 
@@ -154,6 +155,13 @@ class SubscriptionIn(BaseModel):
     @classmethod
     def _validate_url(cls, v):
         return normalize_url(v)
+
+    @model_validator(mode="after")
+    def _validate_keepalive_requires_recurring(self):
+        if self.is_keepalive and self.billing_type != "recurring":
+            raise ValueError("保号标记仅适用于周期订阅（recurring）")
+        return self
+
     start_date: date | None = None
     next_renewal_date: date | None = None
     end_date: date | None = None
@@ -179,6 +187,7 @@ class SubscriptionUpdate(BaseModel):
     amount: float | None = None
     currency: str | None = None
     billing_type: str | None = None
+    is_keepalive: bool | None = None
     cycle: str | None = None
     cycle_count: int | None = None
     start_date: date | None = None
@@ -194,6 +203,13 @@ class SubscriptionUpdate(BaseModel):
     @classmethod
     def _validate_url(cls, v):
         return normalize_url(v)
+
+    @model_validator(mode="after")
+    def _validate_keepalive_requires_recurring(self):
+        # 编辑时只在两者都显式传入时才校验组合（任一未传表示不改动）
+        if self.is_keepalive and self.billing_type and self.billing_type != "recurring":
+            raise ValueError("保号标记仅适用于周期订阅（recurring）")
+        return self
 
 
 class SubscriptionOut(BaseModel):
@@ -213,6 +229,7 @@ class SubscriptionOut(BaseModel):
     amount: float
     currency: str
     billing_type: str
+    is_keepalive: bool
     cycle: str
     cycle_count: int
     start_date: date

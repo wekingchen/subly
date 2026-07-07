@@ -4,6 +4,7 @@ export function createBlankSubscriptionForm({ now = new Date() } = {}) {
   return {
     id: null, name: '', plan: '', icon: '', amount: 0, currency: 'CNY',
     category_id: null, payment_method_id: null, bundle_id: null, billing_type: 'recurring',
+    is_keepalive: false,
     cycle: 'month', cycle_count: 1, start_date: toISODate(now),
     next_renewal_date: '', end_date: null, url: '', notes: '', remark: '', ipv4: '', ipv6: '',
     remind_days_before: '7,1', auto_renew: true, is_active: true,

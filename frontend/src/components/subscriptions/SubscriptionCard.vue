@@ -48,6 +48,7 @@
     </div>
 
     <div class="sc-quick">
+      <span v-if="subscription.is_keepalive" class="quick-chip">{{ t('sub.keepalive.chipText') }}</span>
       <span v-if="remarkText" class="quick-chip remark-chip" :title="remarkText">📝 {{ remarkText }}</span>
       <span v-if="paymentName" class="quick-chip">{{ paymentName }}</span>
       <span v-if="subscription.billing_type === 'recurring'" class="quick-chip">🔁 {{ boolText(subscription.auto_renew) }}</span>
@@ -71,10 +72,10 @@
 
     <div v-if="subscription.billing_type === 'recurring'" class="sc-acts" @click.stop>
       <button class="btn sm ghost act-btn act-renew"
-              :title="t('sub.renewHint')"
+              :title="subscription.is_keepalive ? t('sub.keepalive.renewHint') : t('sub.renewHint')"
               @click.stop="emit('renew', subscription)">
         <span class="act-ico" aria-hidden="true">♻</span>
-        <span class="act-label">{{ t('sub.renew') }}</span>
+        <span class="act-label">{{ subscription.is_keepalive ? t('sub.keepalive.renewMark') : t('sub.renew') }}</span>
       </button>
     </div>
   </div>
@@ -122,10 +123,12 @@ const cycleText = computed(() => {
 const remarkText = computed(() => (props.subscription.remark || '').trim())
 const statusChip = computed(() => {
   const st = statusOf.value
-  if (st === 'overdue') return t('sub.statusOverdue')
-  if (st === 'soon') return t('sub.statusSoon') + ' · ' + t('sub.daysLeftShort', { n: Math.abs(daysLeft(props.subscription)) })
+  const ka = props.subscription.is_keepalive
+  const days = Math.abs(daysLeft(props.subscription))
+  if (st === 'overdue') return ka ? t('sub.keepalive.statusOverdue') : t('sub.statusOverdue')
+  if (st === 'soon') return (ka ? t('sub.keepalive.statusSoon') : t('sub.statusSoon')) + ' · ' + t('sub.daysLeftShort', { n: days })
   if (st === 'oneTime') return t('sub.statusLifetime')
-  return t('sub.statusSafe')
+  return ka ? t('sub.keepalive.statusSafe') : t('sub.statusSafe')
 })
 
 function boolText(v) { return v ? '✓' : '✗' }

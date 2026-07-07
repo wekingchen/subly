@@ -97,6 +97,7 @@ def create_sub(
     if data["billing_type"] == "one_time":
         data["next_renewal_date"] = None
         data["auto_renew"] = False
+        data["is_keepalive"] = False
     logger.info(
         "event=create_sub_prepared request_id=%s user_id=%s auto_url_filled=%s "
         "next_renewal_date_present=%s auto_renew=%s elapsed_ms=%s",
@@ -160,6 +161,7 @@ def update_sub(
         setattr(sub, k, v)
     if sub.billing_type == "one_time":
         sub.next_renewal_date = None
+        sub.is_keepalive = False
     db.commit()
     db.refresh(sub)
     return _to_out(db, sub, user.base_currency)
@@ -205,11 +207,11 @@ def renew_sub(
     sub.last_renewed_at = today
     db.commit()
     db.refresh(sub)
-    activity.log(
-        "subscription.renew",
-        f"续费「{sub.name}」（{mode}），下次到期 {sub.next_renewal_date}",
-        user=user,
-    )
+    if sub.is_keepalive:
+        detail = f"保号「{sub.name}」（{mode}），下次保号日 {sub.next_renewal_date}"
+    else:
+        detail = f"续费「{sub.name}」（{mode}），下次到期 {sub.next_renewal_date}"
+    activity.log("subscription.renew", detail, user=user)
     return _to_out(db, sub, user.base_currency)
 
 

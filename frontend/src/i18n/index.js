@@ -71,7 +71,21 @@ const zh = {
     daysLeftShort: '{n} 天',
     deleteTitle: '删除订阅', deletePwdTip: '为防止误删，请输入你的登录密码以确认删除「{name}」', pwdPh: '登录密码',
     remark: '个性化备注', remarkPh: '如：家庭主力机 / 香港 CN2（会显示在卡片上）',
-    ipLabel: 'IP 地址（选填）', ipv4: 'IPv4', ipv6: 'IPv6'
+    ipLabel: 'IP 地址（选填）', ipv4: 'IPv4', ipv6: 'IPv6',
+    keepalive: {
+      label: '短信保号', toggleLabel: '这是保号套餐（短信保号）',
+      expiredTag: '已过保号日', todayTag: '今天保号', daysLeft: '剩 {n} 天保号',
+      statusOverdue: '已过保号日', statusSoon: '即将保号', statusSafe: '保号安全',
+      chipText: '📱 保号',
+      renewTitle: '确认保号', renewMsg: '为「{name}」选择保号方式：',
+      renewHint: '标记当期已保号，推进下次保号日；此操作不会触发付款。',
+      renewDisclaimer: '此操作只更新你的保号记录与下次保号日，不会向任何服务付款。',
+      renewMark: '标记已保号',
+      renewToday: '保号：从今天起 +1 个周期（重新计周期）',
+      renewDue: '补登：从原保号日 +1 个周期（不浪费已保时间）',
+      renewNext: '保号后下次保号日：', renewOk: '已保号，下次保号日 {date}',
+      nextRenewal: '下次保号日', lastRenewedAt: '上次保号日'
+    }
   },
   calendar: {
     title: '续费日历', noEvents: '本月无续费', today: '今天', prevMonth: '上个月', nextMonth: '下个月', more: '还有 {n} 项',

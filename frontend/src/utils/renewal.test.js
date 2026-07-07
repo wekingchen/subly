@@ -140,3 +140,28 @@ describe('dueText', () => {
     expect(dueText(recurring('2024-01-05'), t, { now: NOW })).toBe('d:4')
   })
 })
+
+describe('dueText (keepalive)', () => {
+  // mock t：带参的 daysLeft 两个 key 都处理，其余返回 key 本身用于断言分支
+  const t = (key, params) => {
+    if (key === 'dashboard.daysLeft') return `d:${params.n}`
+    if (key === 'sub.keepalive.daysLeft') return `ka:${params.n}`
+    return key
+  }
+
+  it('uses keepalive tags when item.is_keepalive is true', () => {
+    const ka = (next) => recurring(next, { is_keepalive: true })
+    expect(dueText(ka('2023-12-31'), t, { now: NOW })).toBe('sub.keepalive.expiredTag')
+    expect(dueText(ka('2024-01-01'), t, { now: NOW })).toBe('sub.keepalive.todayTag')
+    expect(dueText(ka('2024-01-05'), t, { now: NOW })).toBe('ka:4')
+  })
+
+  it('options.keepalive overrides item flag (for testing)', () => {
+    expect(dueText(recurring('2023-12-31'), t, { now: NOW, keepalive: true })).toBe('sub.keepalive.expiredTag')
+  })
+
+  it('falls back to renew tags when is_keepalive is false/absent', () => {
+    expect(dueText(recurring('2023-12-31'), t, { now: NOW })).toBe('sub.expiredTag')
+    expect(dueText(recurring('2024-01-01'), t, { now: NOW })).toBe('dashboard.today')
+  })
+})

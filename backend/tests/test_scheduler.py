@@ -242,3 +242,27 @@ def test_cn_join_inserts_space_only_at_cjk_non_cjk_boundary():
     assert j("Pro ", "套餐") == "Pro 套餐"
     assert j("由", " Visa") == "由 Visa"
     assert j(j("由", "Visa "), "扣款") == "由 Visa 扣款"
+
+
+def test_bark_text_uses_keepalive_phrasing_when_flag_set(monkeypatch):
+    """is_keepalive=True 的订阅，Bark/Telegram 提醒切保号文案。"""
+    db, engine = make_db()
+    try:
+        monkeypatch.setattr(scheduler.exchange, "convert",
+                            lambda db, amount, from_cur, to_cur: amount if from_cur == to_cur else 88.0)
+        user = add_user(db, base_currency="CNY")
+        sub = add_subscription(db, user, name="香港保号卡", amount=10.0, currency="CNY",
+                               plan="保号", is_keepalive=True,
+                               next_renewal_date=date(2024, 1, 9))
+        title, body = scheduler._build_bark_text(db, sub, user, 3)
+        assert "需保号" in title
+        assert "1 月 9 日需保号" in body
+        assert "保号" in body  # 套餐段「保号套餐」
+
+        tg = scheduler._build_telegram_text(db, sub, user, 3)
+        assert "保号提醒" in tg
+        assert "保号日" in tg
+        assert "发条短信保号" in tg
+    finally:
+        db.close()
+        engine.dispose()

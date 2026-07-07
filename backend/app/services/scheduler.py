@@ -162,26 +162,28 @@ def _renewal_facts(db, sub: Subscription, user: User, days_left: int):
     title = sub.name + (f"（{sub.plan}）" if sub.plan else "")
     return {
         "amount": amount, "base_str": base_str, "cat": cat, "pm": pm,
-        "cycle_str": cycle_str, "title": title,
+        "cycle_str": cycle_str, "title": title, "is_keepalive": sub.is_keepalive,
     }
 
 
 def _build_telegram_text(db, sub: Subscription, user: User, days_left: int) -> str:
-    """构造一条信息完整、措辞友好的续费提醒（Telegram Markdown）。"""
+    """构造一条信息完整、措辞友好的提醒（Telegram Markdown）。保号订阅切保号文案。"""
     f = _renewal_facts(db, sub, user, days_left)
+    ka = f["is_keepalive"]
     if days_left <= 0:
-        when = "⚠️ *今天到期*"
-        head = "🔔 *续费提醒*｜今天就到期啦"
+        when = "⚠️ *今天需保号*" if ka else "⚠️ *今天到期*"
+        head = "🔔 *保号提醒*｜今天该保号啦" if ka else "🔔 *续费提醒*｜今天就到期啦"
     else:
         when = f"还有 *{days_left}* 天"
-        head = f"🔔 *续费提醒*｜还有 {days_left} 天到期"
+        head = f"🔔 *保号提醒*｜还有 {days_left} 天需保号" if ka else f"🔔 *续费提醒*｜还有 {days_left} 天到期"
 
     lines = [head, ""]
     title = _escape_md(f["title"])
     lines.append(f"📦 项目：*{title}*")
     if f["cat"]:
         lines.append(f"🗂️ 分类：{_escape_md(f['cat'].name)}")
-    lines.append(f"📅 到期：*{sub.next_renewal_date}*（{when}）")
+    date_label = "保号日" if ka else "到期"
+    lines.append(f"📅 {date_label}：*{sub.next_renewal_date}*（{when}）")
     lines.append(f"💰 金额：*{f['amount']}*{f['base_str']} · {f['cycle_str']}")
     if f["pm"]:
         lines.append(f"💳 付款：{_escape_md(f['pm'].name)}")
@@ -194,10 +196,12 @@ def _build_telegram_text(db, sub: Subscription, user: User, days_left: int) -> s
         lines.append(f"🔗 官网：{sub.url}")
 
     lines.append("")
-    if days_left <= 0:
-        lines.append("👉 别忘了今天处理一下，保号 / 续费就万无一失～")
+    if ka:
+        lines.append("👉 记得发条短信保号，避免停机失号～" if days_left > 0
+                     else "👉 今天发一条短信就能保号，别拖到停机～")
     else:
-        lines.append("👉 早点安排续费，省心又安心，避免到期失效～")
+        lines.append("👉 别忘了今天处理一下，保号 / 续费就万无一失～" if days_left <= 0
+                     else "👉 早点安排续费，省心又安心，避免到期失效～")
     return "\n".join(lines)
 
 
@@ -222,17 +226,19 @@ def _cn_join(a: str, b: str) -> str:
 
 
 def _build_bark_text(db, sub: Subscription, user: User, days_left: int) -> tuple[str, str]:
-    """构造 Bark 推送的 (标题, 正文)。
+    """构造 Bark 推送的 (标题, 正文)。保号订阅切保号文案。
     标题只留名称+天数；正文是一句完整的话，套餐/付款/备注/分类有才说。"""
     f = _renewal_facts(db, sub, user, days_left)
+    ka = f["is_keepalive"]
     if days_left <= 0:
-        title = f"⚠️ {sub.name} 今天到期"
-        due_clause = "今天就到期"
+        title = f"⚠️ {sub.name} 今天该保号" if ka else f"⚠️ {sub.name} 今天到期"
+        due_clause = "今天就需保号" if ka else "今天就到期"
     else:
-        title = f"🔔 {sub.name} 还有 {days_left} 天到期"
-        due_clause = f"{_cn_date(sub.next_renewal_date)}到期"
+        title = f"🔔 {sub.name} 还有 {days_left} 天需保号" if ka else f"🔔 {sub.name} 还有 {days_left} 天到期"
+        verb = "需保号" if ka else "到期"
+        due_clause = f"{_cn_date(sub.next_renewal_date)}{verb}"
 
-    # 句子化正文：套餐起头 → 每月金额（折算） → 到期 → 付款/备注/分类（有才带标签）
+    # 句子化正文：套餐起头 → 每月金额（折算） → 到期/保号 → 付款/备注/分类（有才带标签）
     parts = []
     if sub.plan:
         parts.append(_cn_join(sub.plan, "套餐"))

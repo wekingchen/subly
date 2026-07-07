@@ -58,10 +58,13 @@ export function groupRenewalStatus(items, options = {}) {
   return 'ok'
 }
 
-// 到期文案：复用 daysLeft，过期/今天/N 天用统一 i18n key（dashboard.today / dashboard.daysLeft / sub.expiredTag）
+// 到期文案：复用 daysLeft，过期/今天/N 天用统一 i18n key。
+// 保号订阅（item.is_keepalive）切到 sub.keepalive.* 文案；options.keepalive 仅供测试覆写。
 export function dueText(item, t, options = {}) {
   const d = daysLeft(item, options)
   if (d === null) return ''
-  if (d < 0) return t('sub.expiredTag')
-  return d === 0 ? t('dashboard.today') : t('dashboard.daysLeft', { n: d })
+  const ka = options.keepalive ?? item?.is_keepalive
+  if (d < 0) return ka ? t('sub.keepalive.expiredTag') : t('sub.expiredTag')
+  if (d === 0) return ka ? t('sub.keepalive.todayTag') : t('dashboard.today')
+  return ka ? t('sub.keepalive.daysLeft', { n: d }) : t('dashboard.daysLeft', { n: d })
 }

@@ -25,11 +25,11 @@
       <span aria-hidden="true">✎</span>
       <span>{{ t('sub.edit') }}</span>
     </button>
-    <button v-if="showRenew" type="button" class="action-item action-item-renew" :title="t('sub.renewHint')" @click="emit('renew')">
+    <button v-if="showRenew" type="button" class="action-item action-item-renew" :title="t(rt('renewHint'))" @click="emit('renew')">
       <span aria-hidden="true">♻</span>
       <span class="action-item-main">
-        <span>{{ t('sub.renewMark') }}</span>
-        <span class="action-item-hint">{{ t('sub.renewDisclaimer') }}</span>
+        <span>{{ t(rt('renewMark')) }}</span>
+        <span class="action-item-hint">{{ t(rt('renewDisclaimer')) }}</span>
       </span>
     </button>
     <button type="button" class="action-item danger" @click="emit('delete')">
@@ -43,13 +43,16 @@
 import { useI18n } from 'vue-i18n'
 import ServiceIcon from '../ServiceIcon.vue'
 
-defineProps({
+const props = defineProps({
   target: { type: Object, default: null },
   titleId: { type: String, default: '' },
   planText: { type: String, default: '' },
   showMove: { type: Boolean, default: false },
   showRenew: { type: Boolean, default: false }
 })
+
+// 保号订阅切到 sub.keepalive.* 文案前缀
+const rt = (key) => (props.target?.is_keepalive ? `sub.keepalive.${key}` : `sub.${key}`)
 
 const emit = defineEmits(['close', 'move', 'edit', 'renew', 'delete'])
 const { t } = useI18n()

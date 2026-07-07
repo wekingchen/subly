@@ -22,6 +22,7 @@ describe('createBlankSubscriptionForm', () => {
       payment_method_id: null,
       bundle_id: null,
       billing_type: 'recurring',
+      is_keepalive: false,
       cycle: 'month',
       cycle_count: 1,
       start_date: '2026-07-02',

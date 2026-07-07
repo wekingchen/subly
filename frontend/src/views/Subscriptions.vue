@@ -433,7 +433,8 @@ async function confirmRenew() {
   renewing.value = true
   try {
     const { data } = await api.post(`/api/subscriptions/${renewTarget.value.id}/renew`, { mode: renewMode.value })
-    toast(t('sub.renewOk', { date: data.next_renewal_date }))
+    const kaKey = renewTarget.value.is_keepalive ? 'sub.keepalive.renewOk' : 'sub.renewOk'
+    toast(t(kaKey, { date: data.next_renewal_date }))
     closeRenew()
     load()
   } catch (e) {

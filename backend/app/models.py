@@ -153,6 +153,7 @@ class Subscription(Base):
 
     # recurring=周期订阅, one_time=一次性买断（永久购买）
     billing_type: Mapped[str] = mapped_column(String(16), default="recurring")
+    is_keepalive: Mapped[bool] = mapped_column(Boolean, default=False)   # 保号套餐：recurring + 短信保号场景，仅切文案不改计费逻辑
     cycle: Mapped[str] = mapped_column(String(16), default="month")   # day|week|month|year
     cycle_count: Mapped[int] = mapped_column(Integer, default=1)
 
