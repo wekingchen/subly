@@ -16,6 +16,7 @@ from app.models import Subscription, User
 from app.schemas import SubscriptionIn, SubscriptionOut, SubscriptionUpdate, sanitize_url
 from app.security import verify_password
 from app.services import exchange
+from app.subscription_rules import apply_keepalive_scope, normalize_keepalive_data
 
 router = APIRouter(prefix="/api/subscriptions", tags=["subscriptions"])
 logger = logging.getLogger(__name__)
@@ -97,7 +98,7 @@ def create_sub(
     if data["billing_type"] == "one_time":
         data["next_renewal_date"] = None
         data["auto_renew"] = False
-        data["is_keepalive"] = False
+    normalize_keepalive_data(data, db)
     logger.info(
         "event=create_sub_prepared request_id=%s user_id=%s auto_url_filled=%s "
         "next_renewal_date_present=%s auto_renew=%s elapsed_ms=%s",
@@ -161,7 +162,8 @@ def update_sub(
         setattr(sub, k, v)
     if sub.billing_type == "one_time":
         sub.next_renewal_date = None
-        sub.is_keepalive = False
+        sub.auto_renew = False
+    apply_keepalive_scope(db, sub)
     db.commit()
     db.refresh(sub)
     return _to_out(db, sub, user.base_currency)

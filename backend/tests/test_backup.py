@@ -133,6 +133,45 @@ def test_restore_entities_reuses_named_entities_and_replaces_old_subscriptions(m
         engine.dispose()
 
 
+def test_restore_entities_keeps_keepalive_only_for_carrier_categories(monkeypatch):
+    db, engine = make_db()
+    try:
+        monkeypatch.setattr(backup, "compute_next_renewal", lambda start, cycle, count: date(2030, 5, 1))
+        user = add_user(db)
+        carrier = Category(user_id=None, name="电信运营商 / Carrier (SIM 保号)", is_system=True)
+        ai = Category(user_id=None, name="AI", is_system=True)
+        db.add_all([carrier, ai])
+        db.commit()
+
+        payload = {
+            "categories": [
+                {"id": 1, "name": "电信运营商 / Carrier (SIM 保号)"},
+                {"id": 2, "name": "AI"},
+            ],
+            "subscriptions": [
+                {"name": "保号卡", "category_id": 1, "billing_type": "recurring", "is_keepalive": True},
+                {"name": "普通订阅", "category_id": 2, "billing_type": "recurring", "is_keepalive": True},
+                {"name": "未分类订阅", "billing_type": "recurring", "is_keepalive": True},
+                {"name": "买断卡", "category_id": 1, "billing_type": "one_time", "is_keepalive": True},
+            ],
+        }
+
+        assert backup._restore_entities(db, user, payload, replace=False) == 4
+        db.commit()
+
+        keepalive = db.scalar(select(Subscription).where(Subscription.name == "保号卡"))
+        ordinary = db.scalar(select(Subscription).where(Subscription.name == "普通订阅"))
+        uncategorized = db.scalar(select(Subscription).where(Subscription.name == "未分类订阅"))
+        one_time = db.scalar(select(Subscription).where(Subscription.name == "买断卡"))
+        assert keepalive.is_keepalive is True
+        assert ordinary.is_keepalive is False
+        assert uncategorized.is_keepalive is False
+        assert one_time.is_keepalive is False
+    finally:
+        db.close()
+        engine.dispose()
+
+
 def test_restore_entities_prefers_user_owned_entities_when_names_collide():
     db, engine = make_db()
     try:

@@ -8,7 +8,7 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
 from app.database import Base
-from app.models import ActivityLog, Subscription, User
+from app.models import ActivityLog, Category, Subscription, User
 from app.routers import subscriptions
 from app.schemas import SubscriptionIn, SubscriptionUpdate
 from app.security import hash_password
@@ -36,6 +36,14 @@ def add_user(db, username="alice", password="correct-pass"):
     db.commit()
     db.refresh(user)
     return user
+
+
+def add_category(db, name="电信运营商 / Carrier (SIM 保号)"):
+    category = Category(name=name, icon="📱", color="#e60000", is_system=True)
+    db.add(category)
+    db.commit()
+    db.refresh(category)
+    return category
 
 
 @pytest.fixture(autouse=True)
@@ -216,9 +224,11 @@ def test_create_recurring_keepalive_persists(monkeypatch):
     db, engine = make_db()
     try:
         user = add_user(db)
+        carrier = add_category(db)
         out = subscriptions.create_sub(
             SubscriptionIn(name="保号卡", billing_type="recurring", is_keepalive=True,
-                           cycle="day", cycle_count=90, start_date=date(2024, 1, 1)),
+                           category_id=carrier.id, cycle="day", cycle_count=90,
+                           start_date=date(2024, 1, 1)),
             request_stub(),
             user,
             db,
@@ -226,6 +236,88 @@ def test_create_recurring_keepalive_persists(monkeypatch):
         saved = db.get(Subscription, out.id)
         assert saved.is_keepalive is True
         assert saved.billing_type == "recurring"
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_create_keepalive_without_carrier_category_is_normalized():
+    """非电信运营商分类即使传 is_keepalive=true，也应落库为 False。"""
+    db, engine = make_db()
+    try:
+        user = add_user(db)
+        ai = add_category(db, "AI")
+        out = subscriptions.create_sub(
+            SubscriptionIn(name="普通订阅", billing_type="recurring", is_keepalive=True,
+                           category_id=ai.id, start_date=date(2024, 1, 1)),
+            request_stub(),
+            user,
+            db,
+        )
+        saved = db.get(Subscription, out.id)
+        assert saved.is_keepalive is False
+        assert out.is_keepalive is False
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_update_clears_keepalive_when_category_leaves_carrier():
+    """已保号订阅切出电信运营商分类时，后端同步清空 is_keepalive。"""
+    db, engine = make_db()
+    try:
+        user = add_user(db)
+        carrier = add_category(db)
+        ai = add_category(db, "AI")
+        sub = Subscription(
+            user_id=user.id,
+            name="保号卡",
+            amount=1,
+            billing_type="recurring",
+            is_keepalive=True,
+            category_id=carrier.id,
+            start_date=date(2024, 1, 1),
+            next_renewal_date=date(2024, 4, 1),
+        )
+        db.add(sub)
+        db.commit()
+
+        out = subscriptions.update_sub(sub.id, SubscriptionUpdate(category_id=ai.id), user, db)
+
+        assert out.category_id == ai.id
+        assert out.is_keepalive is False
+        assert db.get(Subscription, sub.id).is_keepalive is False
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_update_clears_keepalive_when_billing_type_becomes_one_time():
+    """已保号订阅改成一次性买断时，后端同步清空 is_keepalive。"""
+    db, engine = make_db()
+    try:
+        user = add_user(db)
+        carrier = add_category(db)
+        sub = Subscription(
+            user_id=user.id,
+            name="保号卡",
+            amount=1,
+            billing_type="recurring",
+            is_keepalive=True,
+            category_id=carrier.id,
+            start_date=date(2024, 1, 1),
+            next_renewal_date=date(2024, 4, 1),
+        )
+        db.add(sub)
+        db.commit()
+
+        out = subscriptions.update_sub(sub.id, SubscriptionUpdate(billing_type="one_time"), user, db)
+
+        assert out.billing_type == "one_time"
+        assert out.next_renewal_date is None
+        assert out.auto_renew is False
+        assert out.is_keepalive is False
+        assert db.get(Subscription, sub.id).is_keepalive is False
     finally:
         db.close()
         engine.dispose()

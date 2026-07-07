@@ -80,3 +80,33 @@ def run_migrations(engine: Engine) -> None:
                     print(f"[migrate] 已回填 {len(rows)} 条服务分类数组")
         except Exception as e:  # noqa: BLE001
             print(f"[migrate] 跳过 icon_library_services.category_keys 回填：{e}")
+
+        try:
+            if (
+                _table_exists(conn, "subscriptions")
+                and _table_exists(conn, "categories")
+                and _column_exists(conn, "subscriptions", "is_keepalive")
+                and _column_exists(conn, "subscriptions", "category_id")
+            ):
+                result = conn.execute(text("""
+                    UPDATE subscriptions
+                    SET is_keepalive = 0
+                    WHERE is_keepalive = 1
+                      AND (
+                        billing_type != 'recurring'
+                        OR category_id IS NULL
+                        OR NOT EXISTS (
+                          SELECT 1 FROM categories
+                          WHERE categories.id = subscriptions.category_id
+                            AND (
+                              LOWER(COALESCE(categories.name, '')) LIKE '%carrier%'
+                              OR COALESCE(categories.name, '') LIKE '%电信运营商%'
+                              OR COALESCE(categories.name, '') LIKE '%运营商%'
+                            )
+                        )
+                      )
+                """))
+                if result.rowcount:
+                    print(f"[migrate] 已清理 {result.rowcount} 条非运营商保号标记")
+        except Exception as e:  # noqa: BLE001
+            print(f"[migrate] 跳过 subscriptions.is_keepalive 范围清理：{e}")

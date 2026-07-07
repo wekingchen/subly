@@ -1,4 +1,5 @@
 import { addCycleDate, parseLocalDate, toISODate } from './date'
+import { isCarrierCategory } from './serviceLibrary'
 
 export function createBlankSubscriptionForm({ now = new Date() } = {}) {
   return {
@@ -33,6 +34,27 @@ export function cloneSubscriptionForEdit(subscription = {}) {
     next_renewal_date: subscription.next_renewal_date || '',
     family_members: [...(subscription.family_members || [])]
   }
+}
+
+export function selectedSubscriptionCategory(form, categories = []) {
+  return categories.find((x) => x.id === form?.category_id)
+}
+
+export function canShowKeepaliveToggle(form, categories = []) {
+  return form?.billing_type === 'recurring' && isCarrierCategory(selectedSubscriptionCategory(form, categories))
+}
+
+export function normalizeKeepaliveScope(form, categories = []) {
+  if (!form) return form
+  if (form.billing_type !== 'recurring') {
+    form.is_keepalive = false
+    form.auto_renew = false
+    return form
+  }
+  if (form.is_keepalive && (form.category_id == null || (categories.length && !canShowKeepaliveToggle(form, categories)))) {
+    form.is_keepalive = false
+  }
+  return form
 }
 
 export function buildSubscriptionPayload(form) {

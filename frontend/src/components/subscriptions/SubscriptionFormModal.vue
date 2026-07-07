@@ -112,7 +112,7 @@
             </div>
           </template>
         </div>
-        <div class="row" v-if="form.billing_type === 'recurring'">
+        <div class="row" v-if="showKeepaliveToggle">
           <label class="rb" style="flex:1">
             <input type="checkbox" v-model="form.is_keepalive" name="is_keepalive" />
             {{ t('sub.keepalive.toggleLabel') }}
@@ -124,7 +124,7 @@
             <input id="sub-start-date" v-model="form.start_date" name="start_date" type="date" />
           </div>
           <div style="flex:1" v-if="form.billing_type === 'recurring'">
-            <label for="sub-next-renewal">{{ form.is_keepalive ? t('sub.keepalive.nextRenewal') : t('sub.nextRenewal') }} <span class="auto-tip">· 自动</span></label>
+            <label for="sub-next-renewal">{{ activeKeepalive ? t('sub.keepalive.nextRenewal') : t('sub.nextRenewal') }} <span class="auto-tip">· 自动</span></label>
             <input id="sub-next-renewal" v-model="form.next_renewal_date" name="next_renewal_date" type="date" />
           </div>
         </div>
@@ -228,7 +228,7 @@ import ServiceIcon from '../ServiceIcon.vue'
 import ServiceBrowserModal from './ServiceBrowserModal.vue'
 import { useDialogFocus } from '../../composables/useDialogFocus'
 import { buildServicePickPatch, isVpsCategory as isVpsServiceCategory, suggestServicesByName } from '../../utils/serviceLibrary'
-import { buildSubscriptionPayload, cloneSubscriptionForEdit, computeNextRenewalDate, createBlankSubscriptionForm } from '../../utils/subscriptionForm'
+import { buildSubscriptionPayload, canShowKeepaliveToggle, cloneSubscriptionForEdit, computeNextRenewalDate, createBlankSubscriptionForm, normalizeKeepaliveScope as normalizeSubscriptionKeepaliveScope } from '../../utils/subscriptionForm'
 
 const props = defineProps({
   subscription: { type: Object, default: null },
@@ -269,10 +269,14 @@ useDialogFocus({
 })
 
 const visibleIconLib = computed(() => props.iconLibrary.slice(0, visibleIconCount.value))
-const isVpsCategory = computed(() => {
-  const c = props.categories.find((x) => x.id === form.value.category_id)
-  return isVpsServiceCategory(c)
-})
+const selectedCategory = computed(() => props.categories.find((x) => x.id === form.value.category_id))
+const isVpsCategory = computed(() => isVpsServiceCategory(selectedCategory.value))
+const showKeepaliveToggle = computed(() => canShowKeepaliveToggle(form.value, props.categories))
+const activeKeepalive = computed(() => showKeepaliveToggle.value && form.value.is_keepalive)
+
+function normalizeKeepaliveScope() {
+  normalizeSubscriptionKeepaliveScope(form.value, props.categories)
+}
 
 function resetTransientState() {
   formErr.value = ''
@@ -294,6 +298,7 @@ function initializeForm(subscription) {
   if (subscription) {
     suppressAuto = true
     form.value = cloneSubscriptionForEdit(subscription)
+    normalizeKeepaliveScope()
     bundleMode.value = subscription.bundle_id ? 'join' : 'none'
     nextTick(() => { suppressAuto = false })
     return
@@ -311,10 +316,11 @@ watch(
   () => { if (!suppressAuto) recomputeNext() }
 )
 
-// 切到一次性买断时清空保号标记（保号仅适用于周期订阅）
-watch(() => form.value.billing_type, (bt) => {
-  if (bt !== 'recurring') form.value.is_keepalive = false
-})
+// 保号只适用于电信运营商分类的周期订阅；切换计费类型或分类时同步清空残留标记。
+watch(
+  () => [form.value.billing_type, form.value.category_id, props.categories.length],
+  normalizeKeepaliveScope
+)
 
 function onIconLibraryToggle(e) {
   showIconLibrary.value = e.target.open

@@ -18,6 +18,7 @@ from app.deps import get_admin_user, get_current_user
 from app.models import Bundle, Category, Currency, PaymentMethod, Subscription, User
 from app.schemas import sanitize_url
 from app.security import hash_password
+from app.subscription_rules import apply_keepalive_scope
 
 router = APIRouter(prefix="/api/backup", tags=["backup"])
 
@@ -251,6 +252,7 @@ def _restore_entities(db: Session, user: User, data: dict, replace: bool) -> int
         if billing_type == "one_time":
             sub.next_renewal_date = None
             sub.auto_renew = False
+        apply_keepalive_scope(db, sub)
         db.add(sub)
         count += 1
 

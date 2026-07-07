@@ -6,6 +6,7 @@ import {
   getServiceCategoryKeys,
   getServiceCategoryLabel,
   groupServicesByCategory,
+  isCarrierCategory,
   isVpsCategory,
   suggestServicesByName
 } from './serviceLibrary'
@@ -67,6 +68,18 @@ describe('isVpsCategory', () => {
   it('returns false for ordinary or missing categories', () => {
     expect(isVpsCategory({ name: 'AI' })).toBe(false)
     expect(isVpsCategory(null)).toBe(false)
+  })
+})
+
+describe('isCarrierCategory', () => {
+  it('detects carrier category names', () => {
+    expect(isCarrierCategory({ name: '电信运营商 / Carrier (SIM 保号)' })).toBe(true)
+    expect(isCarrierCategory({ name: '手机运营商' })).toBe(true)
+  })
+
+  it('returns false for ordinary or missing categories', () => {
+    expect(isCarrierCategory({ name: 'AI' })).toBe(false)
+    expect(isCarrierCategory(null)).toBe(false)
   })
 })
 

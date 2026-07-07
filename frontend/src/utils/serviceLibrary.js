@@ -28,6 +28,13 @@ export function isVpsCategory(category) {
   return name.toLowerCase().includes('vps') || name.includes('服务器')
 }
 
+export function isCarrierCategory(category) {
+  if (!category) return false
+  const name = category.name || ''
+  const lower = name.toLowerCase()
+  return lower.includes('carrier') || name.includes('电信运营商') || name.includes('运营商')
+}
+
 export function suggestServicesByName(services, query, limit = 6) {
   const q = (query || '').toLowerCase().trim()
   if (q.length < 1) return []

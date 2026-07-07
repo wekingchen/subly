@@ -2,9 +2,11 @@ import { describe, expect, it } from 'vitest'
 
 import {
   buildSubscriptionPayload,
+  canShowKeepaliveToggle,
   cloneSubscriptionForEdit,
   computeNextRenewalDate,
-  createBlankSubscriptionForm
+  createBlankSubscriptionForm,
+  normalizeKeepaliveScope
 } from './subscriptionForm'
 
 describe('createBlankSubscriptionForm', () => {
@@ -104,6 +106,44 @@ describe('computeNextRenewalDate', () => {
       cycle: 'month',
       cycle_count: 1
     }, '2024-02-01')).toBe('2024-02-01')
+  })
+})
+
+describe('keepalive scope helpers', () => {
+  const categories = [
+    { id: 1, name: '电信运营商 / Carrier (SIM 保号)' },
+    { id: 2, name: 'AI' }
+  ]
+
+  it('shows the keepalive toggle only for carrier recurring subscriptions', () => {
+    expect(canShowKeepaliveToggle({ billing_type: 'recurring', category_id: 1 }, categories)).toBe(true)
+    expect(canShowKeepaliveToggle({ billing_type: 'recurring', category_id: 2 }, categories)).toBe(false)
+    expect(canShowKeepaliveToggle({ billing_type: 'one_time', category_id: 1 }, categories)).toBe(false)
+  })
+
+  it('clears keepalive when initialized with a non-carrier category', () => {
+    const form = { billing_type: 'recurring', category_id: 2, is_keepalive: true }
+
+    normalizeKeepaliveScope(form, categories)
+
+    expect(form.is_keepalive).toBe(false)
+  })
+
+  it('clears keepalive and auto-renew when switching to one-time billing', () => {
+    const form = { billing_type: 'one_time', category_id: 1, is_keepalive: true, auto_renew: true }
+
+    normalizeKeepaliveScope(form, categories)
+
+    expect(form.is_keepalive).toBe(false)
+    expect(form.auto_renew).toBe(false)
+  })
+
+  it('keeps keepalive while categories have not loaded for an existing categorized subscription', () => {
+    const form = { billing_type: 'recurring', category_id: 1, is_keepalive: true }
+
+    normalizeKeepaliveScope(form, [])
+
+    expect(form.is_keepalive).toBe(true)
   })
 })
 
