@@ -206,6 +206,21 @@ def _cn_date(d) -> str:
     return f"{d.month} 月 {d.day} 日"
 
 
+def _is_cjk(ch: str) -> bool:
+    return bool(ch) and '一' <= ch <= '鿿'
+
+
+def _cn_join(a: str, b: str) -> str:
+    """中文排版：a 末字符与 b 首字符若一中一非中文（英文/数字），插入一个空格；否则直接拼接。
+    先规范化边界空白，避免用户输入带前后空格时产生双空格。"""
+    if not a or not b:
+        return (a + b).strip()
+    a0, b0 = a.rstrip(), b.lstrip()
+    if _is_cjk(a0[-1]) != _is_cjk(b0[0]):
+        return f"{a0} {b0}"
+    return a0 + b0
+
+
 def _build_bark_text(db, sub: Subscription, user: User, days_left: int) -> tuple[str, str]:
     """构造 Bark 推送的 (标题, 正文)。
     标题只留名称+天数；正文是一句完整的话，套餐/付款/备注/分类有才说。"""
@@ -220,11 +235,11 @@ def _build_bark_text(db, sub: Subscription, user: User, days_left: int) -> tuple
     # 句子化正文：套餐起头 → 每月金额（折算） → 到期 → 付款/备注/分类（有才带标签）
     parts = []
     if sub.plan:
-        parts.append(f"{sub.plan} 套餐")
+        parts.append(_cn_join(sub.plan, "套餐"))
     parts.append(f"{f['cycle_str']} {f['amount']}{f['base_str']}")
     parts.append(due_clause)
     if f["pm"]:
-        parts.append(f"由{f['pm'].name}扣款")
+        parts.append(_cn_join(_cn_join("由", f["pm"].name), "扣款"))
     if sub.remark:
         parts.append(f"备注：{sub.remark}")
     if f["cat"]:

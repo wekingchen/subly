@@ -180,7 +180,7 @@ def test_reminder_text_includes_core_subscription_context(monkeypatch):
 
         title, body = scheduler._build_bark_text(db, sub, user, 0)
         assert title == "⚠️ Pro VPS 今天到期"
-        assert body == "基础版 套餐，每月 12.50 USD（约 88.88 CNY），今天就到期，由Visa扣款，备注：生产节点，分类：云服务器。"
+        assert body == "基础版套餐，每月 12.50 USD（约 88.88 CNY），今天就到期，由 Visa 扣款，备注：生产节点，分类：云服务器。"
     finally:
         db.close()
         engine.dispose()
@@ -222,7 +222,23 @@ def test_bark_text_is_natural_and_omits_empty_fields(monkeypatch):
                                     plan="标准版", category_id=cat.id, payment_method_id=pm.id,
                                     remark="家庭共享", next_renewal_date=date(2024, 1, 9))
         _, body_f = scheduler._build_bark_text(db, sub_full, user_cny, 3)
-        assert body_f == "标准版 套餐，每月 35.00 CNY，1 月 9 日到期，由招行信用卡扣款，备注：家庭共享，分类：流媒体。"
+        assert body_f == "标准版套餐，每月 35.00 CNY，1 月 9 日到期，由招行信用卡扣款，备注：家庭共享，分类：流媒体。"
     finally:
         db.close()
         engine.dispose()
+
+
+def test_cn_join_inserts_space_only_at_cjk_non_cjk_boundary():
+    """中英文 token 交界加空格；中文-中文、英文-英文不加；空值安全。"""
+    j = scheduler._cn_join
+    assert j("基础版", "套餐") == "基础版套餐"      # 中+中 → 无空格
+    assert j("Pro", "套餐") == "Pro 套餐"            # 英+中 → 空格
+    assert j("由", "Visa") == "由 Visa"              # 中+英 → 空格
+    assert j("Visa", "扣款") == "Visa 扣款"          # 英+中 → 空格
+    assert j("PayPal", "Plus") == "PayPalPlus"       # 英+英 → 无空格（_cn_join 不处理英英边界）
+    assert j("", "套餐") == "套餐"                   # 空值安全
+    assert j("基础版", "") == "基础版"
+    # 用户输入带前后空格时规范化为单一空格，不产生双空格
+    assert j("Pro ", "套餐") == "Pro 套餐"
+    assert j("由", " Visa") == "由 Visa"
+    assert j(j("由", "Visa "), "扣款") == "由 Visa 扣款"
