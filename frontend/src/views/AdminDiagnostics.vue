@@ -69,18 +69,18 @@
       </div>
 
       <div class="form-grid sim-form">
-        <label>{{ t('diagnostics.asOfDate') }}<input v-model="simForm.as_of_date" type="date" /></label>
-        <label>{{ t('diagnostics.userId') }}<input v-model.number="simForm.user_id" type="number" min="1" placeholder="—" /></label>
-        <label>{{ t('diagnostics.subscriptionId') }}<input v-model.number="simForm.subscription_id" type="number" min="1" placeholder="—" /></label>
+        <label>{{ t('diagnostics.asOfDate') }}<input v-model="simForm.as_of_date" type="date" :disabled="simLoading" /></label>
+        <label>{{ t('diagnostics.userId') }}<input v-model.number="simForm.user_id" type="number" min="1" placeholder="—" :disabled="simLoading" /></label>
+        <label>{{ t('diagnostics.subscriptionId') }}<input v-model.number="simForm.subscription_id" type="number" min="1" placeholder="—" :disabled="simLoading" /></label>
         <label>{{ t('diagnostics.channel') }}
-          <select v-model="simForm.channel">
+          <select v-model="simForm.channel" :disabled="simLoading">
             <option value="all">{{ t('diagnostics.allChannels') }}</option>
             <option value="telegram">Telegram</option>
             <option value="bark">Bark</option>
           </select>
         </label>
-        <label>{{ t('diagnostics.limit') }}<input v-model.number="simForm.limit" type="number" min="1" max="1000" /></label>
-        <label class="check-row"><input v-model="simForm.include_skipped" type="checkbox" /> {{ t('diagnostics.includeSkipped') }}</label>
+        <label>{{ t('diagnostics.limit') }}<input v-model.number="simForm.limit" type="number" min="1" max="1000" :disabled="simLoading" /></label>
+        <label class="check-row"><input v-model="simForm.include_skipped" type="checkbox" :disabled="simLoading" /> {{ t('diagnostics.includeSkipped') }}</label>
       </div>
       <div class="actions-row">
         <button class="btn" :disabled="simLoading" @click="clickSimulation">

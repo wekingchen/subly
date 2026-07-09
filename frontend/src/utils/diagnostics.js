@@ -1,6 +1,18 @@
 const SEVERITY_ORDER = { error: 0, warn: 1, info: 2 }
 const STATUS_ORDER = { would_send: 0, already_sent: 1, channel_not_ready: 2, not_due: 3 }
 
+// 直接影响「提醒能否正确发出 / 扫描」的诊断项，显式枚举而非按 scope 猜测。
+// 与后端 diagnostics.py 的 code 保持一致：新增相关 code 时在此补一行。
+const REMINDER_CODES = new Set([
+  'telegram_config_incomplete',
+  'bark_config_incomplete',
+  'subscription_missing_next_renewal',
+  'invalid_remind_days',
+  'keepalive_scope_invalid',
+  'recent_notification_failures',
+  'notification_subscription_missing'
+])
+
 export function severityLabel(severity) {
   if (severity === 'error') return '错误'
   if (severity === 'warn') return '警告'
@@ -24,7 +36,7 @@ export function sortIssues(issues = []) {
 
 export function filterIssues(issues = [], filter = 'all') {
   if (filter === 'all') return sortIssues(issues)
-  if (filter === 'reminder') return sortIssues(issues.filter((x) => ['user', 'notification'].includes(x.scope) || String(x.code || '').includes('remind')))
+  if (filter === 'reminder') return sortIssues(issues.filter((x) => REMINDER_CODES.has(String(x.code || ''))))
   return sortIssues(issues.filter((x) => x.severity === filter))
 }
 

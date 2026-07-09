@@ -8,7 +8,7 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
 from app.database import Base
-from app.models import ActivityLog, Category, Subscription, User
+from app.models import ActivityLog, Bundle, Category, PaymentMethod, Subscription, User
 from app.routers import subscriptions
 from app.schemas import SubscriptionIn, SubscriptionUpdate
 from app.security import hash_password
@@ -318,6 +318,86 @@ def test_update_clears_keepalive_when_billing_type_becomes_one_time():
         assert out.auto_renew is False
         assert out.is_keepalive is False
         assert db.get(Subscription, sub.id).is_keepalive is False
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_create_sub_rejects_refs_owned_by_other_user():
+    """回归：订阅引用的分类 / 付款方式 / 套餐包必须属于本人或系统级，跨用户引用应被拒。"""
+    db, engine = make_db()
+    try:
+        user = add_user(db)
+        other = add_user(db, "bob")
+        their_cat = Category(user_id=other.id, name="bob 的分类", icon="", color="#000")
+        their_pm = PaymentMethod(user_id=other.id, name="bob 的卡", icon="")
+        their_bundle = Bundle(user_id=other.id, name="bob 的套餐")
+        db.add_all([their_cat, their_pm, their_bundle])
+        db.commit()
+        for field, value in [
+            ("category_id", their_cat.id),
+            ("payment_method_id", their_pm.id),
+            ("bundle_id", their_bundle.id),
+        ]:
+            with pytest.raises(HTTPException) as exc:
+                subscriptions.create_sub(
+                    SubscriptionIn(name="x", billing_type="one_time", **{field: value}),
+                    request_stub(), user, db,
+                )
+            assert exc.value.status_code == 400
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_create_sub_accepts_system_and_own_refs():
+    """系统级与本人的引用应被接受（校验不误伤合法路径）。"""
+    db, engine = make_db()
+    try:
+        user = add_user(db)
+        sys_cat = Category(is_system=True, name="系统分类", icon="", color="#000")
+        my_pm = PaymentMethod(user_id=user.id, name="我的卡", icon="")
+        my_bundle = Bundle(user_id=user.id, name="我的套餐")
+        db.add_all([sys_cat, my_pm, my_bundle])
+        db.commit()
+
+        out = subscriptions.create_sub(
+            SubscriptionIn(
+                name="合法订阅", billing_type="one_time",
+                category_id=sys_cat.id, payment_method_id=my_pm.id, bundle_id=my_bundle.id,
+            ),
+            request_stub(), user, db,
+        )
+        assert out.category_id == sys_cat.id
+        assert out.payment_method_id == my_pm.id
+        assert out.bundle_id == my_bundle.id
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_update_sub_rejects_stale_cross_user_ref_even_when_ref_unchanged():
+    """回归：订阅已挂着他人引用（历史脏数据），即使本次更新只改 remark、未传 ref，
+    也应按最终值校验并拒绝——否则脏引用会借无关注册更新继续存活。"""
+    db, engine = make_db()
+    try:
+        user = add_user(db)
+        other = add_user(db, "bob")
+        their_bundle = Bundle(user_id=other.id, name="bob 的套餐")
+        db.add(their_bundle)
+        db.commit()
+        sub = Subscription(
+            user_id=user.id, name="脏订阅", amount=1, currency="CNY",
+            billing_type="recurring", cycle="month", cycle_count=1,
+            start_date=date(2024, 1, 1), next_renewal_date=date(2024, 2, 1),
+            bundle_id=their_bundle.id,
+        )
+        db.add(sub)
+        db.commit()
+
+        with pytest.raises(HTTPException) as exc:
+            subscriptions.update_sub(sub.id, SubscriptionUpdate(remark="只改备注"), user, db)
+        assert exc.value.status_code == 400
     finally:
         db.close()
         engine.dispose()

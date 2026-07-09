@@ -14,19 +14,32 @@ import {
 
 describe('diagnostics issue helpers', () => {
   const issues = [
-    { severity: 'info', scope: 'system', code: 'z' },
-    { severity: 'error', scope: 'subscription', code: 'b' },
-    { severity: 'warn', scope: 'notification', code: 'remind_x' },
-    { severity: 'error', scope: 'user', code: 'a' }
+    { severity: 'info', scope: 'system', code: 'currency_missing' },
+    { severity: 'error', scope: 'subscription', code: 'negative_amount' },
+    { severity: 'warn', scope: 'notification', code: 'telegram_config_incomplete' },
+    { severity: 'warn', scope: 'subscription', code: 'invalid_remind_days' },
+    { severity: 'info', scope: 'user', code: 'disabled_user_has_active_subscriptions' }
   ]
 
   it('sorts issues by severity then code', () => {
-    expect(sortIssues(issues).map((x) => x.code)).toEqual(['a', 'b', 'remind_x', 'z'])
+    expect(sortIssues(issues).map((x) => x.code)).toEqual([
+      'negative_amount',
+      'invalid_remind_days',
+      'telegram_config_incomplete',
+      'currency_missing',
+      'disabled_user_has_active_subscriptions'
+    ])
   })
 
-  it('filters issues by severity and reminder scope', () => {
-    expect(filterIssues(issues, 'error').map((x) => x.code)).toEqual(['a', 'b'])
-    expect(filterIssues(issues, 'reminder').map((x) => x.code)).toEqual(['a', 'remind_x'])
+  it('filters issues by severity and explicit reminder codes', () => {
+    expect(filterIssues(issues, 'error').map((x) => x.code)).toEqual(['negative_amount'])
+    // 提醒筛选只纳入显式列出的提醒类 code，不受 scope 误导：
+    // telegram_config_incomplete / invalid_remind_days 属于提醒相关；
+    // disabled_user_has_active_subscriptions（scope=user）不再被误纳入。
+    expect(filterIssues(issues, 'reminder').map((x) => x.code)).toEqual([
+      'invalid_remind_days',
+      'telegram_config_incomplete'
+    ])
   })
 
   it('labels severity classes', () => {

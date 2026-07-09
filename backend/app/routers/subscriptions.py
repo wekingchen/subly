@@ -16,7 +16,7 @@ from app.models import Subscription, User
 from app.schemas import SubscriptionIn, SubscriptionOut, SubscriptionUpdate, sanitize_url
 from app.security import verify_password
 from app.services import exchange
-from app.subscription_rules import apply_keepalive_scope, normalize_keepalive_data
+from app.subscription_rules import apply_keepalive_scope, normalize_keepalive_data, validate_subscription_refs
 
 router = APIRouter(prefix="/api/subscriptions", tags=["subscriptions"])
 logger = logging.getLogger(__name__)
@@ -99,6 +99,14 @@ def create_sub(
         data["next_renewal_date"] = None
         data["auto_renew"] = False
     normalize_keepalive_data(data, db)
+    bad_ref = validate_subscription_refs(
+        db, user.id,
+        category_id=data.get("category_id"),
+        payment_method_id=data.get("payment_method_id"),
+        bundle_id=data.get("bundle_id"),
+    )
+    if bad_ref:
+        raise HTTPException(400, f"{bad_ref}不存在或不在你的账户下")
     logger.info(
         "event=create_sub_prepared request_id=%s user_id=%s auto_url_filled=%s "
         "next_renewal_date_present=%s auto_renew=%s elapsed_ms=%s",
@@ -158,7 +166,18 @@ def update_sub(
     sub = db.get(Subscription, sub_id)
     if not sub or sub.user_id != user.id:
         raise HTTPException(404, "订阅不存在")
-    for k, v in payload.model_dump(exclude_unset=True).items():
+    changes = payload.model_dump(exclude_unset=True)
+    # 按更新后的最终值校验引用归属：未传 ref 字段时也要校验现有值，避免历史脏数据
+    # （如他人 bundle_id）借只改 remark/name 的更新继续存活。显式传 null 仍可清空。
+    bad_ref = validate_subscription_refs(
+        db, user.id,
+        category_id=changes.get("category_id", sub.category_id),
+        payment_method_id=changes.get("payment_method_id", sub.payment_method_id),
+        bundle_id=changes.get("bundle_id", sub.bundle_id),
+    )
+    if bad_ref:
+        raise HTTPException(400, f"{bad_ref}不存在或不在你的账户下")
+    for k, v in changes.items():
         setattr(sub, k, v)
     if sub.billing_type == "one_time":
         sub.next_renewal_date = None

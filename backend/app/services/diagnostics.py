@@ -1,10 +1,10 @@
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models import Bundle, Category, Currency, NotificationLog, PaymentMethod, Subscription, User
-from app.services.scheduler import _parse_days
+from app.services.scheduler import _as_local_date, _local_today, _parse_days
 from app.subscription_rules import category_allows_keepalive
 
 VALID_BILLING_TYPES = {"recurring", "one_time"}
@@ -54,9 +54,6 @@ def run_data_diagnostics(db: Session, user_id: int | None = None) -> dict:
     logs = db.scalars(log_stmt.order_by(NotificationLog.id)).all()
     user_ids = {u.id for u in users}
     all_user_ids = set(db.scalars(select(User.id)).all())
-    category_ids = set(db.scalars(select(Category.id)).all())
-    payment_ids = set(db.scalars(select(PaymentMethod.id)).all())
-    bundle_ids = set(db.scalars(select(Bundle.id)).all())
     currency_codes = set(db.scalars(select(Currency.code)).all())
     sub_ids = set(db.scalars(select(Subscription.id)).all())
 
@@ -174,39 +171,78 @@ def run_data_diagnostics(db: Session, user_id: int | None = None) -> dict:
                 suggestion="在设置中补充自定义币种，或把订阅改为已有币种。",
                 **common,
             )
-        if sub.category_id and sub.category_id not in category_ids:
-            _issue(
-                issues,
-                severity="warn",
-                scope="subscription",
-                code="category_missing",
-                title="订阅分类引用不存在",
-                detail=f"订阅「{sub.name}」引用的分类 id={sub.category_id} 不存在。",
-                suggestion="编辑订阅并重新选择分类。",
-                **common,
-            )
-        if sub.payment_method_id and sub.payment_method_id not in payment_ids:
-            _issue(
-                issues,
-                severity="warn",
-                scope="subscription",
-                code="payment_method_missing",
-                title="付款方式引用不存在",
-                detail=f"订阅「{sub.name}」引用的付款方式 id={sub.payment_method_id} 不存在。",
-                suggestion="编辑订阅并重新选择付款方式。",
-                **common,
-            )
-        if sub.bundle_id and sub.bundle_id not in bundle_ids:
-            _issue(
-                issues,
-                severity="warn",
-                scope="subscription",
-                code="bundle_missing",
-                title="套餐包引用不存在",
-                detail=f"订阅「{sub.name}」引用的套餐包 id={sub.bundle_id} 不存在。",
-                suggestion="编辑订阅并重新选择套餐包，或移除套餐包归属。",
-                **common,
-            )
+        if sub.category_id:
+            cat = db.get(Category, sub.category_id)
+            if cat is None:
+                _issue(
+                    issues,
+                    severity="warn",
+                    scope="subscription",
+                    code="category_missing",
+                    title="订阅分类引用不存在",
+                    detail=f"订阅「{sub.name}」引用的分类 id={sub.category_id} 不存在。",
+                    suggestion="编辑订阅并重新选择分类。",
+                    **common,
+                )
+            elif not (cat.is_system or cat.user_id is None or cat.user_id == sub.user_id):
+                _issue(
+                    issues,
+                    severity="error",
+                    scope="subscription",
+                    code="category_not_owned",
+                    title="订阅分类不属于该用户",
+                    detail=f"订阅「{sub.name}」引用的分类「{cat.name}」属于其他用户。",
+                    suggestion="编辑订阅重新选择本人或系统分类。建议同时排查写入校验是否生效。",
+                    **common,
+                )
+        if sub.payment_method_id:
+            pm = db.get(PaymentMethod, sub.payment_method_id)
+            if pm is None:
+                _issue(
+                    issues,
+                    severity="warn",
+                    scope="subscription",
+                    code="payment_method_missing",
+                    title="付款方式引用不存在",
+                    detail=f"订阅「{sub.name}」引用的付款方式 id={sub.payment_method_id} 不存在。",
+                    suggestion="编辑订阅并重新选择付款方式。",
+                    **common,
+                )
+            elif not (pm.is_system or pm.user_id is None or pm.user_id == sub.user_id):
+                _issue(
+                    issues,
+                    severity="error",
+                    scope="subscription",
+                    code="payment_method_not_owned",
+                    title="付款方式不属于该用户",
+                    detail=f"订阅「{sub.name}」引用的付款方式「{pm.name}」属于其他用户。",
+                    suggestion="编辑订阅重新选择本人或系统付款方式。建议同时排查写入校验是否生效。",
+                    **common,
+                )
+        if sub.bundle_id:
+            bundle = db.get(Bundle, sub.bundle_id)
+            if bundle is None:
+                _issue(
+                    issues,
+                    severity="warn",
+                    scope="subscription",
+                    code="bundle_missing",
+                    title="套餐包引用不存在",
+                    detail=f"订阅「{sub.name}」引用的套餐包 id={sub.bundle_id} 不存在。",
+                    suggestion="编辑订阅并重新选择套餐包，或移除套餐包归属。",
+                    **common,
+                )
+            elif bundle.user_id != sub.user_id:
+                _issue(
+                    issues,
+                    severity="error",
+                    scope="subscription",
+                    code="bundle_not_owned",
+                    title="套餐包不属于该用户",
+                    detail=f"订阅「{sub.name}」引用的套餐包「{bundle.name}」属于其他用户。",
+                    suggestion="编辑订阅重新选择本人套餐包，或移除套餐包归属。建议同时排查写入校验是否生效。",
+                    **common,
+                )
         if sub.is_active and sub.billing_type == "recurring" and sub.next_renewal_date is None:
             _issue(
                 issues,
@@ -252,10 +288,12 @@ def run_data_diagnostics(db: Session, user_id: int | None = None) -> dict:
                 **common,
             )
 
-    since = datetime.utcnow() - timedelta(days=30)
+    # 近 30 天失败通知：按本地自然日统计，避免 UTC 偏移在午夜边界少算一天
+    since_date = _local_today() - timedelta(days=30)
     failed_30d = 0
     for log in logs:
-        if log.status == "failed" and log.sent_at and log.sent_at >= since:
+        sent_on = _as_local_date(log.sent_at)
+        if log.status == "failed" and sent_on is not None and sent_on >= since_date:
             failed_30d += 1
         if log.user_id and log.user_id not in all_user_ids:
             _issue(

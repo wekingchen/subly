@@ -4,7 +4,7 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
 from app.database import Base
-from app.models import Category, Currency, NotificationLog, Subscription, User
+from app.models import Bundle, Category, Currency, NotificationLog, PaymentMethod, Subscription, User
 from app.routers import admin_diagnostics
 from app.schemas import ReminderSimulationIn
 from app.services import diagnostics
@@ -117,6 +117,33 @@ def test_reminder_simulation_router_rejects_bad_channel():
 
         assert raised is not None
         assert getattr(raised, "status_code", None) == 400
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_diagnostics_flags_refs_owned_by_other_user():
+    """回归：诊断应报告订阅引用了他人分类 / 付款方式 / 套餐包的越权状态。"""
+    db, engine = make_db()
+    try:
+        alice = add_user(db, username="alice")
+        bob = add_user(db, username="bob", email="bob@example.com")
+        bobs_cat = Category(user_id=bob.id, name="bob 分类", icon="", color="#000")
+        bobs_pm = PaymentMethod(user_id=bob.id, name="bob 卡", icon="")
+        bobs_bundle = Bundle(user_id=bob.id, name="bob 套餐")
+        db.add_all([bobs_cat, bobs_pm, bobs_bundle, Currency(code="CNY", name="人民币", symbol="¥")])
+        db.flush()
+        add_subscription(db, alice, name="越权分类", category_id=bobs_cat.id)
+        add_subscription(db, alice, name="越权付款", payment_method_id=bobs_pm.id)
+        add_subscription(db, alice, name="越权套餐", bundle_id=bobs_bundle.id)
+        db.commit()
+
+        out = diagnostics.run_data_diagnostics(db)
+        codes = {issue["code"] for issue in out["issues"]}
+
+        assert "category_not_owned" in codes
+        assert "payment_method_not_owned" in codes
+        assert "bundle_not_owned" in codes
     finally:
         db.close()
         engine.dispose()

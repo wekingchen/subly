@@ -1,4 +1,4 @@
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
@@ -266,3 +266,97 @@ def test_bark_text_uses_keepalive_phrasing_when_flag_set(monkeypatch):
     finally:
         db.close()
         engine.dispose()
+
+
+def test_unique_days_dedupes_and_keeps_first_seen_order():
+    assert scheduler._unique_days("7,7,1,1,7") == [7, 1]
+    assert scheduler._unique_days("") == []
+    assert scheduler._unique_days("bad, 3, 3") == [3]
+
+
+def make_db_autoflush_off():
+    """复刻生产 SessionLocal：autoflush=False，使同事务内 db.add 的行默认不可见。"""
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine, autocommit=False, autoflush=False, expire_on_commit=False)
+    return Session(), engine
+
+
+def test_send_one_dedupes_within_scan_under_production_autoflush(monkeypatch):
+    """回归：生产 SessionLocal 为 autoflush=False，未提交的 log 对 DB 查询不可见。
+
+    同一次扫描内对同一 (订阅, 天数, 通道) 再次调用 _send_one 时，靠传入的内存 seen
+    集合去重，既不依赖 db.flush（避免外发期间长持 SQLite 写锁），也不会重发。
+    """
+    db, engine = make_db_autoflush_off()
+    try:
+        monkeypatch.setattr(scheduler.activity, "log", lambda *args, **kwargs: None)
+        user = add_user(db)
+        sub = add_subscription(db, user)
+        today = scheduler._local_today()
+        seen: set = set()
+
+        ok1, s1 = scheduler._send_one(db, sub, user, 7, today, "telegram", lambda: "first", seen)
+        ok2, s2 = scheduler._send_one(db, sub, user, 7, today, "telegram", lambda: "second", seen)
+
+        assert (ok1, s1) == (True, "sent")
+        assert (ok2, s2) == (False, "skip")
+        db.flush()
+        logs = db.scalars(select(NotificationLog).where(NotificationLog.subscription_id == sub.id)).all()
+        assert len(logs) == 1
+        assert logs[0].message == "first"
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_already_sent_compares_local_calendar_date_not_utc(monkeypatch):
+    """回归：去重以本地日历日为准。
+
+    一条记录存为本地凌晨前的 UTC 时刻（例如本地 08:00 前一晚发的，对应 UTC 仍是
+    前一天）。按本地日历日，它仍属于「今天」已发，不应因 UTC 跨日而重发。
+    """
+    db, engine = make_db()
+    try:
+        user = add_user(db)
+        sub = add_subscription(db, user)
+        # 本地 00:30 发送：在 +8 时区下对应 UTC 前一天 16:30
+        local_now = datetime.now(scheduler._local_zone())
+        sent_local = local_now.replace(hour=0, minute=30, second=0, microsecond=0)
+        sent_utc = sent_local.astimezone(timezone.utc).replace(tzinfo=None)
+        db.add(NotificationLog(
+            subscription_id=sub.id, user_id=user.id, days_before=7,
+            channel="telegram", status="sent", sent_at=sent_utc,
+        ))
+        db.commit()
+
+        # 本地今天应判为「已发过」
+        assert scheduler._already_sent(db, sub.id, 7, "telegram", scheduler._local_today()) is True
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_local_zone_falls_back_to_utc_on_bad_tz_without_crashing(monkeypatch):
+    """回归：settings.tz 配置错误时 _local_zone 退回 UTC 并打 warning，不抛异常。"""
+    monkeypatch.setattr(scheduler.settings, "tz", "Not/A_Real/Zone")
+    zone = scheduler._local_zone()
+    assert zone == timezone.utc
+    # _local_today 仍能返回日期，扫描不会因坏配置崩溃
+    assert isinstance(scheduler._local_today(), date)
+
+
+def test_start_scheduler_survives_bad_tz(monkeypatch):
+    """回归：settings.tz 非法时 start_scheduler 不应在 BackgroundScheduler 构造期崩溃。
+
+    若直接把原始 settings.tz 传给 APScheduler，非法时区会让进程启动失败；
+    应先经 _local_zone() 兜底为 UTC，保证扫描触发时区与 _local_today 一致。
+    """
+    monkeypatch.setattr(scheduler.settings, "tz", "Not/A_Real/Zone")
+    try:
+        scheduler.start_scheduler()  # 不应抛异常
+        assert scheduler._scheduler is not None
+    finally:
+        scheduler.shutdown_scheduler()
+        # 清理全局，避免污染其它测试 / 后续启动判断
+        scheduler._scheduler = None
