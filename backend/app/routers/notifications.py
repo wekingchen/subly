@@ -109,8 +109,14 @@ def bark_test(
 
 @router.post("/run-scan")
 def run_scan(admin: User = Depends(get_admin_user)):
-    """手动触发一次到期扫描（仅管理员；扫描为全站范围且会真实外发通知）。"""
-    return scheduler.run_reminder_scan()
+    """手动触发一次到期扫描（仅管理员；扫描为全站范围且会真实外发通知）。
+
+    若已有扫描在跑（定时或上一次手动未结束），返回 409 避免并发重复外发。
+    """
+    result = scheduler.run_reminder_scan()
+    if result.get("skipped") == "已有扫描在运行":
+        raise HTTPException(409, "已有提醒扫描在运行，请稍后再试")
+    return result
 
 
 @router.get("/logs")

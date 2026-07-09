@@ -114,6 +114,24 @@ def test_run_scan_allows_admin(monkeypatch):
         main.app.dependency_overrides.pop(notifications.get_current_user, None)
 
 
+def test_run_scan_returns_409_when_already_running(monkeypatch):
+    """I1: 已有扫描在跑时，手动 run-scan 返回 409。"""
+    from fastapi.testclient import TestClient
+    from app import main
+
+    main.app.dependency_overrides[notifications.get_current_user] = lambda: _user(is_admin=True)
+    monkeypatch.setattr(
+        notifications.scheduler, "run_reminder_scan",
+        lambda: {"sent": 0, "failed": 0, "skipped": "已有扫描在运行"},
+    )
+    try:
+        client = TestClient(main.app)
+        resp = client.post("/api/notifications/run-scan")
+        assert resp.status_code == 409
+    finally:
+        main.app.dependency_overrides.pop(notifications.get_current_user, None)
+
+
 def test_telegram_test_failure_does_not_leak_token_in_activity_log(monkeypatch):
     """F4 回归：测试发送失败时，ActivityLog 不得包含含 token 的底层异常 URL。"""
     db, engine = make_db()

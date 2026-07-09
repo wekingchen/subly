@@ -360,3 +360,45 @@ def test_start_scheduler_survives_bad_tz(monkeypatch):
         scheduler.shutdown_scheduler()
         # 清理全局，避免污染其它测试 / 后续启动判断
         scheduler._scheduler = None
+
+
+def test_run_reminder_scan_is_mutually_exclusive(monkeypatch):
+    """I1: 并发调用 run_reminder_scan 时，第二次必须返回 skipped 而非重复扫描。
+
+    让第一个调用的 SessionLocal.scalars 阻塞，制造持锁窗口；第二个调用应拿不到锁
+    直接返回 skipped='已有扫描在运行'。
+    """
+    import threading as _t
+
+    started = _t.Event()
+    release = _t.Event()
+
+    class _Scalars:
+        def all(self): return []
+        def where(self, *a, **k): return self
+        def order_by(self, *a, **k): return self
+
+    class _BlockingQuery:
+        def scalars(self, *a, **k):
+            started.set()      # 通知主线程：已进入扫描并持锁
+            release.wait(2)    # 阻塞，制造并发窗口
+            return _Scalars()
+        def get(self, *a, **k): return None
+        def commit(self): pass
+        def close(self): pass
+
+    monkeypatch.setattr(scheduler.database, "SessionLocal", lambda: _BlockingQuery())
+
+    second_result = {}
+    def _second():
+        started.wait(2)  # 等第一个持锁
+        second_result["r"] = scheduler.run_reminder_scan()
+
+    t = _t.Thread(target=_second)
+    t.start()
+    first = scheduler.run_reminder_scan()  # 主线程持锁 + 阻塞在 scalars
+    release.set()  # 放行第一个
+    t.join()
+
+    assert first.get("skipped") != "已有扫描在运行"  # 第一个正常（即使空）
+    assert second_result["r"].get("skipped") == "已有扫描在运行"  # 第二个被拒

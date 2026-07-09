@@ -1,5 +1,6 @@
 """定时任务：每日扫描即将到期的订阅，按用户开启的通道（Telegram / Bark）发送提醒。"""
 import logging
+import threading
 from datetime import date, datetime, timezone
 
 try:
@@ -19,6 +20,11 @@ from app.services import bark, exchange, telegram
 
 _scheduler: BackgroundScheduler | None = None
 logger = logging.getLogger(__name__)
+
+# 扫描互斥锁：run_reminder_scan 可能被定时任务与手动 /api/notifications/run-scan
+# 并发触发。两个实例同时跑会因未提交日志互相不可见而重复外发。用非阻塞锁串行化，
+# 已在跑时直接跳过（定时）或返回 409（手动），不排队等待避免请求挂起。
+_scan_lock = threading.Lock()
 
 
 def _local_zone():
@@ -129,10 +135,18 @@ def _send_one(
 
 
 def run_reminder_scan() -> dict:
-    """核心扫描逻辑（可被定时器或手动触发调用）。"""
+    """核心扫描逻辑（可被定时器或手动触发调用）。
+
+    用非阻塞锁串行化：若已有扫描在跑，直接返回 skipped，避免并发实例因未提交日志
+    互相不可见而重复外发通知。
+    """
+    if not _scan_lock.acquire(blocking=False):
+        logger.info("event=reminder_scan_skipped reason=already_running")
+        return {"sent": 0, "failed": 0, "skipped": "已有扫描在运行"}
     today = _local_today()
     sent, failed = 0, 0
     if database.SessionLocal is None:
+        _scan_lock.release()
         return {"sent": 0, "failed": 0, "skipped": "数据库未配置"}
     db = database.SessionLocal()
     try:
@@ -193,6 +207,7 @@ def run_reminder_scan() -> dict:
         db.commit()
     finally:
         db.close()
+        _scan_lock.release()
     return {"sent": sent, "failed": failed}
 
 
