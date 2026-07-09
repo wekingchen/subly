@@ -8,7 +8,7 @@ from datetime import date, datetime
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import or_, select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
 from app import activity
@@ -71,12 +71,18 @@ def _collect_entities(db: Session, user: User) -> dict:
 
     cats = db.scalars(
         select(Category).where(
-            or_(Category.user_id == user.id, Category.id.in_(used_cat_ids))
+            or_(
+                Category.user_id == user.id,
+                and_(Category.id.in_(used_cat_ids), Category.is_system.is_(True)),
+            )
         )
     ).all()
     pms = db.scalars(
         select(PaymentMethod).where(
-            or_(PaymentMethod.user_id == user.id, PaymentMethod.id.in_(used_pm_ids))
+            or_(
+                PaymentMethod.user_id == user.id,
+                and_(PaymentMethod.id.in_(used_pm_ids), PaymentMethod.is_system.is_(True)),
+            )
         )
     ).all()
     bundles = db.scalars(select(Bundle).where(Bundle.user_id == user.id)).all()
@@ -111,12 +117,79 @@ def _parse_date(v):
         return None
 
 
+def _validate_backup_payload(data: dict) -> None:
+    """导入前校验：畸形备份（缺 name、非法日期、类型错误）直接抛错，避免 replace 先删后写丢数据。
+
+    静默容错（缺 name 默认'导入订阅'、非法日期变 today）会让用户在'导入前清空'后
+    丢掉原数据却收到成功响应，违背'失败要响亮'。这里在任何删除/写入前把关，
+    覆盖后续构造 Subscription / compute_next_renewal 会用到的类型字段。
+    """
+    if not isinstance(data, dict):
+        raise ValueError("备份格式错误：顶层不是对象")
+    # subscriptions 必须存在且为数组：缺失 + replace 会静默清空用户现有订阅
+    subs = data.get("subscriptions")
+    if subs is None:
+        raise ValueError("备份缺少 subscriptions 字段（如需清空请显式传空数组）")
+    if not isinstance(subs, list):
+        raise ValueError("备份格式错误：subscriptions 不是数组")
+    # 辅助集合必须是数组、元素必须是 dict，否则后续 .get() 抛 AttributeError 走成 500
+    for key in ("categories", "payment_methods", "bundles", "currencies"):
+        items = data.get(key)
+        if items is None:
+            continue
+        if not isinstance(items, list):
+            raise ValueError(f"备份格式错误：{key} 不是数组")
+        for j, it in enumerate(items):
+            if not isinstance(it, dict):
+                raise ValueError(f"备份 {key} 第 {j + 1} 项必须是对象")
+    for i, s in enumerate(subs):
+        if not isinstance(s, dict):
+            raise ValueError(f"第 {i + 1} 条订阅格式错误")
+        if not (s.get("name") or "").strip():
+            raise ValueError(f"第 {i + 1} 条订阅缺少 name")
+        for field in ("start_date", "next_renewal_date", "end_date", "last_renewed_at"):
+            v = s.get(field)
+            if v not in (None, ""):
+                try:
+                    date.fromisoformat(v)
+                except (TypeError, ValueError):
+                    raise ValueError(f"第 {i + 1} 条订阅 {field} 日期非法：{v!r}")
+        # 类型可转换校验：这些字段后续直接用于构造模型 / compute_next_renewal，
+        # 类型错误会抛 TypeError 走成 500，必须在删旧数据前拦下。
+        for field in ("cycle_count", "sort"):
+            v = s.get(field)
+            if v is not None and not isinstance(v, int):
+                raise ValueError(f"第 {i + 1} 条订阅 {field} 必须是整数：{v!r}")
+        if "amount" in s and s["amount"] is not None:
+            try:
+                float(s["amount"])
+            except (TypeError, ValueError):
+                raise ValueError(f"第 {i + 1} 条订阅 amount 非法：{s['amount']!r}")
+        bt = s.get("billing_type")
+        if bt is not None and bt not in ("recurring", "one_time"):
+            raise ValueError(f"第 {i + 1} 条订阅 billing_type 非法：{bt!r}")
+        cy = s.get("cycle")
+        if cy is not None and cy not in ("day", "week", "month", "year"):
+            raise ValueError(f"第 {i + 1} 条订阅 cycle 非法：{cy!r}")
+        rdb = s.get("remind_days_before")
+        if rdb is not None and not isinstance(rdb, str):
+            raise ValueError(f"第 {i + 1} 条订阅 remind_days_before 必须是字符串：{rdb!r}")
+        fm = s.get("family_members")
+        if fm is not None and not isinstance(fm, list):
+            raise ValueError(f"第 {i + 1} 条订阅 family_members 必须是数组：{fm!r}")
+        if fm is not None and any(not isinstance(m, str) for m in fm):
+            raise ValueError(f"第 {i + 1} 条订阅 family_members 元素必须是字符串")
+
+
 def _restore_entities(db: Session, user: User, data: dict, replace: bool) -> int:
     """把一份导出数据恢复到指定用户名下，返回导入的订阅数（不提交事务）。
 
     自定义分类/付款方式/捆绑包按名称匹配现有实体（含系统预置），缺失才新建。
     """
     subs_in = data.get("subscriptions") or []
+
+    # 任何删除/写入前先校验，畸形备份直接抛错，避免 replace 先删后静默写错数据
+    _validate_backup_payload(data)
 
     if replace:
         for s in db.scalars(
@@ -294,7 +367,11 @@ def import_data(
     if not isinstance(data.get("subscriptions"), list):
         raise HTTPException(400, "备份文件格式不正确：缺少 subscriptions")
 
-    count = _restore_entities(db, user, data, payload.replace)
+    try:
+        count = _restore_entities(db, user, data, payload.replace)
+    except (ValueError, TypeError, AttributeError) as e:
+        db.rollback()
+        raise HTTPException(400, f"备份校验失败：{e}")
     db.commit()
     activity.log("backup.import", f"导入恢复了 {count} 个订阅", user=user)
     return {"ok": True, "imported": count}
@@ -364,34 +441,42 @@ def import_all(
     created_users = 0
     total_subs = 0
 
-    for ub in users_in:
-        meta = ub.get("user") or {}
-        username = meta.get("username")
-        if not username:
-            continue
+    try:
+        for ub in users_in:
+            if not isinstance(ub, dict):
+                raise ValueError("整站备份的 users 项必须是对象")
+            meta = ub.get("user") or {}
+            if not isinstance(meta, dict):
+                raise ValueError("整站备份的 user 字段必须是对象")
+            username = meta.get("username")
+            if not username:
+                raise ValueError("整站备份存在缺少 username 的用户块")
 
-        target = existing_users.get(username)
-        if not target:
-            # 新建账户：优先沿用备份的密码哈希，缺失则给一个需重置的占位密码
-            pwd_hash = meta.get("password_hash") or hash_password(username + "@reset")
-            target = User(
-                username=username,
-                email=meta.get("email") or f"{username}@example.com",
-                password_hash=pwd_hash,
-                is_admin=bool(meta.get("is_admin", False)),
-                is_active=bool(meta.get("is_active", True)),
-                is_approved=bool(meta.get("is_approved", True)),
-                email_verified=bool(meta.get("email_verified", True)),
-                theme=meta.get("theme", "light"),
-                base_currency=meta.get("base_currency", "CNY"),
-                category_order=meta.get("category_order"),
-            )
-            db.add(target)
-            db.flush()
-            existing_users[username] = target
-            created_users += 1
+            target = existing_users.get(username)
+            if not target:
+                # 新建账户：优先沿用备份的密码哈希，缺失则给一个需重置的占位密码
+                pwd_hash = meta.get("password_hash") or hash_password(username + "@reset")
+                target = User(
+                    username=username,
+                    email=meta.get("email") or f"{username}@example.com",
+                    password_hash=pwd_hash,
+                    is_admin=bool(meta.get("is_admin", False)),
+                    is_active=bool(meta.get("is_active", True)),
+                    is_approved=bool(meta.get("is_approved", True)),
+                    email_verified=bool(meta.get("email_verified", True)),
+                    theme=meta.get("theme", "light"),
+                    base_currency=meta.get("base_currency", "CNY"),
+                    category_order=meta.get("category_order"),
+                )
+                db.add(target)
+                db.flush()
+                existing_users[username] = target
+                created_users += 1
 
-        total_subs += _restore_entities(db, target, ub, payload.replace)
+            total_subs += _restore_entities(db, target, ub, payload.replace)
+    except (ValueError, TypeError, AttributeError) as e:
+        db.rollback()
+        raise HTTPException(400, f"备份校验失败：{e}")
 
     db.commit()
     activity.log(

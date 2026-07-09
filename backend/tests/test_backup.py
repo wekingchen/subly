@@ -1,5 +1,6 @@
 from datetime import date
 
+import pytest
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
@@ -59,6 +60,35 @@ def test_collect_entities_includes_system_dependencies_used_by_subscriptions():
         assert [p["name"] for p in exported["payment_methods"]] == ["系统付款"]
         assert [c["code"] for c in exported["currencies"]] == ["ABC"]
         assert exported["subscriptions"][0]["category_id"] == system_cat.id
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_collect_entities_excludes_other_users_private_entities():
+    """B3: 订阅若历史性地引用了他人私有分类/付款方式，导出时不得把他人实体打包出去。"""
+    db, engine = make_db()
+    try:
+        alice = add_user(db, "alice")
+        bob = add_user(db, "bob")
+        bobs_cat = Category(user_id=bob.id, name="bob私有分类", is_system=False)
+        bobs_pm = PaymentMethod(user_id=bob.id, name="bob私有付款", is_system=False)
+        db.add_all([bobs_cat, bobs_pm])
+        db.flush()
+        # alice 的订阅错误引用了 bob 的私有分类/付款（历史越权脏数据）
+        db.add(Subscription(
+            user_id=alice.id, name="越权引用订阅",
+            category_id=bobs_cat.id, payment_method_id=bobs_pm.id,
+            amount=1, currency="CNY", start_date=date(2024, 1, 1),
+            next_renewal_date=date(2024, 2, 1),
+        ))
+        db.commit()
+
+        exported = backup._collect_entities(db, alice)
+        names_c = [c["name"] for c in exported["categories"]]
+        names_p = [p["name"] for p in exported["payment_methods"]]
+        assert "bob私有分类" not in names_c  # 不打包他人私有分类
+        assert "bob私有付款" not in names_p  # 不打包他人私有付款
     finally:
         db.close()
         engine.dispose()
@@ -222,3 +252,133 @@ def test_restore_entities_keeps_existing_subscriptions_when_not_replacing():
     finally:
         db.close()
         engine.dispose()
+
+
+def test_restore_rejects_malformed_payload_before_deleting():
+    """B4: replace 模式下畸形备份（缺 name / 非法日期）必须先校验再删，旧数据不丢。"""
+    db, engine = make_db()
+    try:
+        user = add_user(db)
+        db.add(Subscription(
+            user_id=user.id, name="原有订阅", amount=1, currency="CNY",
+            start_date=date(2024, 1, 1), next_renewal_date=date(2024, 2, 1),
+        ))
+        db.commit()
+
+        # 畸形：缺 name
+        with pytest.raises(ValueError):
+            backup._restore_entities(db, user, {"subscriptions": [{"start_date": "2024-01-01"}]}, replace=True)
+        # 畸形：非法日期
+        with pytest.raises(ValueError):
+            backup._restore_entities(db, user, {"subscriptions": [{"name": "x", "start_date": "not-a-date"}]}, replace=True)
+
+        # 关键：replace=True 但校验失败，原有订阅不应被删
+        names = {s.name for s in db.scalars(select(Subscription).where(Subscription.user_id == user.id)).all()}
+        assert names == {"原有订阅"}
+    finally:
+        db.close()
+        engine.dispose()
+    """H3: 非日期字段畸形（cycle_count/amount/billing_type 类型错）也应在删旧前拒。"""
+    db, engine = make_db()
+    try:
+        user = add_user(db)
+        db.add(Subscription(
+            user_id=user.id, name="原有订阅", amount=1, currency="CNY",
+            start_date=date(2024, 1, 1), next_renewal_date=date(2024, 2, 1),
+        ))
+        db.commit()
+
+        for bad in [
+            {"name": "x", "cycle_count": "oops"},          # cycle_count 非整数
+            {"name": "x", "amount": "not-a-number"},        # amount 非数字
+            {"name": "x", "billing_type": "weird"},         # billing_type 非法
+            {"name": "x", "cycle": "century"},              # cycle 非法
+        ]:
+            with pytest.raises((ValueError, TypeError)):
+                backup._restore_entities(db, user, {"subscriptions": [bad]}, replace=True)
+
+        names = {s.name for s in db.scalars(select(Subscription).where(Subscription.user_id == user.id)).all()}
+        assert names == {"原有订阅"}  # 校验失败不删旧
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_restore_rejects_missing_subscriptions_before_deleting():
+    """J1: 缺 subscriptions 字段 + replace 不应静默清空现有订阅。"""
+    db, engine = make_db()
+    try:
+        user = add_user(db)
+        db.add(Subscription(
+            user_id=user.id, name="原有订阅", amount=1, currency="CNY",
+            start_date=date(2024, 1, 1), next_renewal_date=date(2024, 2, 1),
+        ))
+        db.commit()
+        # 缺 subscriptions（顶层只有 categories）
+        with pytest.raises(ValueError):
+            backup._restore_entities(db, user, {"categories": []}, replace=True)
+        names = {s.name for s in db.scalars(select(Subscription).where(Subscription.user_id == user.id)).all()}
+        assert names == {"原有订阅"}
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_restore_rejects_non_dict_aux_items():
+    """J2: categories 等辅助集合元素必须是 dict，否则不应 500。"""
+    db, engine = make_db()
+    try:
+        user = add_user(db)
+        # categories 元素是字符串
+        with pytest.raises(ValueError):
+            backup._restore_entities(db, user, {"subscriptions": [], "categories": ["bad"]}, replace=False)
+        # currencies 元素是数字
+        with pytest.raises(ValueError):
+            backup._restore_entities(db, user, {"subscriptions": [], "currencies": [123]}, replace=False)
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_restore_rejects_non_string_family_members():
+    """L2: family_members 元素非字符串应被拒（否则提醒渲染 '、'.join 抛 TypeError）。"""
+    db, engine = make_db()
+    try:
+        user = add_user(db)
+        with pytest.raises(ValueError):
+            backup._restore_entities(db, user, {"subscriptions": [{"name": "x", "family_members": [1, 2]}]}, replace=False)
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_import_all_rejects_missing_username(monkeypatch):
+    """H4: 整站备份存在缺少 username 的用户块时返回 400，不静默跳过。"""
+    from fastapi.testclient import TestClient
+    from sqlalchemy.pool import StaticPool
+    from app import main
+    from app.deps import get_current_user
+    from app.security import hash_password
+
+    engine = create_engine(
+        "sqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine)
+    db = Session()
+    admin = User(username="admin", email="a@example.com", password_hash=hash_password("x"),
+                 base_currency="CNY", is_admin=True, is_active=True)
+    db.add(admin); db.commit()
+    main.app.dependency_overrides[get_current_user] = lambda: admin
+    main.app.dependency_overrides[backup.get_db] = lambda: db
+    try:
+        client = TestClient(main.app)
+        # 缺 username 的用户块
+        resp = client.post("/api/backup/import-all", json={"data": {"users": [{"user": {}}]}, "replace": False})
+        assert resp.status_code == 400, f"缺 username 应 400，实际 {resp.status_code}: {resp.text[:120]}"
+    finally:
+        main.app.dependency_overrides.pop(get_current_user, None)
+        main.app.dependency_overrides.pop(backup.get_db, None)
+        db.close(); engine.dispose()

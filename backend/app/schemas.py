@@ -56,6 +56,49 @@ def _is_blocked_host(host: str) -> bool:
     return ip.is_link_local or ip.is_unspecified
 
 
+def is_internal_host(host: str) -> bool:
+    """严格版内网判定（图标抓取用）：拒绝本机/私网/链路本地/保留/组播/未指定地址。
+
+    比 _is_blocked_host 更严——图标抓取没有'本地代理'正当用途，私网也一并拒绝。
+    同样先归一化非常规 IPv4 字面量。
+    """
+    if not host:
+        return False
+    try:
+        host = inet_ntoa(inet_aton(host))
+    except OSError:
+        pass
+    try:
+        ip = ip_address(host)
+    except (ValueError, AddressValueError):
+        return False
+    return (
+        ip.is_private
+        or ip.is_loopback
+        or ip.is_link_local
+        or ip.is_reserved
+        or ip.is_multicast
+        or ip.is_unspecified
+    )
+
+
+def resolves_to_internal(host: str) -> bool:
+    """hostname 经 getaddrinfo 解析后，任一 A/AAAA 地址为内网则返回 True。
+
+    用于出网前校验：仅看字面 IP 挡不住「hostname 解析到内网」的 SSRF。
+    解析失败（公网不存在）返回 False（不拦）；注意仍有校验→连接间的 TOCTOU
+    （DNS rebinding），完整闭环需连接时 pin IP，当前为降低风险的加固层。
+    """
+    if not host or is_internal_host(host):  # 字面内网 IP 直接命中
+        return True if host else False
+    import socket
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except socket.gaierror:
+        return False
+    return any(is_internal_host(info[4][0]) for info in infos)
+
+
 def validate_outbound_url(value: str | None) -> str | None:
     """校验后端出网目标 URL（telegram_api_base / telegram_proxy / bark_server 等）。
 

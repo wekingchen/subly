@@ -21,6 +21,7 @@ from app.config import settings
 from app.database import get_db
 from app.deps import get_admin_user, get_current_user
 from app.models import User
+from app.schemas import resolves_to_internal
 
 router = APIRouter(prefix="/api/icons", tags=["icons"])
 logger = logging.getLogger(__name__)
@@ -469,11 +470,48 @@ def _rank_icon_link(link: dict[str, str]) -> tuple[int, int]:
     return (4, 0)
 
 
+def _safe_resolve(client: httpx.Client, url: str, max_hops: int = 5) -> str | None:
+    """手动跟随重定向，每跳校验目标 host 的字面 IP 与 DNS 解析结果都不指向内网。
+
+    client 必须 follow_redirects=False。用 stream 只读响应头（3xx 取 Location 后
+    立即关闭，不缓冲 200 body），避免大文件在 size 校验前被全量下载。返回最终 URL
+    （每跳已校验）；任一跳指向内网、跳数超限或请求失败则返回 None。
+    """
+    current = url
+    for _ in range(max_hops + 1):
+        host = str(httpx.URL(current).host or "")
+        if resolves_to_internal(host):  # 字面内网 IP 或解析到内网
+            logger.warning("event=icon_fetch_blocked_redirect host=%s", host)
+            return None
+        try:
+            stream = client.stream("GET", current, headers=_ICON_HEADERS)
+            resp = stream.__enter__()
+            try:
+                if resp.status_code in (301, 302, 303, 307, 308):
+                    loc = resp.headers.get("location")
+                    if not loc:
+                        return None
+                    current = str(httpx.URL(current).join(loc))
+                    continue
+                resp.raise_for_status()
+                return current
+            finally:
+                stream.__exit__(None, None, None)
+        except (httpx.RequestError, httpx.HTTPStatusError):
+            return None
+    return None  # 跳数超限
+
+
 def _fetch_candidate_icon(client: httpx.Client, url: str, provider: str, slug: str = "") -> tuple[bytes, str, str] | None:
+    # 先手动解析到最终 URL（每跳校验 host），再 stream 读取（client 不自动跟跳）
+    final = _safe_resolve(client, url)
+    if not final:
+        _record_provider_failure(provider)
+        return None
     try:
-        with client.stream("GET", url, headers=_ICON_HEADERS) as resp:
+        with client.stream("GET", final, headers=_ICON_HEADERS) as resp:
             resp.raise_for_status()
-            detected = _detect_icon_type(url, _content_type(resp.headers))
+            detected = _detect_icon_type(final, _content_type(resp.headers))
             if not detected:
                 return None
             data = _read_limited(resp, _max_icon_bytes())
@@ -492,18 +530,21 @@ def _fetch_candidate_icon(client: httpx.Client, url: str, provider: str, slug: s
 
 
 def _discover_icon_links(client: httpx.Client, domain: str) -> list[str]:
+    final = _safe_resolve(client, f"https://{domain}/")
+    if not final:
+        return []
     try:
-        with client.stream("GET", f"https://{domain}/", headers=_HTML_HEADERS) as resp:
+        with client.stream("GET", final, headers=_HTML_HEADERS) as resp:
             resp.raise_for_status()
             content_type = _content_type(resp.headers)
             if content_type and content_type not in ("text/html", "application/xhtml+xml"):
                 return []
             data = _read_prefix(resp, _HTML_READ_LIMIT)
-            base_url = str(resp.url)
+            base_url = final
     except (httpx.RequestError, httpx.HTTPStatusError):
         return []
     try:
-        text = data.decode(resp.encoding or "utf-8", errors="ignore")
+        text = data.decode("utf-8", errors="ignore")
     except LookupError:
         text = data.decode("utf-8", errors="ignore")
     parser = _IconLinkParser(base_url, domain)
@@ -529,7 +570,7 @@ def _fetch_library_icon(base: str, domain: str, label: str | None = None) -> tup
 
     timeout = max(0.5, float(settings.icon_fetch_timeout_s or 2.0))
     tried: list[str] = []
-    with httpx.Client(timeout=timeout, follow_redirects=True) as client:
+    with httpx.Client(timeout=timeout, follow_redirects=False) as client:
         direct = f"https://{domain}/favicon.ico"
         tried.append("direct")
         result = _fetch_candidate_icon(client, direct, "direct", base)
@@ -693,6 +734,12 @@ async def upload_icon(file: UploadFile = File(...), user: User = Depends(get_cur
     data = await file.read()
     if len(data) > MAX_BYTES:
         raise HTTPException(400, "图标过大（上限 2MB）")
+    # SVG 与主站同源暴露，必须经白名单消毒，防止 <script>/on* 事件窃取 token（fail-closed）
+    if ext == ".svg":
+        sanitized = _sanitize_svg_icon(data, slug=f"upload-{user.id}", provider="upload")
+        if sanitized is None:
+            raise HTTPException(400, "SVG 未能通过安全消毒，请改用 PNG/WEBP 等格式")
+        data = sanitized
     os.makedirs(UPLOAD_DIR, exist_ok=True)
     name = re.sub(r"[^A-Za-z0-9_.\-]", "", f"{user.id}_{uuid.uuid4().hex}{ext}")
     with open(os.path.join(UPLOAD_DIR, name), "wb") as f:
@@ -707,13 +754,19 @@ def import_from_url(payload: IconUrlIn, admin: User = Depends(get_admin_user)):
     if not url.startswith(("http://", "https://")):
         raise HTTPException(400, "请输入 http(s) 图标地址")
     try:
-        resp = httpx.get(url, timeout=15, follow_redirects=True)
-        resp.raise_for_status()
-    except Exception:  # noqa: BLE001
+        with httpx.Client(timeout=15, follow_redirects=False) as client:
+            final = _safe_resolve(client, url)
+            if not final:
+                raise HTTPException(400, "图标地址不可达或重定向到内网地址")
+            # 流式有界读取，超限即拒，不先全量缓冲到内存（防大文件 DoS）
+            with client.stream("GET", final, headers=_ICON_HEADERS) as resp:
+                resp.raise_for_status()
+                ctype = resp.headers.get("content-type", "")
+                content = _read_limited(resp, MAX_BYTES)
+    except httpx.HTTPError:
         raise HTTPException(502, "下载失败，请检查图标地址是否可访问")
-    if len(resp.content) > MAX_BYTES:
+    if content is None:
         raise HTTPException(400, "图标过大（上限 2MB）")
-    ctype = resp.headers.get("content-type", "")
     ext = {
         "image/png": ".png",
         "image/jpeg": ".jpg",
@@ -725,10 +778,16 @@ def import_from_url(payload: IconUrlIn, admin: User = Depends(get_admin_user)):
     }.get(ctype.split(";")[0].strip().lower(), os.path.splitext(url)[1].lower() or ".png")
     if ext not in ALLOWED:
         ext = ".png"
+    # SVG 同源暴露前必须消毒（fail-closed），与 upload_icon 一致
+    if ext == ".svg":
+        sanitized = _sanitize_svg_icon(content, slug=f"fromurl-{admin.id}", provider="from-url")
+        if sanitized is None:
+            raise HTTPException(400, "SVG 未能通过安全消毒，请改用 PNG/WEBP 等格式")
+        content = sanitized
     os.makedirs(UPLOAD_DIR, exist_ok=True)
     name = f"{admin.id}_{uuid.uuid4().hex}{ext}"
     with open(os.path.join(UPLOAD_DIR, name), "wb") as f:
-        f.write(resp.content)
+        f.write(content)
     return {"url": f"/static/icons/{name}"}
 
 

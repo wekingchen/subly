@@ -3,6 +3,7 @@ import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
@@ -20,12 +21,63 @@ from app.schemas import (
     IconServiceIn,
     IconServiceOut,
     IconServiceUpdate,
+    is_internal_host,
 )
 
 router = APIRouter(prefix="/api/admin/icon-services", tags=["admin-icons"])
 
 
 # ---------- helpers ----------
+
+
+def _validate_icon_domain(raw: str) -> str:
+    """校验自定义服务 domain 原始输入：拒 scheme/userinfo/path/query/fragment，
+
+    取 hostname 后显式拒 localhost，并用 getaddrinfo 解析后拒绝任何内网地址。
+    返回规范化的纯 hostname。接收原始输入（不要预先 normalize 剥路径，否则 path 校验失效）。
+    """
+    raw = (raw or "").strip()
+    if not raw:
+        raise ValueError("域名不能为空")
+    # 含 scheme 视为非法（domain 应是纯 host）；补 scheme 让 urlsplit 解析 authority
+    if "://" in raw:
+        raise ValueError("域名不能包含协议，请只填主机名")
+    parts = urlsplit(f"http://{raw}")
+    if parts.username or parts.password:
+        raise ValueError("域名不能包含 userinfo")
+    if parts.query or parts.fragment:
+        raise ValueError("域名不能包含 query 或 fragment")
+    if parts.path not in ("", "/"):
+        raise ValueError("域名不能包含路径")
+    hostname = (parts.hostname or raw).lower().rstrip(".")
+    if not hostname:
+        raise ValueError("域名不能为空")
+    # 显式拒 localhost / .localhost，再拦字面内网 IP
+    if hostname == "localhost" or hostname.endswith(".localhost"):
+        raise ValueError("域名不能指向本机或内网地址")
+    if is_internal_host(hostname):
+        raise ValueError("域名不能指向本机或内网地址")
+    # 主机名需 DNS 解析后复核：解析到的任一地址为内网则拒（防 split-horizon / 内部主机名）
+    _reject_if_resolves_internal(hostname)
+    return hostname
+
+
+def _reject_if_resolves_internal(hostname: str) -> None:
+    """getaddrinfo 解析 hostname，若任一 A/AAAA 地址为内网则抛 ValueError。
+
+    解析失败（NXDOMAIN 等）放行——公网不存在的域名抓取时自然失败，不构成 SSRF。
+    """
+    import socket
+    try:
+        infos = socket.getaddrinfo(hostname, None)
+    except socket.gaierror:
+        return  # 无法解析（公网不存在），不拦
+    for info in infos:
+        addr = info[4][0]
+        if is_internal_host(addr):
+            raise ValueError("域名不能指向本机或内网地址")
+
+
 def _normalize_domain(value: str) -> str:
     """从可能的 URL/带路径域名中提取 host。"""
     raw = (value or "").strip()
@@ -111,9 +163,10 @@ def create_service(
     admin: User = Depends(get_admin_user),
     db: Session = Depends(get_db),
 ):
-    domain = _normalize_domain(payload.domain)
-    if not domain:
-        raise HTTPException(400, "域名不能为空")
+    try:
+        domain = _validate_icon_domain(payload.domain)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
     slug = re_safe(payload.slug) if payload.slug else icon_library.slug_for_domain(domain)
     if not slug:
         slug = re_safe(domain)
@@ -156,9 +209,10 @@ def update_service(
         if data.get(key) is None:
             data.pop(key, None)
     if "domain" in data:
-        data["domain"] = _normalize_domain(data["domain"])
-        if not data["domain"]:
-            raise HTTPException(400, "域名不能为空")
+        try:
+            data["domain"] = _validate_icon_domain(data["domain"])
+        except ValueError as e:
+            raise HTTPException(400, str(e))
     if "name" in data:
         data["name"] = data["name"].strip()
         if not data["name"]:
