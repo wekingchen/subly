@@ -110,3 +110,40 @@ def run_migrations(engine: Engine) -> None:
                     print(f"[migrate] 已清理 {result.rowcount} 条非运营商保号标记")
         except Exception as e:  # noqa: BLE001
             print(f"[migrate] 跳过 subscriptions.is_keepalive 范围清理：{e}")
+
+        # 清理 users 表中历史的危险出网配置：升级前写入的 telegram_api_base /
+        # telegram_proxy / bark_server 可能含 query / userinfo / 元数据地址等，
+        # 现在校验已收紧，旧值不合法则置空并打告警，避免继续生效。
+        try:
+            if _table_exists(conn, "users"):
+                _scrub_outbound_urls(conn)
+        except Exception as e:  # noqa: BLE001
+            print(f"[migrate] 跳过 users 出网配置清理：{e}")
+
+
+def _scrub_outbound_urls(conn) -> None:
+    from app.schemas import validate_outbound_url
+
+    fields = ("telegram_api_base", "telegram_proxy", "bark_server")
+    rows = conn.execute(
+        text(f"SELECT id, {', '.join(fields)} FROM users")
+    ).all()
+    cleared = 0
+    for row in rows:
+        uid = row[0]
+        for idx, field in enumerate(fields, start=1):
+            value = row[idx]
+            if not value:
+                continue
+            try:
+                validate_outbound_url(value)
+            except ValueError:
+                conn.execute(
+                    text(f'UPDATE users SET "{field}" = NULL WHERE id = :uid'),
+                    {"uid": uid},
+                )
+                cleared += 1
+                # 不打印旧值（可能含 userinfo / token / 内网地址等敏感信息）
+                print(f"[migrate] 已清空 user {uid} 的 {field}（旧值不合规，已置空）")
+    if cleared:
+        print(f"[migrate] 共清理 {cleared} 个不合规出网配置")

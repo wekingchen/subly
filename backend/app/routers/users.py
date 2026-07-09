@@ -7,10 +7,13 @@ from app import activity
 from app.database import get_db
 from app.deps import get_current_user
 from app.models import User
-from app.schemas import UserOut, UserUpdate
+from app.schemas import UserOut, UserUpdate, validate_outbound_url
 from app.security import hash_password, verify_password
 
 router = APIRouter(prefix="/api/me", tags=["me"])
+
+# 后端会据此地址出网，需校验协议与高危地址，防 SSRF。
+_OUTBOUND_URL_FIELDS = ("telegram_api_base", "telegram_proxy", "bark_server")
 
 
 class AccountUpdate(BaseModel):
@@ -29,7 +32,14 @@ def update_me(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    for field, value in payload.model_dump(exclude_unset=True).items():
+    data = payload.model_dump(exclude_unset=True)
+    for field in _OUTBOUND_URL_FIELDS:
+        if field in data:
+            try:
+                data[field] = validate_outbound_url(data[field])
+            except ValueError as e:
+                raise HTTPException(400, str(e))
+    for field, value in data.items():
         setattr(user, field, value)
     db.commit()
     db.refresh(user)

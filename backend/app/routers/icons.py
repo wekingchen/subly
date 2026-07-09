@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 from app import icon_library
 from app.config import settings
 from app.database import get_db
-from app.deps import get_current_user
+from app.deps import get_admin_user, get_current_user
 from app.models import User
 
 router = APIRouter(prefix="/api/icons", tags=["icons"])
@@ -701,8 +701,8 @@ async def upload_icon(file: UploadFile = File(...), user: User = Depends(get_cur
 
 
 @router.post("/from-url")
-def import_from_url(payload: IconUrlIn, user: User = Depends(get_current_user)):
-    """从 URL 下载图标并保存到本地。"""
+def import_from_url(payload: IconUrlIn, admin: User = Depends(get_admin_user)):
+    """从 URL 下载图标并保存到本地（仅管理员；该接口会抓取外部 URL，存在 SSRF 风险，不对普通用户开放）。"""
     url = payload.url.strip()
     if not url.startswith(("http://", "https://")):
         raise HTTPException(400, "请输入 http(s) 图标地址")
@@ -726,7 +726,7 @@ def import_from_url(payload: IconUrlIn, user: User = Depends(get_current_user)):
     if ext not in ALLOWED:
         ext = ".png"
     os.makedirs(UPLOAD_DIR, exist_ok=True)
-    name = f"{user.id}_{uuid.uuid4().hex}{ext}"
+    name = f"{admin.id}_{uuid.uuid4().hex}{ext}"
     with open(os.path.join(UPLOAD_DIR, name), "wb") as f:
         f.write(resp.content)
     return {"url": f"/static/icons/{name}"}

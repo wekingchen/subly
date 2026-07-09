@@ -16,6 +16,9 @@
 - 内置服务库新增「智谱 GLM」（AI）与「火山引擎 / 豆包」（AI + VPS，因火山引擎同时提供豆包大模型与火山云服务器）。
 
 ### Fixed
+- 出网 URL 校验收紧与 SSRF 收口：`validate_outbound_url` 禁止 query / fragment / userinfo（堵住 `telegram_api_base` 存成 `http://host?` 把 `/bot.../getMe` 拼进 query 的绕过），并归一化非常规 IPv4 字面量（十进制 `2852039166` / 十六进制等，socket 层会解析为 `169.254.169.254`）后再拦截链路本地与全零地址；path 仍允许以支持反代；`/api/icons/from-url`（可读型 SSRF：抓取任意 URL 并存成静态文件回读）改为仅管理员可用，前端订阅表单的「从 URL 导入图标」按钮同步仅管理员可见；启动迁移清理 `users` 表中历史的危险出网配置（不打印旧值，只记 user_id 与字段），不合法值置空并打告警；通知测试端点失败时 ActivityLog 不再写入含 Bot Token 的底层异常 URL，改记脱敏信息，`getMe` / `getUpdates` 失败补服务端日志。
+- 通知路由收紧越权与 SSRF 风险：`/api/notifications/run-scan`（全站真实扫描 + 外发）改为仅管理员可触发，普通用户返回 403；Telegram / Bark 测试端点不再接受 `bot_token` / `server` 等 payload 覆盖，固定取用户已存配置，防止借后端做消息中继或 SSRF 探测内网；`/api/me` 写入 `telegram_api_base` / `telegram_proxy` / `bark_server` 时经 `validate_outbound_url` 校验，拦截链路本地（含云元数据 `169.254.169.254`）与危险协议（自托管本地代理 `127.0.0.1` 仍放行）；通知端点的 502 错误改为泛化提示，不再回显底层异常细节。
+- 提醒扫描跳过禁用用户：`run_reminder_scan` 与提醒 dry-run 现在按 `User.is_active` 过滤，禁用用户的订阅即使到期、通道配置完整也不再收到提醒（此前扫描不检查用户启用状态）。
 - 提醒扫描修复重复发送隐患：`run_reminder_scan` 与 dry-run 统一用 `_unique_days` 去重提醒天数；扫描内改用内存 `seen` 集合兜底去重（替代 `db.flush`，避免外发期间长持 SQLite 写锁拖垮其它写请求）。同日去重改为按本地日历日（`settings.tz` + `zoneinfo`）判定，避免 naive UTC 与本地日期混比导致凌晨跨日重复发送；诊断「近 30 天失败通知」统计同步改本地自然日。
 - 订阅分类 / 付款方式 / 套餐包引用补归属校验：新增 `validate_subscription_refs`，创建与更新订阅时拒绝引用他人账户下的分类 / 付款方式 / 套餐包（系统级与本人引用仍放行）；更新时按最终值校验，历史脏数据借无关注册更新也无法继续存活。数据诊断相应新增 `category_not_owned` / `payment_method_not_owned` / `bundle_not_owned` 报告。
 - `settings.tz` 配置非法时不再让进程启动崩溃：调度器初始化与触发统一经 `_local_zone()` 兜底为 UTC 并打 warning，而非直接把原始字符串传给 APScheduler。

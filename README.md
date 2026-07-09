@@ -7,7 +7,11 @@
 [![License](https://img.shields.io/badge/license-MIT-blue)](./LICENSE)
 
 ```bash
-docker run -d -p 8842:8000 -v subly_data:/app/data <你的DockerHub用户名>/subly:latest
+docker run -d --name subly -p 8842:8000 \
+  -e JWT_SECRET="$(openssl rand -hex 32)" \
+  -e ADMIN_USERNAME=admin -e ADMIN_PASSWORD=admin123 -e ADMIN_EMAIL=admin@example.com \
+  -e TZ=Asia/Shanghai \
+  -v subly_data:/app/data <你的DockerHub用户名>/subly:latest
 ```
 
 > Subly 面向个人与小团队，把订阅、域名、VPS、保号套餐、提醒通道与成员权限集中到一个本地 SQLite 账本中管理，并在续费前主动提醒。
@@ -23,7 +27,7 @@ docker run -d -p 8842:8000 -v subly_data:/app/data <你的DockerHub用户名>/su
 | 👥 **多用户与审核** | JWT 鉴权，管理员 / 普通用户分层，数据按用户隔离；支持注册、SMTP 邮箱验证码、管理员审核、用户启停与权限分配 |
 | 💳 **订阅账本** | 周期订阅 + 一次性买断，支持套餐名、个性备注、URL、VPS IPv4 / IPv6、家庭成员、套餐包、日历开关与同分类排序 |
 | 📱 **保号场景** | 针对电信运营商保号：续费后可从当前时间重新计算周期，也可按原到期日滚动 |
-| 🔔 **Telegram 提醒** | 续费日前自动推送，每个订阅可配置提醒天数；支持 Bot Token、Chat ID、管理员 ID、TG API 反代与 HTTP 代理 |
+| 🔔 **Telegram 提醒** | 续费日前自动推送，每个订阅可配置提醒天数；支持 Bot Token、Chat ID、TG API 反代与 HTTP 代理 |
 | 🔔 **Bark 推送** | iOS 推送提醒，与 Telegram 可同时开启、各发各的；支持自建 Bark 服务器、提示音、分组与可选 TTL |
 | 📊 **雷达总览 & 报表** | 月度 / 年度支出、支出洞察、排行、永久购买、即将续费、已过期、最近付款与分类明细 |
 | 🗓️ **续费日历** | 日历化查看续费日，可按订阅设置是否显示 |
@@ -93,12 +97,13 @@ docker compose up -d --build
 | 变量 | 必填 | 说明 |
 |------|:---:|------|
 | `JWT_SECRET` | ✅ | 登录令牌密钥，请用 `openssl rand -hex 32` 生成随机串 |
-| `ADMIN_USERNAME` / `ADMIN_PASSWORD` / `ADMIN_EMAIL` | ✅ | 首次初始化创建的管理员账号；首次登录后建议修改密码 |
+| `ADMIN_USERNAME` / `ADMIN_PASSWORD` / `ADMIN_EMAIL` | ✅ | 管理员账号，启动时该用户名不存在则创建；首次登录后建议修改密码 |
 | `TZ` | | 时区，如 `Asia/Shanghai` |
 | `DB_PATH` | | SQLite 数据库文件路径，默认 `data/subly.db`，容器内一般不需要改 |
 | `REMINDER_SCAN_TIME` | | 每天扫描到期订阅、发送提醒的时间，如 `09:00` |
 | `REQUIRE_ADMIN_APPROVAL` | | 新用户注册是否需要管理员审核，默认 `true` |
-| `TELEGRAM_BOT_TOKEN` | | 可留空；Telegram 的 Chat ID、代理、API 反代等也可在网页「设置」里配置 |
+| `APP_PUBLIC_URL` | | 对外可访问地址（如 `https://subly.example.com`）；仅影响 Bark 测试推送的点击跳转，真实续费提醒点击地址取订阅 `url` |
+| `TELEGRAM_BOT_TOKEN` | | 仅声明保留，当前不参与发送；Telegram Bot Token、Chat ID、代理、API 反代均在网页「设置」里按用户配置 |
 
 ### 注册邮件 / SMTP
 
@@ -137,7 +142,7 @@ docker compose up -d --build
 | `ICON_FETCH_CONCURRENCY` | `6` | 冷缓存时 favicon 下载并发数 |
 | `ICON_FETCH_SVG_ENABLED` | `true` | 是否接受并消毒缓存远端 SVG favicon |
 
-Bark 推送无需环境变量，在网页「设置」里填 Device Key、服务器、提示音、分组与 TTL 即可。完整示例见 [.env.example](./.env.example)。
+Bark 推送的 Device Key、服务器、提示音、分组与 TTL 均在网页「设置」里按用户配置，无对应环境变量；`APP_PUBLIC_URL` 仅影响 Bark 测试推送的点击跳转地址。完整示例见 [.env.example](./.env.example)。
 
 ---
 

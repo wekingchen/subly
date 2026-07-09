@@ -148,6 +148,8 @@ def run_reminder_scan() -> dict:
             user = db.get(User, sub.user_id)
             if not user:
                 continue
+            if not user.is_active:
+                continue  # 禁用用户不参与提醒扫描
             tg_ready = user.telegram_enabled and user.telegram_bot_token and user.telegram_chat_id
             bark_ready = user.bark_enabled and user.bark_device_key
             if not tg_ready and not bark_ready:
@@ -380,6 +382,8 @@ def simulate_reminder_scan(
         user = db.get(User, sub.user_id)
         if not user:
             continue
+        if not user.is_active:
+            continue  # 与真实扫描一致：禁用用户不参与提醒
         base = {
             "user_id": user.id,
             "username": user.username,

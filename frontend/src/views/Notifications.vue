@@ -7,7 +7,7 @@
         <p class="muted">追踪 Telegram 与 Bark 的提醒发送结果，必要时立即触发一次续费扫描。</p>
       </div>
       <div class="hero-actions">
-        <button class="btn" @click="runScan">{{ t('notify.runScan') }}</button>
+        <button v-if="auth.user?.is_admin" class="btn" @click="runScan">{{ t('notify.runScan') }}</button>
       </div>
       <div class="notify-metrics">
         <div class="metric-card">
@@ -62,8 +62,10 @@
 import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import api from '../api'
+import { useAuth } from '../stores/auth'
 
 const { t } = useI18n()
+const auth = useAuth()
 const logs = ref([])
 
 const sentCount = computed(() => logs.value.filter((l) => l.status === 'sent').length)

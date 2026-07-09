@@ -22,13 +22,13 @@
 | 变量 | 说明 | 示例 |
 |------|------|------|
 | `JWT_SECRET` | 登录令牌密钥，**必须改成随机串** | `openssl rand -hex 32` 生成 |
-| `ADMIN_USERNAME` | 首次初始化管理员账号 | `admin` |
-| `ADMIN_PASSWORD` | 首次初始化管理员密码（登录后请修改） | `admin123` |
-| `ADMIN_EMAIL` | 首次初始化管理员邮箱 | `admin@example.com` |
+| `ADMIN_USERNAME` | 管理员账号，启动时该用户名不存在则创建 | `admin` |
+| `ADMIN_PASSWORD` | 管理员密码（登录后请修改） | `admin123` |
+| `ADMIN_EMAIL` | 管理员邮箱 | `admin@example.com` |
 | `TZ` | 时区 | `Asia/Shanghai` |
 | `REMINDER_SCAN_TIME` | 每天扫描到期订阅、发送提醒的时间 | `09:00` |
 | `REQUIRE_ADMIN_APPROVAL` | 新用户注册后是否需要管理员审核 | `true` |
-| `TELEGRAM_BOT_TOKEN` | 可留空，后续网页「设置」里配置 | |
+| `TELEGRAM_BOT_TOKEN` | 仅声明保留，当前不参与发送；Bot Token、Chat ID 等在网页「设置」里配置 | |
 
 ### 邮箱验证 / SMTP（可选）
 
@@ -59,7 +59,7 @@
 | `ICON_FETCH_CONCURRENCY` | 冷缓存时 favicon 下载并发数 | `6` |
 | `ICON_FETCH_SVG_ENABLED` | 是否接受并消毒缓存远端 SVG favicon | `true` |
 
-> Bark 推送无需环境变量，登录后在网页「设置」里填 Device Key、服务器、提示音、分组与 TTL 即可；Telegram 的 Chat ID、API 反代和 HTTP 代理也建议在网页「设置」里配置。
+> Bark 推送的 Device Key、服务器、提示音、分组与 TTL 均在网页「设置」里按用户配置，无对应环境变量；`APP_PUBLIC_URL` 仅影响 Bark 测试推送的点击跳转（真实续费提醒用订阅自身 `url`）。Telegram 的 Chat ID、API 反代和 HTTP 代理也建议在网页「设置」里配置。
 
 - **端口**：容器内部 `8000`，映射到宿主任意端口（本文统一用 `8842`）。
 - **持久化目录**：把容器内 `/app/data` 映射到 NAS 的一个目录。这里保存 SQLite 数据库文件、上传图标和内置图标库缓存。**这个目录一定要持久化，否则重建容器会丢数据。**

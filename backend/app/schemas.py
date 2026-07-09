@@ -1,4 +1,7 @@
 from datetime import date, datetime
+from ipaddress import AddressValueError, ip_address
+from socket import inet_aton, inet_ntoa
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
 
@@ -26,6 +29,54 @@ def sanitize_url(value: str | None) -> str | None:
         return normalize_url(value)
     except ValueError:
         return None
+
+
+# 出网目标禁止指向的高危地址：链路本地段（含云元数据 169.254.169.254）与全零地址。
+# 自托管场景下用户常用本地代理（如 127.0.0.1:7890）访问 Telegram，故不拦本机/私网，
+# 仅挡无正当用途且高危的元数据地址，防止 SSRF 窃取云凭证。
+_BLOCKED_HOSTS = {"0.0.0.0", "::"}
+
+
+def _is_blocked_host(host: str) -> bool:
+    if not host:
+        return False
+    if host.lower() in _BLOCKED_HOSTS:
+        return True
+    # 先尝试 inet_aton 归一化非常规 IPv4 字面量（十进制 2852039166 / 十六进制 0x... /
+    # 八进制等），socket 层会把这些当数值 IP 解析，必须先转成点分格式再判定，否则
+    # 会被 ip_address 当域名放行，绕过链路本地/元数据拦截。IPv6 / 域名会抛 OSError 跳过。
+    try:
+        host = inet_ntoa(inet_aton(host))
+    except OSError:
+        pass
+    try:
+        ip = ip_address(host)
+    except (ValueError, AddressValueError):
+        return False  # 域名不在本地拦截范围（DNS 解析时机不可控，这里只挡字面 IP）
+    return ip.is_link_local or ip.is_unspecified
+
+
+def validate_outbound_url(value: str | None) -> str | None:
+    """校验后端出网目标 URL（telegram_api_base / telegram_proxy / bark_server 等）。
+
+    空 -> None（允许清空）；仅允许 http/https，且禁止 query / fragment / userinfo：
+    防止把 /bot.../getMe 拼进 query 绕过约束变成任意请求（如 base 存成
+    http://host/path? 会让后缀落入 query）。path 允许保留以支持 path-prefix 反代。
+    同时拒绝链路本地（含云元数据 169.254.169.254）与全零地址；本机/私网不拦
+    （自托管本地代理属正当用途）。
+    """
+    if value is None or (isinstance(value, str) and value.strip() == ""):
+        return None
+    v = normalize_url(value)  # 复用协议白名单校验
+    # 尾部 ? 或 # 会让 _url 拼接的后缀落入 query/fragment，绕过路径约束，必须直接拒。
+    if "?" in v or "#" in v:
+        raise ValueError("出网地址不能包含 query 或 fragment")
+    parts = urlsplit(v)
+    if parts.username or parts.password:
+        raise ValueError("出网地址不能包含 userinfo")
+    if _is_blocked_host(parts.hostname or ""):
+        raise ValueError("出网地址不能指向链路本地或元数据地址")
+    return v
 
 
 # ---------- Auth ----------
@@ -271,13 +322,11 @@ class DashboardOut(BaseModel):
 
 
 class TelegramTestIn(BaseModel):
-    bot_token: str | None = None
-    chat_id: str | None = None
+    chat_id: str | None = None  # bot_token 固定取用户已存配置，防止借后端做中继
 
 
 class BarkTestIn(BaseModel):
-    device_key: str | None = None
-    server: str | None = None
+    device_key: str | None = None  # server 固定取用户已存配置，防止 SSRF
     ttl: int | None = Field(default=None, ge=0)
 
 

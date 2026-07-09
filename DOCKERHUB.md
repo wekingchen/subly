@@ -85,7 +85,7 @@ volumes:
 | `REMINDER_SCAN_TIME` | Daily renewal scan time, e.g. `09:00`. |
 | `REQUIRE_ADMIN_APPROVAL` | Whether new registrations require admin approval. Default `true`. |
 | `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASSWORD` / `SMTP_FROM` / `SMTP_TLS` | Optional SMTP settings for registration email verification. |
-| `TELEGRAM_BOT_TOKEN` | Optional global token; Telegram can also be configured per user in the web Settings page. |
+| `TELEGRAM_BOT_TOKEN` | Declared but not used in sending; configure Telegram Bot Token, Chat ID, API reverse proxy, and HTTP proxy per user in the web Settings page. |
 | `EXCHANGE_API_BASE` / `EXCHANGE_API_URL` / `EXCHANGE_API_KEY` | Exchange-rate source and optional API key. |
 | `LOG_LEVEL` | Backend log level. Default `INFO`. Logs go to stdout / `docker logs`. |
 | `SLOW_REQUEST_MS` | Requests slower than this threshold emit `slow_request` warnings. Default `1000`. |
@@ -99,9 +99,9 @@ volumes:
 | `ICON_FETCH_CONCURRENCY` | Cold-cache favicon download concurrency. Default `6`. |
 | `ICON_FETCH_SVG_ENABLED` | Accept and sanitize remote SVG favicons. Default `true`. |
 
-Bark needs no env var — configure Device Key, server, sound, group, and optional non-negative TTL in the web Settings page.
+Bark needs no env var; `APP_PUBLIC_URL` only affects the click-through URL of Bark test pushes (real renewal reminders use the subscription's own `url`). — configure Device Key, server, sound, group, and optional non-negative TTL in the web Settings page.
 
-Bark 无需环境变量，请在网页「设置」里配置 Device Key、服务器、提示音、分组与 TTL。
+Bark 无需环境变量，请在网页「设置」里配置 Device Key、服务器、提示音、分组与 TTL；`APP_PUBLIC_URL` 仅影响 Bark 测试推送的点击跳转（真实续费提醒用订阅自身 `url`）。
 
 ## Volumes / 数据卷
 

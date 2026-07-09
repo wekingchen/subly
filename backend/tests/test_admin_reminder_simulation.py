@@ -137,3 +137,30 @@ def test_simulate_reminder_scan_include_skipped_false_filters_not_due(monkeypatc
     finally:
         db.close()
         engine.dispose()
+
+
+def test_simulate_reminder_scan_skips_disabled_user(monkeypatch):
+    """回归：禁用用户（is_active=False）不参与提醒扫描，即使订阅到期、通道就绪。
+
+    与 run_reminder_scan 保持一致：禁用用户不应收到提醒。
+    """
+    db, engine = make_db()
+    try:
+        monkeypatch.setattr(scheduler.exchange, "convert", lambda db, amount, from_cur, to_cur: amount)
+        active = add_user(db, username="active", email="active@example.com",
+                          telegram_enabled=True, telegram_bot_token="token", telegram_chat_id="chat")
+        disabled = add_user(db, username="disabled", email="disabled@example.com", is_active=False,
+                            telegram_enabled=True, telegram_bot_token="token", telegram_chat_id="chat")
+        # 两者都有 7 天后到期、命中 remind_days_before=7 的订阅
+        add_subscription(db, active, name="活跃用户到期", next_renewal_date=date(2024, 1, 8), remind_days_before="7")
+        add_subscription(db, disabled, name="禁用用户到期", next_renewal_date=date(2024, 1, 8), remind_days_before="7")
+        db.commit()
+
+        out = scheduler.simulate_reminder_scan(db, date(2024, 1, 1), channel="telegram", include_skipped=True)
+
+        names = {item["subscription_name"] for item in out["items"]}
+        assert "活跃用户到期" in names
+        assert "禁用用户到期" not in names  # 禁用用户被跳过
+    finally:
+        db.close()
+        engine.dispose()

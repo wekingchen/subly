@@ -54,7 +54,7 @@
           <input id="sub-icon" v-model="form.icon" name="icon" :aria-label="t('sub.icon')" placeholder="🔖 emoji / /static/... / https://..." style="margin:8px 0" />
           <div class="row" style="margin-bottom:8px">
             <input id="sub-icon-url" v-model="iconUrl" name="icon_url" :aria-label="t('sub.iconUrl')" :placeholder="t('sub.iconUrl')" style="flex:1" />
-            <button type="button" class="btn ghost sm" @click="importIconUrl">{{ t('sub.iconUrlImport') }}</button>
+            <button v-if="auth.user?.is_admin" type="button" class="btn ghost sm" @click="importIconUrl">{{ t('sub.iconUrlImport') }}</button>
             <label class="btn ghost sm" style="width:auto">{{ t('sub.uploadIcon') }}
               <input type="file" accept="image/*" hidden @change="uploadIcon" />
             </label>
@@ -224,6 +224,7 @@
 import { computed, nextTick, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import api from '../../api'
+import { useAuth } from '../../stores/auth'
 import ServiceIcon from '../ServiceIcon.vue'
 import ServiceBrowserModal from './ServiceBrowserModal.vue'
 import { useDialogFocus } from '../../composables/useDialogFocus'
@@ -241,6 +242,7 @@ const props = defineProps({
 
 const emit = defineEmits(['close', 'saved', 'bundle-created'])
 const { t } = useI18n()
+const auth = useAuth()
 
 const form = ref({})
 const formErr = ref('')
