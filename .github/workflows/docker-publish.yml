@@ -190,10 +190,34 @@ jobs:
           name: subly-image-amd64
           path: /tmp/subly-e2e
 
-      - name: Load and start Subly image
+      - name: Load and start Subly image with a legacy root-owned data directory
         run: |
           docker load --input /tmp/subly-e2e/subly-amd64.tar
+          sudo mkdir -p /tmp/subly-e2e-data/icons/library
+          sudo touch \
+            /tmp/subly-e2e-data/subly.db \
+            /tmp/subly-e2e-data/subly.db-wal \
+            /tmp/subly-e2e-data/subly.db-shm \
+            /tmp/subly-e2e-data/icons/library/legacy-cache.png
+          sudo chown -R root:root /tmp/subly-e2e-data
+          sudo chmod 0755 /tmp/subly-e2e-data
+          sudo chmod 0644 \
+            /tmp/subly-e2e-data/subly.db \
+            /tmp/subly-e2e-data/subly.db-wal \
+            /tmp/subly-e2e-data/subly.db-shm \
+            /tmp/subly-e2e-data/icons/library/legacy-cache.png
+          docker run --rm \
+            -v /tmp/subly-e2e-data:/app/data \
+            subly:ci-amd64 sh -c '
+              test "$(id -u)" = "10001"
+              test -w /app/data/subly.db
+              test -w /app/data/subly.db-wal
+              test -w /app/data/subly.db-shm
+              test -w /app/data/icons/library/legacy-cache.png
+              rm -f /app/data/subly.db-wal /app/data/subly.db-shm
+            '
           docker run -d --name subly-e2e -p 8000:8000 \
+            -v /tmp/subly-e2e-data:/app/data \
             -e JWT_SECRET=e2e-jwt-secret-0123456789abcdef0123456789abcdef \
             -e ADMIN_USERNAME=e2e-admin \
             -e ADMIN_EMAIL=e2e-admin@example.com \
@@ -216,6 +240,16 @@ jobs:
           done
           docker logs subly-e2e
           exit 1
+
+      - name: Verify legacy volume ownership repair and runtime user
+        run: |
+          test "$(stat -c '%u:%g' /tmp/subly-e2e-data)" = "10001:10001"
+          test "$(stat -c '%u:%g' /tmp/subly-e2e-data/subly.db)" = "10001:10001"
+          test "$(stat -c '%u:%g' /tmp/subly-e2e-data/icons/library/legacy-cache.png)" = "10001:10001"
+          docker exec --user 10001:10001 subly-e2e test -w /app/data/subly.db
+          docker exec --user 10001:10001 subly-e2e test -w /app/data/icons/library/legacy-cache.png
+          PROCESS_UID=$(docker exec subly-e2e python -c "print(next(line.split()[1] for line in open('/proc/1/status') if line.startswith('Uid:')))")
+          test "${PROCESS_UID}" = "10001"
 
       - name: Set up Node.js
         uses: actions/setup-node@v6
@@ -246,7 +280,9 @@ jobs:
 
       - name: Stop E2E container
         if: always()
-        run: docker rm -f subly-e2e
+        run: |
+          docker rm -f subly-e2e || true
+          sudo rm -rf /tmp/subly-e2e-data
 
   build-and-push:
     if: github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main')
