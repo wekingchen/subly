@@ -1,5 +1,6 @@
 from datetime import date, datetime, timedelta
 
+import pytest
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
@@ -144,6 +145,182 @@ def test_diagnostics_flags_refs_owned_by_other_user():
         assert "category_not_owned" in codes
         assert "payment_method_not_owned" in codes
         assert "bundle_not_owned" in codes
+    finally:
+        db.close()
+        engine.dispose()
+
+
+# ---------- 第二期：一键修复 ----------
+
+def _sub_codes(db, sub):
+    """重新诊断，返回该订阅当前命中的 code 集合。"""
+    out = diagnostics.run_data_diagnostics(db, user_id=sub.user_id)
+    return {i["code"] for i in out["issues"] if i.get("subscription_id") == sub.id}
+
+
+@pytest.mark.parametrize("code,field,bad_value", [
+    ("category_missing", "category_id", 99999),
+    ("category_not_owned", "category_id", None),  # 值在测试内动态设为他人分类
+    ("payment_method_missing", "payment_method_id", 99999),
+    ("payment_method_not_owned", "payment_method_id", None),
+    ("bundle_missing", "bundle_id", 99999),
+    ("bundle_not_owned", "bundle_id", None),
+])
+def test_repair_clears_dangling_or_owned_refs(code, field, bad_value):
+    """清空悬空 / 越权引用：修复后对应 FK 为 None，该 code 消失。"""
+    db, engine = make_db()
+    try:
+        alice = add_user(db)
+        bob = add_user(db, username="bob", email="bob@example.com")
+        sub = add_subscription(db, alice, name=code)
+        if bad_value is None:
+            # 越权：引用 bob 的私有实体
+            if field == "category_id":
+                bob_cat = Category(user_id=bob.id, name="bob分类", is_system=False)
+                db.add(bob_cat); db.flush(); sub.category_id = bob_cat.id
+            elif field == "payment_method_id":
+                bob_pm = PaymentMethod(user_id=bob.id, name="bob卡", is_system=False)
+                db.add(bob_pm); db.flush(); sub.payment_method_id = bob_pm.id
+            else:
+                bob_bun = Bundle(user_id=bob.id, name="bob套餐")
+                db.add(bob_bun); db.flush(); sub.bundle_id = bob_bun.id
+        else:
+            setattr(sub, field, bad_value)
+        db.commit()
+
+        assert code in _sub_codes(db, sub), f"前置：{code} 应被诊断出"
+        result = diagnostics.repair_subscription_issue(db, sub.id, code)
+        assert result["fixed"] is True
+        assert getattr(sub, field) is None
+        assert code not in _sub_codes(db, sub)
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_repair_fixes_keepalive_scope():
+    """is_keepalive=True + 非运营商分类 → 修复后 False，code 消失。"""
+    db, engine = make_db()
+    try:
+        alice = add_user(db)
+        sub = add_subscription(db, alice, name="保号越界", is_keepalive=True, category_id=None)
+        db.commit()
+        assert "keepalive_scope_invalid" in _sub_codes(db, sub)
+        diagnostics.repair_subscription_issue(db, sub.id, "keepalive_scope_invalid")
+        assert sub.is_keepalive is False
+        assert "keepalive_scope_invalid" not in _sub_codes(db, sub)
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_repair_cleans_one_time_recurring_fields():
+    """一次性买断残留周期字段 → 修复后清空，code 消失。"""
+    db, engine = make_db()
+    try:
+        alice = add_user(db)
+        sub = add_subscription(db, alice, name="买断残留", billing_type="one_time",
+                               next_renewal_date=date(2024, 2, 1), auto_renew=True)
+        db.commit()
+        assert "one_time_has_recurring_fields" in _sub_codes(db, sub)
+        diagnostics.repair_subscription_issue(db, sub.id, "one_time_has_recurring_fields")
+        assert sub.next_renewal_date is None
+        assert sub.auto_renew is False
+        assert "one_time_has_recurring_fields" not in _sub_codes(db, sub)
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_repair_resets_invalid_remind_days():
+    db, engine = make_db()
+    try:
+        alice = add_user(db)
+        sub = add_subscription(db, alice, name="提醒异常", remind_days_before="bad")
+        db.commit()
+        assert "invalid_remind_days" in _sub_codes(db, sub)
+        diagnostics.repair_subscription_issue(db, sub.id, "invalid_remind_days")
+        assert sub.remind_days_before == "7,1"
+        assert "invalid_remind_days" not in _sub_codes(db, sub)
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_repair_computes_missing_next_renewal():
+    db, engine = make_db()
+    try:
+        alice = add_user(db)
+        sub = add_subscription(db, alice, name="缺续费日", next_renewal_date=None)
+        db.commit()
+        assert "subscription_missing_next_renewal" in _sub_codes(db, sub)
+        diagnostics.repair_subscription_issue(db, sub.id, "subscription_missing_next_renewal")
+        assert sub.next_renewal_date is not None
+        assert "subscription_missing_next_renewal" not in _sub_codes(db, sub)
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_repair_rejects_non_repairable_code():
+    db, engine = make_db()
+    try:
+        alice = add_user(db)
+        sub = add_subscription(db, alice, name="x")
+        db.commit()
+        with pytest.raises(ValueError):
+            diagnostics.repair_subscription_issue(db, sub.id, "invalid_billing_type")
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_repair_rejects_missing_subscription():
+    db, engine = make_db()
+    try:
+        with pytest.raises(ValueError, match="不存在"):
+            diagnostics.repair_subscription_issue(db, 99999, "invalid_remind_days")
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_repair_rejects_when_issue_no_longer_present():
+    """订阅数据正常无该问题 → 报「已不存在」。"""
+    db, engine = make_db()
+    try:
+        alice = add_user(db)
+        sub = add_subscription(db, alice, name="正常订阅")  # 默认值都合法
+        db.commit()
+        with pytest.raises(ValueError, match="已不存在"):
+            diagnostics.repair_subscription_issue(db, sub.id, "invalid_remind_days")
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_repair_next_renewal_rejects_invalid_cycle():
+    db, engine = make_db()
+    try:
+        alice = add_user(db)
+        sub = add_subscription(db, alice, name="坏周期", next_renewal_date=None, cycle="century")
+        db.commit()
+        with pytest.raises(ValueError, match="cycle"):
+            diagnostics.repair_subscription_issue(db, sub.id, "subscription_missing_next_renewal")
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_repair_next_renewal_rejects_invalid_cycle_count():
+    """cycle_count<=0 时不应臆造续费日（凭空按 1 周期算会写出错误基准）。"""
+    db, engine = make_db()
+    try:
+        alice = add_user(db)
+        sub = add_subscription(db, alice, name="坏周期数", next_renewal_date=None, cycle_count=0)
+        db.commit()
+        with pytest.raises(ValueError, match="cycle_count"):
+            diagnostics.repair_subscription_issue(db, sub.id, "subscription_missing_next_renewal")
     finally:
         db.close()
         engine.dispose()

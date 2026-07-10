@@ -135,7 +135,8 @@ const zh = {
     runningHint: '正在扫描数据，请稍候…', simulatingHint: '正在模拟提醒，请稍候…', lastRun: '上次运行：{time}',
     issueTitle: '诊断结果', issueTip: '优先处理错误，再处理警告；建议项用于发现潜在维护风险。', noIssues: '当前没有匹配的诊断项',
     simTitle: '提醒 dry-run', dryRunTip: '按指定日期模拟提醒扫描，只预览 Telegram / Bark 文案，不触发真实外发。',
-    asOfDate: '模拟日期', userId: '用户 ID（可选）', subscriptionId: '订阅 ID（可选）', channel: '通道', allChannels: '全部通道', limit: '返回上限', includeSkipped: '显示跳过原因', runSimulation: '运行提醒模拟', noSimulation: '暂无模拟结果'
+    asOfDate: '模拟日期', userId: '用户 ID（可选）', subscriptionId: '订阅 ID（可选）', channel: '通道', allChannels: '全部通道', limit: '返回上限', includeSkipped: '显示跳过原因', runSimulation: '运行提醒模拟', noSimulation: '暂无模拟结果',
+    repair: '一键修复', repairing: '修复中…', repairOk: '已修复，正在刷新…'
   },
   iconLib: {
     title: '内置服务管理', subtitle: '管理服务清单、分类与图标缓存',

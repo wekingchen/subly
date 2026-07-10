@@ -429,6 +429,18 @@ class AdminDiagnosticOut(BaseModel):
     issues: list[AdminDiagnosticIssue]
 
 
+class DiagnosticRepairIn(BaseModel):
+    subscription_id: int
+    code: str
+
+
+class DiagnosticRepairOut(BaseModel):
+    fixed: bool
+    code: str
+    subscription_id: int
+    detail: str
+
+
 class ReminderSimulationIn(BaseModel):
     as_of_date: date | None = None
     user_id: int | None = None

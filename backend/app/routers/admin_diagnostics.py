@@ -3,10 +3,17 @@ from datetime import date
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
+from app import activity
 from app.database import get_db
 from app.deps import get_admin_user
 from app.models import User
-from app.schemas import AdminDiagnosticOut, ReminderSimulationIn, ReminderSimulationOut
+from app.schemas import (
+    AdminDiagnosticOut,
+    DiagnosticRepairIn,
+    DiagnosticRepairOut,
+    ReminderSimulationIn,
+    ReminderSimulationOut,
+)
 from app.services import diagnostics, scheduler
 
 router = APIRouter(prefix="/api/admin/diagnostics", tags=["admin-diagnostics"])
@@ -44,3 +51,25 @@ def simulate_reminders(
         limit=payload.limit,
     )
     return {"ok": True, "dry_run": True, "as_of_date": as_of, **result}
+
+
+@router.post("/repair", response_model=DiagnosticRepairOut)
+def repair_issue(
+    payload: DiagnosticRepairIn,
+    admin: User = Depends(get_admin_user),
+    db: Session = Depends(get_db),
+):
+    """一键修复单个订阅的单个 A 类诊断项（跨用户写操作，仅管理员）。"""
+    try:
+        result = diagnostics.repair_subscription_issue(db, payload.subscription_id, payload.code)
+    except ValueError as e:
+        msg = str(e)
+        # "已不存在"是状态冲突 → 409；"不存在"是资源缺失 → 404；其余 → 400
+        status = 409 if "已不存在" in msg else (404 if "不存在" in msg else 400)
+        raise HTTPException(status, msg)
+    activity.log(
+        "admin.diagnostic_repair",
+        f"修复订阅 #{payload.subscription_id} 的「{payload.code}」问题",
+        user=admin,
+    )
+    return result

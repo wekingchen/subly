@@ -13,6 +13,22 @@ const REMINDER_CODES = new Set([
   'notification_subscription_missing'
 ])
 
+// 诊断第二期：支持一键修复的 code 白名单（后端 diagnostics.REPAIRABLE_CODES 镜像）。
+// 仅含「有确定性正确目标值」的 A 类问题；新增可修复 code 时在此与后端同步补一行。
+const FIXABLE_CODES = new Set([
+  'category_missing', 'category_not_owned',
+  'payment_method_missing', 'payment_method_not_owned',
+  'bundle_missing', 'bundle_not_owned',
+  'keepalive_scope_invalid',
+  'one_time_has_recurring_fields',
+  'invalid_remind_days',
+  'subscription_missing_next_renewal'
+])
+
+export function isFixable(issue) {
+  return Boolean(issue?.subscription_id) && FIXABLE_CODES.has(String(issue?.code || ''))
+}
+
 export function severityLabel(severity) {
   if (severity === 'error') return '错误'
   if (severity === 'warn') return '警告'

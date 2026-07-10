@@ -55,6 +55,13 @@
             <span v-if="issue.subscription_name">{{ issue.subscription_name }}</span>
             <span v-if="issue.subscription_id" class="mono-data">#{{ issue.subscription_id }}</span>
           </div>
+          <div v-if="isFixable(issue)" class="issue-actions">
+            <button class="btn sm" :disabled="repairingKey === issueKey(issue)" @click="clickRepair(issue)">
+              {{ repairingKey === issueKey(issue) ? t('diagnostics.repairing') : t('diagnostics.repair') }}
+            </button>
+            <span v-if="repairErr[issueKey(issue)]" class="err">{{ repairErr[issueKey(issue)] }}</span>
+            <span v-else-if="repairOkKey === issueKey(issue)" class="ok-hint">{{ t('diagnostics.repairOk') }}</span>
+          </div>
         </article>
       </div>
       <div v-else-if="diagLoaded" class="empty-state"><span class="signal-dot"></span><b>{{ t('diagnostics.noIssues') }}</b></div>
@@ -129,6 +136,7 @@ import { toISODate } from '../utils/date'
 import {
   channelLabel,
   filterIssues,
+  isFixable,
   severityClass,
   severityLabel,
   simulationStatusClass,
@@ -142,6 +150,9 @@ const simulation = ref({ summary: {}, items: [] })
 const issueFilter = ref('all')
 const diagErr = ref('')
 const simErr = ref('')
+const repairingKey = ref('')        // per-issue 修复 loading（复用 issueKey）
+const repairErr = reactive({})      // { [issueKey]: 错误文案 }
+const repairOkKey = ref('')         // 最近修复成功的 key
 const diagLoading = ref(true)
 const simLoading = ref(true)
 const diagLoaded = ref(false)
@@ -214,6 +225,34 @@ async function runSimulation() {
 // 手动点击时重入保护，避免并发请求复用同一 loading 导致提前复位与结果覆盖
 function clickDiagnostics() { if (diagLoading.value) return; loadDiagnostics() }
 function clickSimulation() { if (simLoading.value) return; runSimulation() }
+
+async function repairIssue(issue) {
+  const key = issueKey(issue)
+  repairingKey.value = key
+  repairErr[key] = ''
+  repairOkKey.value = ''
+  // 第一步：提交修复（写操作）。成功后单独保留成功态，不被后续刷新失败覆盖。
+  let repaired = false
+  try {
+    await api.post('/api/admin/diagnostics/repair', { subscription_id: issue.subscription_id, code: issue.code })
+    repaired = true
+    repairOkKey.value = key
+  } catch (e) {
+    repairErr[key] = e.response?.status === 409 ? '问题已不存在' : (e.response?.data?.detail || '修复失败')
+  } finally {
+    repairingKey.value = ''
+  }
+  // 第二步：刷新诊断列表（读操作）。失败时单独提示，不误报成「修复失败」。
+  if (repaired || repairErr[key] === '问题已不存在') {
+    try {
+      await loadDiagnostics()
+    } catch {
+      repairErr[key] = repaired ? '已修复，但刷新列表失败，请手动刷新' : repairErr[key]
+      repairOkKey.value = repaired ? key : ''
+    }
+  }
+}
+function clickRepair(issue) { if (repairingKey.value) return; repairIssue(issue) }
 
 onMounted(() => {
   loadDiagnostics()

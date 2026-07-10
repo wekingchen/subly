@@ -3,12 +3,25 @@ from datetime import timedelta
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.billing import compute_next_renewal
 from app.models import Bundle, Category, Currency, NotificationLog, PaymentMethod, Subscription, User
 from app.services.scheduler import _as_local_date, _local_today, _parse_days
-from app.subscription_rules import category_allows_keepalive
+from app.subscription_rules import apply_keepalive_scope, category_allows_keepalive, validate_subscription_refs
 
 VALID_BILLING_TYPES = {"recurring", "one_time"}
 VALID_CYCLES = {"day", "week", "month", "year"}
+
+# A 类：有确定性正确目标值，admin 可一键修复。scope 必为 subscription 且 issue 带 subscription_id。
+# B 类（需人工判断：通知配置缺口、负金额、非法周期、孤儿日志、失败统计等）不在此列。
+REPAIRABLE_CODES = frozenset({
+    "category_missing", "category_not_owned",
+    "payment_method_missing", "payment_method_not_owned",
+    "bundle_missing", "bundle_not_owned",
+    "keepalive_scope_invalid",
+    "one_time_has_recurring_fields",
+    "invalid_remind_days",
+    "subscription_missing_next_renewal",
+})
 
 
 def _issue(
@@ -344,4 +357,70 @@ def run_data_diagnostics(db: Session, user_id: int | None = None) -> dict:
             "notification_failures_30d": failed_30d,
         },
         "issues": issues,
+    }
+
+
+def _subscription_issue_codes(db: Session, sub: Subscription) -> set[str]:
+    """对单个订阅重跑诊断，返回当前命中的 code 集合（修复前重判，防过期状态）。
+
+    复用 run_data_diagnostics（不重构大循环），过滤到该订阅。
+    """
+    out = run_data_diagnostics(db, user_id=sub.user_id)
+    return {i["code"] for i in out["issues"] if i.get("subscription_id") == sub.id}
+
+
+def repair_subscription_issue(db: Session, subscription_id: int, code: str) -> dict:
+    """一键修复单个订阅的单个 A 类诊断项。
+
+    流程：定位订阅 → 重判确认当前确有该 code → 执行修复 → 复核引用合法性 → 提交。
+    返回 {fixed, code, subscription_id, detail}；失败抛 ValueError（路由层转 400/404/409）。
+    """
+    sub = db.get(Subscription, subscription_id)
+    if sub is None:
+        raise ValueError("订阅不存在")
+    if code not in REPAIRABLE_CODES:
+        raise ValueError(f"该问题类型「{code}」不支持一键修复")
+    if code not in _subscription_issue_codes(db, sub):
+        raise ValueError("该问题已不存在，请刷新诊断列表后再试")
+
+    if code in ("category_missing", "category_not_owned"):
+        sub.category_id = None
+    elif code in ("payment_method_missing", "payment_method_not_owned"):
+        sub.payment_method_id = None
+    elif code in ("bundle_missing", "bundle_not_owned"):
+        sub.bundle_id = None
+    elif code == "keepalive_scope_invalid":
+        apply_keepalive_scope(db, sub)
+    elif code == "one_time_has_recurring_fields":
+        sub.next_renewal_date = None
+        sub.auto_renew = False
+    elif code == "invalid_remind_days":
+        sub.remind_days_before = "7,1"
+    elif code == "subscription_missing_next_renewal":
+        # 不臆造：缺 start_date 或周期无效时拒绝，提示先修周期字段
+        if not sub.start_date:
+            raise ValueError("订阅缺少 start_date，无法计算续费日，请先编辑订阅补齐起始日期")
+        if sub.cycle not in VALID_CYCLES:
+            raise ValueError(f"订阅 cycle={sub.cycle} 无效，请先编辑订阅修正周期")
+        if not sub.cycle_count or sub.cycle_count < 1:
+            raise ValueError(f"订阅 cycle_count={sub.cycle_count} 无效，请先编辑订阅修正周期数量")
+        sub.next_renewal_date = compute_next_renewal(sub.start_date, sub.cycle, sub.cycle_count)
+
+    # 清分类可能影响保号适用范围（与编辑保存路径行为一致）
+    if code.startswith("category_"):
+        apply_keepalive_scope(db, sub)
+
+    # 防御性复核：清掉 FK 后引用必合法（None 通过校验），不通过说明逻辑有误，响亮失败
+    bad = validate_subscription_refs(
+        db, sub.user_id,
+        category_id=sub.category_id, payment_method_id=sub.payment_method_id, bundle_id=sub.bundle_id,
+    )
+    if bad:
+        raise ValueError(f"修复后引用复核仍不通过：{bad}")
+
+    db.commit()
+    db.refresh(sub)
+    return {
+        "fixed": True, "code": code, "subscription_id": sub.id,
+        "detail": f"已修复订阅「{sub.name}」的「{code}」问题",
     }

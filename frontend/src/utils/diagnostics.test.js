@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import {
   channelLabel,
   filterIssues,
+  isFixable,
   severityClass,
   severityLabel,
   simulationStatusClass,
@@ -75,5 +76,22 @@ describe('reminder simulation helpers', () => {
 
   it('builds summary from returned items', () => {
     expect(simulationSummary(items)).toEqual({ total: 3, would_send: 1, skipped: 2, telegram: 1, bark: 2 })
+  })
+})
+
+describe('isFixable', () => {
+  it('returns true for repairable codes with subscription_id', () => {
+    expect(isFixable({ code: 'category_not_owned', subscription_id: 1 })).toBe(true)
+    expect(isFixable({ code: 'invalid_remind_days', subscription_id: 2 })).toBe(true)
+  })
+
+  it('returns false for non-repairable (B class) codes', () => {
+    expect(isFixable({ code: 'invalid_billing_type', subscription_id: 1 })).toBe(false)
+    expect(isFixable({ code: 'telegram_config_incomplete', subscription_id: 1 })).toBe(false)
+  })
+
+  it('returns false without subscription_id (cannot locate target)', () => {
+    expect(isFixable({ code: 'category_not_owned' })).toBe(false)
+    expect(isFixable({})).toBe(false)
   })
 })
