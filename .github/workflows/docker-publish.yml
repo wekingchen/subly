@@ -151,7 +151,7 @@ jobs:
           exit-code: '1'
 
       - name: Upload scanned ${{ matrix.arch }} release artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: subly-image-${{ matrix.arch }}
           path: /tmp/subly-${{ matrix.arch }}.tar
