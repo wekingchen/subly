@@ -14,16 +14,20 @@
 ## 通用前置条件
 
 1. NAS 已安装 **Docker / Container** 套件。
-2. 准备一个持久化目录映射到容器内 `/app/data`。
+2. 准备一个持久化目录映射到容器内 `/app/data`。镜像以非 root UID/GID `10001` 运行；优先使用命名卷，使用宿主机目录时需确保 `10001:10001` 可写。
 3. 准备以下环境变量。
 
 ### 必填 / 常用环境变量
 
 | 变量 | 说明 | 示例 |
 |------|------|------|
-| `JWT_SECRET` | 登录令牌密钥，**必须改成随机串** | `openssl rand -hex 32` 生成 |
+| `JWT_SECRET` | 登录令牌密钥，**必须使用至少 32 字符的随机串**；占位值会拒绝启动 | `openssl rand -hex 32` 生成 |
 | `ADMIN_USERNAME` | 管理员账号，启动时该用户名不存在则创建 | `admin` |
-| `ADMIN_PASSWORD` | 管理员密码（登录后请修改） | `admin123` |
+| `ADMIN_PASSWORD` | 首次管理员密码，至少 12 位且不能使用默认值；已有管理员不会被环境变量重置 | 自行生成强密码 |
+| `ALLOW_INSECURE_DEFAULTS` | 默认 `false`；仅本地演示可设 `true`，公网部署禁止开启 | `false` |
+| `FORWARDED_ALLOW_IPS` | 使用 NAS 反向代理时填写可信代理 IP/CIDR；app 端口直接对外时不要设 `*` | 代理容器或网关地址 |
+| `AUTH_COOKIE_SECURE` | 通过 HTTPS 反向代理访问时设 `true`；直接 HTTP 局域网访问保持 `false` | `false` |
+| `AUTH_COOKIE_SAMESITE` | Refresh Cookie SameSite 策略，一般保持默认 | `lax` |
 | `ADMIN_EMAIL` | 管理员邮箱 | `admin@example.com` |
 | `TZ` | 时区 | `Asia/Shanghai` |
 | `REMINDER_SCAN_TIME` | 每天扫描到期订阅、发送提醒的时间 | `09:00` |
@@ -32,7 +36,7 @@
 
 ### 邮箱验证 / SMTP（可选）
 
-配置 SMTP 后，注册流程可以发送邮箱验证码；不配置时仍可通过管理员审核来管理新用户。
+配置 SMTP 后，注册流程可以发送邮箱验证码；不配置时仍可通过管理员审核来管理新用户。SMTP 发送失败不会创建半注册账号，用户名和邮箱可以直接重试；验证码过期后可用相同用户名、邮箱和密码重新注册获取新验证码。登录、注册和验证码入口使用适配默认单 worker 部署的内存限流。浏览器 Refresh Token 使用 HttpOnly Cookie；若 NAS 通过 HTTPS 反向代理访问，请设置 `AUTH_COOKIE_SECURE=true`，直接 HTTP 访问则保持 `false`。
 
 | 变量 | 说明 | 示例 |
 |------|------|------|
@@ -148,7 +152,7 @@ docker run -d --name subly \
   -p 8842:8000 \
   -e JWT_SECRET="$(openssl rand -hex 32)" \
   -e ADMIN_USERNAME=admin \
-  -e ADMIN_PASSWORD=admin123 \
+  -e ADMIN_PASSWORD='please-change-this-admin-password' \
   -e ADMIN_EMAIL=admin@example.com \
   -e TZ=Asia/Shanghai \
   -e REQUIRE_ADMIN_APPROVAL=true \
@@ -176,7 +180,7 @@ docker compose -f docker-compose.hub.yml up -d
 
 NAS 图形界面：重新拉取 `latest`，再重建容器（保持 `/app/data` 映射不变）即可。
 
-> 建议升级前，先在网页 **设置 → 数据备份** 里导出一份当前用户备份；管理员还可用 **整站备份** 导出全部成员数据。重要数据建议再额外备份一份 `/app/data` 整个目录。
+> 建议升级前，先在网页 **设置 → 数据备份** 里导出一份当前用户备份；管理员还可用 **整站备份** 导出全部成员数据。重要数据建议再额外备份一份 `/app/data` 整个目录。新版遇到必需结构迁移失败会停止启动，不会继续运行半迁移数据库；请保留原数据卷并查看容器日志。若升级后出现 `/app/data` 权限错误，确认宿主目录允许 UID/GID `10001` 写入。
 
 ---
 

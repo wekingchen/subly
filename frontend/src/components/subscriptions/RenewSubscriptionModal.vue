@@ -42,7 +42,7 @@
 </template>
 
 <script setup>
-import { computed, ref } from 'vue'
+import { ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useDialogFocus } from '../../composables/useDialogFocus'
 

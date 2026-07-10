@@ -6,12 +6,11 @@ from contextlib import asynccontextmanager
 from uuid import uuid4
 
 from fastapi import FastAPI, Request
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from app import database, migrate
-from app.config import settings
+from app.config import settings, validate_startup_security
 from app.routers import (
     admin,
     admin_diagnostics,
@@ -49,6 +48,8 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # 安全配置必须先于建库和调度器启动失败，避免危险默认值进入运行态。
+    validate_startup_security()
     # 内置 SQLite，零配置：直接建库 / 建表 / 跑迁移 / 写预置数据 / 启动定时任务
     database.init_engine()
     database.Base.metadata.create_all(bind=database.engine)
@@ -66,13 +67,43 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Subly API", version="2.1.0", lifespan=lifespan)
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+_SPA_CSP = (
+    "default-src 'self'; "
+    "script-src 'self'; "
+    "style-src 'self' 'unsafe-inline'; "
+    "img-src 'self' data: blob: https: http:; "
+    "font-src 'self' data:; "
+    "connect-src 'self'; "
+    "object-src 'none'; "
+    "base-uri 'self'; "
+    "frame-ancestors 'none'; "
+    "form-action 'self'"
 )
+_DOCS_CSP = (
+    "default-src 'self' https://cdn.jsdelivr.net; "
+    "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+    "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+    "img-src 'self' data: https:; "
+    "font-src 'self' data: https://cdn.jsdelivr.net; "
+    "connect-src 'self'; "
+    "object-src 'none'; "
+    "base-uri 'self'; "
+    "frame-ancestors 'none'; "
+    "form-action 'self'"
+)
+
+
+def _content_security_policy(path: str) -> str:
+    return _DOCS_CSP if path in {"/docs", "/redoc"} else _SPA_CSP
+
+
+def _apply_security_headers(request: Request, response) -> None:
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+    if "text/html" in response.headers.get("content-type", "").lower():
+        response.headers["Content-Security-Policy"] = _content_security_policy(request.url.path)
 
 
 def _client_host(request: Request) -> str:
@@ -105,6 +136,7 @@ async def request_logging_middleware(request: Request, call_next):
         raise
 
     response.headers["X-Request-ID"] = request_id
+    _apply_security_headers(request, response)
     duration_ms = int((time.perf_counter() - start) * 1000)
     if path == "/api/health":
         logger.debug(

@@ -1,18 +1,65 @@
 import { defineStore } from 'pinia'
-import api from '../api'
+import api, { logoutRefreshCookie, refreshTokens } from '../api'
+import {
+  bootstrapSession,
+  clearAccessToken,
+  clearBrowserSession,
+  getAccessToken,
+  removeLegacyTokens,
+  setAccessToken
+} from '../auth/session'
+
+let initializePromise = null
 
 export const useAuth = defineStore('auth', {
-  state: () => ({ user: null }),
-  getters: { isLoggedIn: () => !!localStorage.getItem('access_token') },
+  state: () => ({ user: null, initialized: false }),
+  getters: {
+    isLoggedIn: (state) => Boolean(state.user && getAccessToken())
+  },
   actions: {
+    async initialize() {
+      if (this.initialized) return this.isLoggedIn
+      if (initializePromise) return initializePromise
+
+      initializePromise = (async () => {
+        clearAccessToken()
+        try {
+          const tokens = await bootstrapSession(refreshTokens)
+          if (!tokens) {
+            this.user = null
+            this.initialized = true
+            return false
+          }
+          await this.fetchMe()
+          this.initialized = true
+          return true
+        } catch (error) {
+          clearAccessToken()
+          this.user = null
+          throw error
+        }
+      })()
+
+      try {
+        return await initializePromise
+      } finally {
+        initializePromise = null
+      }
+    },
     async login(username, password) {
       const form = new URLSearchParams()
       form.append('username', username)
       form.append('password', password)
       const { data } = await api.post('/api/auth/login', form)
-      localStorage.setItem('access_token', data.access_token)
-      localStorage.setItem('refresh_token', data.refresh_token)
-      await this.fetchMe()
+      setAccessToken(data.access_token)
+      removeLegacyTokens()
+      try {
+        await this.fetchMe()
+      } catch (error) {
+        clearAccessToken()
+        throw error
+      }
+      this.initialized = true
     },
     async register(username, email, password) {
       // 返回 { status: 'ok' | 'verify' | 'pending', message }，由页面决定后续流程
@@ -35,10 +82,12 @@ export const useAuth = defineStore('auth', {
       if (patch.theme) document.documentElement.setAttribute('data-theme', patch.theme)
       return data
     },
-    logout() {
-      localStorage.removeItem('access_token')
-      localStorage.removeItem('refresh_token')
+    async logout() {
+      // HttpOnly Cookie 只能由服务端删除；请求失败时保留当前会话并让界面明确提示重试。
+      await logoutRefreshCookie()
+      clearBrowserSession()
       this.user = null
+      this.initialized = true
     }
   }
 })

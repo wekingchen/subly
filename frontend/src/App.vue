@@ -10,8 +10,7 @@ import { useAuth } from './stores/auth'
 const auth = useAuth()
 onMounted(() => {
   if (auth.isLoggedIn) {
-    auth.fetchMe().catch(() => {})
-    // 打开网页时自动查询当日汇率（后端仅在过期时才联网刷新）
+    // 路由守卫已完成会话恢复；打开网页时仅触发当日汇率自动刷新。
     api.post('/api/currencies/rates/auto-refresh').catch(() => {})
   }
 })

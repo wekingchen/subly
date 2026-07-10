@@ -5,9 +5,12 @@ SQLAlchemy 的 create_all 只会创建缺失的「表」，不会给已存在的
 简单的 ADD COLUMN，只是没有 IF NOT EXISTS，所以要先用 PRAGMA 查询已有列）。
 """
 import json
+import logging
 
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
+
+logger = logging.getLogger(__name__)
 
 # (表名, 列名, 列定义) —— 仅追加，不删除/改名，确保安全幂等
 _COLUMNS = [
@@ -55,15 +58,21 @@ def run_migrations(engine: Engine) -> None:
         return
     with engine.begin() as conn:
         for table, column, ddl in _COLUMNS:
+            if not _table_exists(conn, table):
+                continue
+            if _column_exists(conn, table, column):
+                continue
             try:
-                if not _table_exists(conn, table):
-                    continue
-                if _column_exists(conn, table, column):
-                    continue
                 conn.execute(text(f'ALTER TABLE "{table}" ADD COLUMN "{column}" {ddl}'))
-                print(f"[migrate] 已为 {table} 添加列 {column}")
-            except Exception as e:  # noqa: BLE001
-                print(f"[migrate] 跳过 {table}.{column}：{e}")
+            except Exception as exc:  # noqa: BLE001
+                logger.exception(
+                    "event=migration_add_column_failed table=%s column=%s error_type=%s",
+                    table,
+                    column,
+                    type(exc).__name__,
+                )
+                raise RuntimeError(f"数据库结构迁移失败：无法添加 {table}.{column}") from exc
+            logger.info("event=migration_column_added table=%s column=%s", table, column)
 
         try:
             if _table_exists(conn, "icon_library_services") and _column_exists(conn, "icon_library_services", "category_keys"):

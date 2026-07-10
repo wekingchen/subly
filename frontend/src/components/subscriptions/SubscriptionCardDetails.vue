@@ -60,7 +60,7 @@ defineProps({
   cycleText: { type: String, default: '' },
   paymentName: { type: String, default: '' },
   bundleName: { type: String, default: '' },
-  familyText: { type: String, default: DASH }
+  familyText: { type: String, default: '—' }
 })
 
 const { t } = useI18n()

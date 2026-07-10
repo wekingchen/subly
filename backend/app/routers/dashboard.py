@@ -4,7 +4,6 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.billing import add_cycle
 from app.database import get_db
 from app.deps import get_current_user
 from app.models import Subscription, User

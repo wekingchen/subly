@@ -9,6 +9,17 @@ from app.security import decode_token
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="api/auth/login")
 
 
+def ensure_user_access_allowed(user: User) -> User:
+    """统一收口登录、刷新和受保护接口的账号状态判定。"""
+    if not user.email_verified:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="请先完成邮箱验证")
+    if not user.is_approved:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="账号正在等待管理员审核，请耐心等待")
+    if not user.is_active:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="账户已被禁用，请联系管理员")
+    return user
+
+
 def get_current_user(
     request: Request,
     token: str = Depends(oauth2_scheme),
@@ -24,8 +35,7 @@ def get_current_user(
     user = db.get(User, user_id)
     if user is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="用户不存在")
-    if not user.is_active:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="账户已被禁用")
+    ensure_user_access_allowed(user)
     # 供请求中间件在不重复解析 token 的情况下记录操作者
     request.state.user_id = user.id
     return user

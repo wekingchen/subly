@@ -1,55 +1,88 @@
 import axios from 'axios'
+import {
+  clearBrowserSession,
+  getAccessToken,
+  setAccessToken
+} from '../auth/session'
 
-const api = axios.create({ baseURL: '/' })
+const api = axios.create({ baseURL: '/', withCredentials: true })
+const authApi = axios.create({ baseURL: '/', withCredentials: true })
+
+const NO_AUTO_REFRESH = new Set([
+  '/api/auth/login',
+  '/api/auth/register',
+  '/api/auth/verify-email',
+  '/api/auth/refresh',
+  '/api/auth/logout'
+])
+const ACCOUNT_BLOCK_DETAILS = new Set([
+  '请先完成邮箱验证',
+  '账号正在等待管理员审核，请耐心等待',
+  '账户已被禁用，请联系管理员'
+])
+
+export async function refreshTokens(legacyRefreshToken) {
+  const body = legacyRefreshToken ? { refresh_token: legacyRefreshToken } : undefined
+  const { data } = await authApi.post('/api/auth/refresh', body)
+  return data
+}
+
+export async function logoutRefreshCookie() {
+  return authApi.post('/api/auth/logout')
+}
+
+function redirectToLogin() {
+  clearBrowserSession()
+  if (typeof window !== 'undefined' && window.location.pathname !== '/login') {
+    window.location.assign('/login')
+  }
+}
 
 api.interceptors.request.use((config) => {
-  const token = localStorage.getItem('access_token')
+  const token = getAccessToken()
   if (token) config.headers.Authorization = `Bearer ${token}`
   return config
 })
 
-// 统一清会话：定向移除令牌（不用 localStorage.clear，避免误伤其它本地项）后跳登录。
-// 必须先清 access_token，否则 /login 守卫因 loggedIn 仍为真会把用户反跳回 /dashboard，
-// 形成 401 <-> 跳转 死循环。
-function clearSession() {
-  localStorage.removeItem('access_token')
-  localStorage.removeItem('refresh_token')
-  window.location.href = '/login'
-}
-
 let refreshing = null
 api.interceptors.response.use(
-  (r) => r,
+  (response) => response,
   async (error) => {
-    const original = error.config
-    if (error.response?.status === 401 && !original._retry) {
+    const original = error.config || {}
+    const status = error.response?.status
+    const detail = error.response?.data?.detail
+
+    if (status === 403 && ACCOUNT_BLOCK_DETAILS.has(detail)) {
+      redirectToLogin()
+      return Promise.reject(error)
+    }
+
+    if (
+      status === 401
+      && !original._retry
+      && !NO_AUTO_REFRESH.has(original.url)
+      && getAccessToken()
+    ) {
       original._retry = true
-      const rt = localStorage.getItem('refresh_token')
-      if (rt) {
-        try {
-          if (!refreshing) {
-            refreshing = axios.post('/api/auth/refresh', { refresh_token: rt })
-          }
-          const { data } = await refreshing
-          refreshing = null
-          localStorage.setItem('access_token', data.access_token)
-          localStorage.setItem('refresh_token', data.refresh_token)
-          original.headers.Authorization = `Bearer ${data.access_token}`
-          return api(original)
-        } catch (e) {
-          refreshing = null
-          // 只有 refresh 明确返回 401/403（refresh token 失效）才清会话跳登录；
-          // 网络错误 / 超时 / 5xx 只是暂时的，交给调用方（如路由守卫）保留会话、
-          // 取消本次导航即可，避免后端短暂不可用就把用户强制登出。
-          if (e?.response?.status === 401 || e?.response?.status === 403) {
-            clearSession()
-          }
-          return Promise.reject(e)
+      try {
+        if (!refreshing) {
+          refreshing = refreshTokens()
+            .then((data) => {
+              setAccessToken(data.access_token)
+              return data
+            })
+            .finally(() => {
+              refreshing = null
+            })
         }
-      } else {
-        // 有 access_token 但没有 refresh_token：无法续期，必须清会话再跳登录，
-        // 否则 /login 守卫会因 access_token 仍在而反跳 /dashboard，卡死循环。
-        clearSession()
+        const data = await refreshing
+        original.headers = original.headers || {}
+        original.headers.Authorization = `Bearer ${data.access_token}`
+        return api(original)
+      } catch (refreshError) {
+        const refreshStatus = refreshError?.response?.status
+        if (refreshStatus === 401 || refreshStatus === 403) redirectToLogin()
+        return Promise.reject(refreshError)
       }
     }
     return Promise.reject(error)

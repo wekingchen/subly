@@ -12,7 +12,6 @@ import { onBeforeUnmount, watch } from 'vue'
  */
 const ACTIVE_CLASS = 'modal-open'
 const holders = new Set()
-let tokenSeq = 0
 
 function applyLock() {
   if (typeof document === 'undefined') return

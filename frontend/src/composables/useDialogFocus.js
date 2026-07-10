@@ -60,10 +60,6 @@ export function useDialogFocus({
 }) {
   const entry = { open, dialogRef, initialFocus, onClose, trap, prevActive: null, active: false }
 
-  function resolve() {
-    return typeof open === 'function' ? open() : open.value
-  }
-
   function onKeydown(e) {
     const top = topOfStack()
     if (top !== entry) return

@@ -5,6 +5,9 @@ services:
     build: .
     restart: unless-stopped
     env_file: .env
+    environment:
+      # app 端口仅在 compose 内网暴露，可安全信任 Caddy 注入的 X-Forwarded-For，供认证限流区分真实客户端。
+      FORWARDED_ALLOW_IPS: "*"
     volumes:
       - app_data:/app/data        # SQLite 数据库文件 + 上传图标 + 内置图标库缓存持久化
     expose:

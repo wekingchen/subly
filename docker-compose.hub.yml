@@ -11,10 +11,14 @@ services:
     container_name: subly
     restart: unless-stopped
     environment:
-      JWT_SECRET: please-change-this-to-a-random-secret   # 务必改成随机串：openssl rand -hex 32
+      JWT_SECRET: please-change-this-to-a-random-secret   # 必须修改，否则启动会拒绝：openssl rand -hex 32
+      AUTH_COOKIE_SECURE: "false"       # HTTPS 反代部署改为 true；直接 HTTP 访问保持 false
+      # AUTH_COOKIE_NAME: subly_refresh
+      # AUTH_COOKIE_SAMESITE: lax
+      ALLOW_INSECURE_DEFAULTS: "false"  # 仅本地演示可改 true，公网禁止开启
       TZ: Asia/Shanghai
       ADMIN_USERNAME: admin
-      ADMIN_PASSWORD: admin123          # 首次初始化后请在网页里改密码
+      ADMIN_PASSWORD: please-change-this-admin-password   # 必须改为至少 12 位的非默认密码
       ADMIN_EMAIL: admin@example.com
       REQUIRE_ADMIN_APPROVAL: "true"    # 新用户注册后需管理员审核
       REMINDER_SCAN_TIME: "09:00"       # 每天扫描到期订阅、发送提醒的时间

@@ -2,7 +2,7 @@
 FROM node:20-alpine AS frontend
 WORKDIR /fe
 COPY frontend/package*.json ./
-RUN npm ci || npm install
+RUN npm ci
 COPY frontend/ ./
 RUN npm run build
 
@@ -18,6 +18,11 @@ COPY backend/ ./
 # 把前端构建产物放到 FastAPI 静态目录（单服务托管）
 COPY --from=frontend /fe/dist ./frontend_dist
 
-RUN mkdir -p data/icons/library
+RUN groupadd --system --gid 10001 subly \
+    && useradd --system --uid 10001 --gid subly --home-dir /app --shell /usr/sbin/nologin subly \
+    && mkdir -p data/icons/library \
+    && chown -R subly:subly /app
+
+USER subly
 EXPOSE 8000
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

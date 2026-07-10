@@ -106,9 +106,13 @@ const navGroups = computed(() => {
   return groups
 })
 
-function logout() {
-  auth.logout()
-  router.push('/login')
+async function logout() {
+  try {
+    await auth.logout()
+    router.replace('/login')
+  } catch {
+    window.alert(t('nav.logoutFail'))
+  }
 }
 </script>
 

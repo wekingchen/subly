@@ -3,8 +3,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app import icon_library
-from app.config import settings
-from app.models import Category, Currency, IconLibraryService, PaymentMethod, User
+from app.config import settings, validate_initial_admin_password
+from app.models import Category, Currency, IconLibraryService, User
 from app.security import hash_password
 
 # 全球常用流通货币
@@ -96,17 +96,20 @@ def seed_all(db: Session) -> None:
         )
     icon_library.backfill_builtin_category_keys(db)
 
-    # 首个管理员
-    if settings.admin_username and settings.admin_password:
-        exists = db.scalar(select(User).where(User.username == settings.admin_username))
-        if not exists:
-            db.add(
-                User(
-                    username=settings.admin_username,
-                    email=settings.admin_email,
-                    password_hash=hash_password(settings.admin_password),
-                    is_admin=True,
-                )
+    # 首个管理员：系统已有任意管理员时不再按环境变量补建，避免管理员改名后升级被阻断。
+    admin_exists = db.scalar(select(User.id).where(User.is_admin.is_(True)).limit(1))
+    if not admin_exists and settings.admin_username:
+        username_exists = db.scalar(select(User.id).where(User.username == settings.admin_username))
+        if username_exists:
+            raise RuntimeError("ADMIN_USERNAME 已被非管理员账号占用，无法创建初始管理员")
+        validate_initial_admin_password(settings.admin_password)
+        db.add(
+            User(
+                username=settings.admin_username,
+                email=settings.admin_email,
+                password_hash=hash_password(settings.admin_password),
+                is_admin=True,
             )
+        )
 
     db.commit()

@@ -9,6 +9,7 @@
 ## [Unreleased]
 
 ### Added
+- 新增发布前浏览器与静态检查基线：后端 Ruff 聚焦应用代码正确性，前端 ESLint 聚焦 JS/Vue 未定义与未使用符号；Chromium Playwright 针对构建后的 amd64 Docker 产物验证登录、HttpOnly Cookie 刷新恢复、旧 localStorage Token 一次性迁移、退出、CORS 与关键页面 CSP，任一失败都会阻断镜像发布。
 - 新增管理员「数据诊断」页与 `/api/admin/diagnostics` 接口：可检查通知配置缺口、订阅脏数据、保号范围异常、一次性买断残留周期字段、孤儿通知日志和近 30 天失败通知；同时提供提醒 dry-run 模拟，复用 Bark / Telegram 文案构造但不真实外发、不写通知日志。
 - 数据诊断新增一键修复（`POST /api/admin/diagnostics/repair`，仅管理员）：对有确定性正确目标值的问题（引用缺失 / 越权、保号越界、一次性买断残留周期字段、无效提醒天数、周期订阅缺续费日）支持点按钮直接修复，修复前重判防过期状态、修复后复核引用合法性；需人工判断的问题（通知配置缺口、负金额、非法周期、孤儿日志等）仍只报告。
 - 订阅新增 `is_keepalive`（短信保号）标记：电信运营商分类下的周期订阅可标记为保号套餐，表单 / 续费弹窗 / Bark 与 Telegram 提醒 / 活动日志 / 卡片状态文案全链路按保号场景切换（保号日 / 已过保号日 / 今天保号 / 记得发条短信保号等）。续费推进日期、报表金额统计、提醒触发条件逻辑不变，仅切换文案；保号入口只在电信运营商分类显示，且必须 recurring（前端切一次性买断或切出电信运营商分类会自动清空 + 后端校验 recurring）。
@@ -17,6 +18,9 @@
 - 内置服务库新增「智谱 GLM」（AI）与「火山引擎 / 豆包」（AI + VPS，因火山引擎同时提供豆包大模型与火山云服务器）。
 
 ### Fixed
+- 浏览器会话与响应头安全收口：新前端不再把 Token 写入 `localStorage`，Access Token 仅驻留页面内存，Refresh Token 使用 `Path=/api/auth` 的 HttpOnly/SameSite Cookie，并以 `refresh_sessions.jti` 实现服务端一次性轮换：刷新原子消费旧 session，logout 撤销当前 session 后删除 Cookie，旧 token 重放返回 401；旧 localStorage Refresh Token 仅在 Cookie 401 后迁移一次（旧版无 jti token 用 SHA-256 指纹防重复消费），明确 401/403 才删除，网络/5xx 保留供下次重试；logout 网络失败时不清本地状态并提示重试，避免假退出。后端暂时保留 body/响应体 refresh token 兼容桥供旧页面迁移；移除 wildcard+credentials CORS，并为 SPA、API 文档和通用响应补 CSP、nosniff、Referrer、Frame、Permissions 安全头。
+- 数据库结构迁移改为 fail-fast：旧库补必需列时若 DDL 失败，记录表/列上下文并终止启动，不再打印“跳过”后带着半迁移结构继续运行；缺表与已有列仍保持幂等跳过，历史数据回填/清理维持兼容告警策略。
+- 认证安全闭环：登录、Refresh Token 与受保护接口统一检查邮箱验证、管理员审核和账号启用状态，撤销审核/禁用后旧 Access Token 与 Refresh Token 均立即失效；登录、注册和邮箱验证码入口新增线程安全的单进程滑动窗口限流并返回 `Retry-After`，默认 Caddy compose 信任其代理头以按真实客户端区分限流桶；启动时拒绝空值、占位值或过短的 `JWT_SECRET`，首次创建管理员时拒绝默认/弱密码（已有管理员不受环境变量旧值影响）；SMTP 验证码改为发送成功后再提交用户，失败不再留下占用用户名/邮箱的半注册账号，客户端错误不回显底层 SMTP 异常；验证码过期后可凭相同用户名、邮箱和原密码重新注册并签发新验证码，不再陷入唯一约束死锁。
 - 提醒扫描并发互斥：`run_reminder_scan` 用非阻塞进程锁串行化，定时任务与手动 `/api/notifications/run-scan` 并发触发时，第二个直接返回 `skipped` 而非重复扫描；手动入口遇占用返回 409。此前两个扫描实例会因未提交日志互相不可见而重复外发通知。
 - 图标与备份链路安全收口：`/api/icons/upload` 与 `/api/icons/from-url` 的 SVG 上传统一经白名单消毒（`_sanitize_svg_icon`，fail-closed），堵住同源 SVG 存储型 XSS 窃取 token；自定义服务 `domain` 写入前经 `_validate_icon_domain` 校验（接收原始输入，拒协议 / userinfo / 路径 / query / fragment，显式拒 `localhost`，字面 IP 与 DNS 解析后的地址都拦本机 / 私网 / 链路本地 / 元数据 / 非常规 IPv4 字面量）；favicon 与 `from-url` 抓取改为手动跟随重定向（`_safe_resolve`，`follow_redirects=False`），用 stream 只读响应头避免大文件在体积校验前被全量下载，每一跳 host 经 `resolves_to_internal` 校验字面 IP 与 DNS 解析结果后才发请求，堵住「公网 302 跳内网 / hostname 解析到内网」的 SSRF；`/api/icons/from-url` 最终下载也改为有界流式读取（`_read_limited`，超限即 400，不先缓冲全 body），防大文件内存 DoS；备份导出 `_collect_entities` 收紧为只导出本人或系统级分类 / 付款方式，不再把订阅越权引用到的他人私有元数据打包出去；备份导入在任何删除 / 写入前先做 `_validate_backup_payload` 全量校验（缺 `subscriptions`、缺 name、非法日期、`cycle_count`/`sort` 非整数、`amount` 非数字、`billing_type`/`cycle` 非法枚举、辅助集合元素非对象、`family_members` 元素非字符串均返回 400），整站恢复缺 `username` 的用户块改为报错而非静默跳过，避免「先清空再宽松导入」丢数据却返回成功。
 - 出网 URL 校验收紧与 SSRF 收口：`validate_outbound_url` 禁止 query / fragment / userinfo（堵住 `telegram_api_base` 存成 `http://host?` 把 `/bot.../getMe` 拼进 query 的绕过），并归一化非常规 IPv4 字面量（十进制 `2852039166` / 十六进制等，socket 层会解析为 `169.254.169.254`）后再拦截链路本地与全零地址；path 仍允许以支持反代；`/api/icons/from-url`（可读型 SSRF：抓取任意 URL 并存成静态文件回读）改为仅管理员可用，前端订阅表单的「从 URL 导入图标」按钮同步仅管理员可见；启动迁移清理 `users` 表中历史的危险出网配置（不打印旧值，只记 user_id 与字段），不合法值置空并打告警；通知测试端点失败时 ActivityLog 不再写入含 Bot Token 的底层异常 URL，改记脱敏信息，`getMe` / `getUpdates` 失败补服务端日志。
@@ -33,6 +37,7 @@
 - 实时日志时间按容器 `TZ` / `settings.tz`（默认 `Asia/Shanghai`）显示：`/api/logs` 现在返回带 UTC 时区标记的 `created_at`，前端按系统时区格式化。
 
 ### Changed
+- Docker 与发布链路加固：前端镜像构建只使用 `npm ci`，新增 `.dockerignore`，运行时切换为固定 UID/GID `10001` 的非 root 用户；GitHub Actions 在发布前强制执行后端/前端测试、前端构建、Compose 校验与 amd64/arm64 双架构 Trivy 可修复 High/Critical 门禁；双架构发布归档只构建一次，扫描通过后直接推送同一批产物并组装 manifest，避免二次构建漂移；同一 ref 的旧发布会被并发取消以防旧构建回写 `latest`，手动发布仅允许从 `main` 运行以防未合并分支覆盖正式镜像；pip/npm 审计先以可见性检查接入，Dependabot 每周检查四类依赖。同步将 `python-jose` 升至 `3.5.0`、`python-multipart` 升至 `0.0.31`、`cryptography` 升至 `48.0.1`，`pip-audit` 已知漏洞从 21 个降至 8 个；剩余为 FastAPI 当前约束下的 Starlette 上游项与 ecdsa 无修复项。
 - 图标抓取流式读取加 wall-clock deadline（单次读超时的 3 倍，下限 3 秒）：httpx 的 read timeout 只限单次读空闲，慢速分块响应可长期占住抓取并发，现超总时长即中止并记 provider failure 触发冷却（避免后续 slug 反复重试同一慢 provider）。
 - 清理自有代码中已弃用的 `datetime.utcnow()`，改为 `datetime.now(timezone.utc)`（存 naive UTC 列时用 `.replace(tzinfo=None)` 保持一致），消除 DeprecationWarning；上游 jose / passlib 的弃用告警待其发版。
 - README、Docker Hub、NAS 与技术文档统一项目名表述：正式名称使用 `Subly`，中文定位调整为“你的自托管续费雷达”。

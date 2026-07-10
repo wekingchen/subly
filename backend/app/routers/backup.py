@@ -4,7 +4,7 @@
 捆绑包/货币导出为一个 JSON 文件离线保存，重装后再导入恢复。
 普通用户只能导出/导入自己的数据；管理员还可整站备份/恢复全部成员的数据。
 """
-from datetime import date, datetime
+from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel

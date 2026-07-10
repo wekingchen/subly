@@ -20,7 +20,14 @@ Closes #
 
 请列出你实际运行过的验证命令和结果。
 
+- [ ] `cd backend && python -m pytest`
+- [ ] `cd backend && python -m ruff check app`
+- [ ] `npm --prefix frontend run lint`
+- [ ] `npm --prefix frontend test`
 - [ ] `npm --prefix frontend run build`
+- [ ] `python -m pip_audit -r backend/requirements.txt`（如有告警已记录）
+- [ ] `npm --prefix frontend audit --audit-level=high`
+- [ ] `npm --prefix frontend run e2e`（已启动构建后的服务）
 - [ ] `docker compose -f docker-compose.yml config`
 - [ ] `docker compose -f docker-compose.hub.yml config`
 - [ ] `git diff --check`
@@ -63,6 +70,7 @@ Closes #
 - [ ] 未提交 `backend/data/`
 - [ ] 未提交 `__pycache__/`、`.pytest_cache/`、`.venv/` 等缓存或虚拟环境
 - [ ] 未提交数据库文件、上传图标、图标缓存或备份文件
+- [ ] Docker build context 已由 `.dockerignore` 排除上述本地产物
 
 ## 截图 / 录屏（如涉及 UI）
 

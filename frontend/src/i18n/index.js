@@ -2,7 +2,7 @@ import { createI18n } from 'vue-i18n'
 
 const zh = {
   app: { tagline: '订阅 / 续费 / 保号，一个都不漏' },
-  nav: { dashboard: '雷达总览', subscriptions: '订阅账本', calendar: '续费日历', reports: '支出报表', notifications: '通知中心', logs: '实时日志', settings: '系统设置', iconLibrary: '服务管理', diagnostics: '数据诊断', users: '用户管理', groupWorkspace: '雷达工作台', groupSystem: '通知与系统', groupAdmin: '管理员', logout: '退出', menu: '导航菜单', brandTag: '续费雷达' },
+  nav: { dashboard: '雷达总览', subscriptions: '订阅账本', calendar: '续费日历', reports: '支出报表', notifications: '通知中心', logs: '实时日志', settings: '系统设置', iconLibrary: '服务管理', diagnostics: '数据诊断', users: '用户管理', groupWorkspace: '雷达工作台', groupSystem: '通知与系统', groupAdmin: '管理员', logout: '退出', logoutFail: '退出失败，请检查网络后重试', menu: '导航菜单', brandTag: '续费雷达' },
   notify: { title: '通知中心', runScan: '立即扫描提醒', empty: '暂无通知记录', sent: '已发送', failed: '失败', daysBefore: '提前天数' },
   rtlog: { title: '实时日志', live: '实时', paused: '已暂停', empty: '暂无日志', auto: '自动刷新' },
   account: { title: '账号与密码', username: '用户名', email: '邮箱', saveAccount: '保存账号', changePwd: '修改密码', oldPwd: '原密码', newPwd: '新密码', pwdOk: '密码已修改', accountOk: '账号已更新' },

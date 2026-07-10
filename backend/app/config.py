@@ -1,4 +1,5 @@
 from functools import lru_cache
+from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -13,6 +14,10 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 60
     refresh_token_expire_days: int = 14
+    auth_cookie_name: str = "subly_refresh"
+    auth_cookie_secure: bool = False
+    auth_cookie_samesite: Literal["lax", "strict", "none"] = "lax"
+    allow_insecure_defaults: bool = False
     tz: str = "Asia/Shanghai"
 
     # 日志：输出到 stdout（docker logs 可见），临时排查可设 LOG_LEVEL=DEBUG
@@ -54,6 +59,47 @@ class Settings(BaseSettings):
     admin_username: str = "admin"
     admin_password: str = "admin123"
     admin_email: str = "admin@example.com"
+
+
+_UNSAFE_JWT_SECRETS = {
+    "change-me",
+    "please-change-this-to-a-random-secret",
+}
+_UNSAFE_ADMIN_PASSWORDS = {
+    "admin123",
+    "change-me",
+    "please-change-this-password",
+    "please-change-this-admin-password",
+    "replace-with-a-strong-password",
+}
+
+
+def validate_startup_security(current: Settings | None = None) -> None:
+    """生产默认拒绝危险 JWT 密钥；本地演示必须显式选择放行。"""
+    current = current or settings
+    if current.allow_insecure_defaults:
+        return
+    secret = (current.jwt_secret or "").strip()
+    if len(secret) < 32 or secret.lower() in _UNSAFE_JWT_SECRETS:
+        raise RuntimeError(
+            "JWT_SECRET 不安全：请使用 `openssl rand -hex 32` 生成随机强密钥；"
+            "仅本地演示可显式设置 ALLOW_INSECURE_DEFAULTS=true"
+        )
+    if getattr(current, "auth_cookie_samesite", "lax") == "none" and not getattr(current, "auth_cookie_secure", False):
+        raise RuntimeError("AUTH_COOKIE_SAMESITE=none 时必须同时设置 AUTH_COOKIE_SECURE=true")
+
+
+def validate_initial_admin_password(password: str | None, current: Settings | None = None) -> None:
+    """仅在首次创建管理员前校验初始密码，不影响已有管理员升级。"""
+    current = current or settings
+    if current.allow_insecure_defaults:
+        return
+    value = (password or "").strip()
+    if len(value) < 12 or value.lower() in _UNSAFE_ADMIN_PASSWORDS:
+        raise RuntimeError(
+            "ADMIN_PASSWORD 不安全：首次初始化请设置至少 12 位且非默认值的管理员密码；"
+            "仅本地演示可显式设置 ALLOW_INSECURE_DEFAULTS=true"
+        )
 
 
 @lru_cache

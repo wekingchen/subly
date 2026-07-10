@@ -1,5 +1,5 @@
 import { createRouter, createWebHistory } from 'vue-router'
-import api from '../api'
+import { useAuth } from '../stores/auth'
 
 const routes = [
   { path: '/login', component: () => import('../views/Login.vue'), meta: { guest: true } },
@@ -24,31 +24,20 @@ const routes = [
 
 const router = createRouter({ history: createWebHistory(), routes })
 
-// 内置 SQLite，零配置，数据库始终就绪，无需再检测「是否已安装」
-router.beforeEach(async (to, from) => {
-  const loggedIn = !!localStorage.getItem('access_token')
-  if (!to.meta.guest && !loggedIn) return '/login'
-  if (to.meta.guest && loggedIn) return '/dashboard'
-  if (to.meta.admin) {
-    try {
-      const { data } = await api.get('/api/auth/me')
-      if (!data?.is_admin) return '/dashboard'
-    } catch (err) {
-      // 仅在确认鉴权失败时清退会话；网络抖动 / 5xx 不应强制登出，否则后端短暂
-      // 不稳定会让每次进入 admin 页都变成登出循环。
-      const status = err?.response?.status
-      if (status === 401 || status === 403) {
-        localStorage.removeItem('access_token')
-        localStorage.removeItem('refresh_token')
-        return '/login'
-      }
-      // 未知错误（网络 / 5xx）：保留会话。从已有页面进入则中止导航留在原页；
-      // 若是首次导航（from 为初始 START_LOCATION），中止会停在空白根视图，故重定向
-      // 到 /dashboard，让用户至少落到可见页面，而不是卡在空白屏。
-      if (from.matched.length === 0) return '/dashboard'
-      return false
-    }
+// 内置 SQLite，零配置，数据库始终就绪；首次导航先用 HttpOnly refresh cookie 恢复会话。
+router.beforeEach(async (to) => {
+  const auth = useAuth()
+  try {
+    await auth.initialize()
+  } catch {
+    // 网络 / 5xx 不清退或伪装成未登录；允许目标页加载，后端接口仍会独立保护数据。
+    // 用户可在服务恢复后刷新重试，旧迁移凭据也会保留。
+    return true
   }
+
+  if (!to.meta.guest && !auth.isLoggedIn) return '/login'
+  if (to.meta.guest && auth.isLoggedIn) return '/dashboard'
+  if (to.meta.admin && !auth.user?.is_admin) return '/dashboard'
 })
 
 export default router

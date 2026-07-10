@@ -1,3 +1,4 @@
+import pytest
 from sqlalchemy import create_engine, text
 
 from app import migrate
@@ -67,5 +68,53 @@ def test_migrate_scrubs_dangerous_outbound_urls():
         # 用户2：元数据地址和危险协议都被清空
         assert r2["telegram_api_base"] is None
         assert r2["bark_server"] is None
+    finally:
+        engine.dispose()
+
+
+def test_schema_migration_failure_is_fatal_and_stops_later_columns(monkeypatch):
+    engine = create_engine("sqlite:///:memory:")
+    monkeypatch.setattr(
+        migrate,
+        "_COLUMNS",
+        [
+            ("items", "broken", "INTEGER NOT NULL DEFAULT ("),
+            ("items", "should_not_exist", "INTEGER"),
+        ],
+    )
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("CREATE TABLE items (id INTEGER PRIMARY KEY)"))
+
+        with pytest.raises(RuntimeError, match=r"items\.broken"):
+            migrate.run_migrations(engine)
+
+        with engine.begin() as conn:
+            columns = {row[1] for row in conn.execute(text("PRAGMA table_info('items')"))}
+        assert "broken" not in columns
+        assert "should_not_exist" not in columns
+    finally:
+        engine.dispose()
+
+
+def test_schema_migration_skips_missing_table_and_existing_column(monkeypatch):
+    engine = create_engine("sqlite:///:memory:")
+    monkeypatch.setattr(
+        migrate,
+        "_COLUMNS",
+        [
+            ("missing_table", "value", "INTEGER"),
+            ("items", "existing", "INTEGER"),
+        ],
+    )
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("CREATE TABLE items (id INTEGER PRIMARY KEY, existing INTEGER)"))
+
+        migrate.run_migrations(engine)
+
+        with engine.begin() as conn:
+            columns = [row[1] for row in conn.execute(text("PRAGMA table_info('items')"))]
+        assert columns.count("existing") == 1
     finally:
         engine.dispose()
