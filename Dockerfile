@@ -7,7 +7,7 @@ COPY frontend/ ./
 RUN npm run build
 
 # ---------- 阶段 2：后端运行时 ----------
-FROM python:3.12-slim AS backend
+FROM python:3.14-slim AS backend
 ENV PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1
 WORKDIR /app
 
