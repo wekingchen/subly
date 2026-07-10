@@ -198,7 +198,7 @@ npm audit --audit-level=high
 
 测试包含后端数据库/API 回归、前端 Vitest 工具与会话迁移单测，以及 Chromium Playwright smoke：真实验证登录、HttpOnly Cookie 刷新恢复、旧 `localStorage` Token 一次性迁移、退出、CORS 和关键页面 CSP。外网通知/图标 provider 仍以 stub 或专项运行验收为主。
 
-GitHub Actions 对 PR 运行 Ruff、ESLint、后端测试、前端测试/构建、两份 compose 配置校验和非阻塞依赖审计；推送到 `main`、`v*` tag 或从 `main` 手动发布时，才分别构建 amd64/arm64 发布归档供 Trivy 扫描，并用通过门禁的 amd64 产物运行 Chromium E2E。门禁通过后直接发布同一批已扫描归档，不再二次重建；仅存在修复版本的 High/Critical 镜像漏洞阻断发布。`pip-audit` / `npm audit` 发现问题时保留日志并显示 warning；Dependabot 每周分组检查 Python、npm 与 GitHub Actions 的 minor/patch 更新，semver major 不自动开 PR，0.x 更新仍需人工审查，Docker 基础镜像升级改为人工规划。手动镜像发布只允许从 `main` 分支运行；`v*` tag 必须指向 `main` 历史，只发布对应版本 tag，不回写 `latest`，避免未合并代码发布或旧提交回滚正式镜像。
+GitHub Actions 对 PR 运行 Ruff、ESLint、后端测试、前端测试/构建、两份 compose 配置校验和非阻塞依赖审计；推送到 `main`、`v*` tag 或从 `main` 手动发布时，才分别构建 amd64/arm64 发布归档供 Trivy 扫描，并用通过门禁的 amd64 产物运行 Chromium E2E。门禁通过后直接发布同一批已扫描归档，不再二次重建；仅存在修复版本的 High/Critical 镜像漏洞阻断发布。`pip-audit` / `npm audit` 发现问题时保留日志并显示 warning；为保持仓库只存在 `main`，不启用 Dependabot 自动 version-update PR，Python、npm、GitHub Actions 与 Docker 基础镜像升级统一人工规划，发布产物继续由 Trivy 覆盖可修复的 High/Critical 漏洞。手动镜像发布只允许从 `main` 分支运行；`v*` tag 必须指向 `main` 历史，只发布对应版本 tag，不回写 `latest`，避免未合并代码发布或旧提交回滚正式镜像。
 
 ---
 
