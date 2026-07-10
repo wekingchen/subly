@@ -330,32 +330,64 @@ def _max_icon_bytes() -> int:
     return max(1024, int(settings.icon_fetch_max_bytes or 262144))
 
 
-def _read_limited(resp: httpx.Response, limit: int) -> bytes | None:
+def _read_limited(resp: httpx.Response, limit: int, *, max_seconds: float | None = None) -> bytes | None:
+    """流式读取 resp，累计超 limit 返回 None；总时长超 max_seconds 抛 IconReadTimeout。
+
+    httpx 的 read timeout 只限单次读空闲，不限总时长；慢速分块响应可长期占住并发，
+    故加 wall-clock deadline（基于 time.monotonic）兜底。超时抛异常而非返回 None，
+    便于调用方区分「超大（不记 failure）」与「慢速（记 failure 触发 provider 冷却）」。
+    """
     total = 0
     chunks: list[bytes] = []
     length = resp.headers.get("content-length")
     if length and length.isdigit() and int(length) > limit:
         return None
+    deadline = time.monotonic() + max_seconds if max_seconds else None
     for chunk in resp.iter_bytes():
         total += len(chunk)
         if total > limit:
             return None
+        if deadline and time.monotonic() > deadline:
+            logger.warning("event=icon_read_timeout limit=%d read=%d", limit, total)
+            raise IconReadTimeout(limit, total)
         chunks.append(chunk)
     return b"".join(chunks)
 
 
-def _read_prefix(resp: httpx.Response, limit: int) -> bytes:
+class IconReadTimeout(Exception):
+    """图标流式读取总时长超限（慢速 drip-feed），应记 provider failure 触发冷却。"""
+
+    def __init__(self, limit: int, read: int):
+        self.limit = limit
+        self.read = read
+
+
+def _read_prefix(resp: httpx.Response, limit: int, *, max_seconds: float | None = None) -> bytes:
+    """读取 resp 前 limit 字节；总时长超 max_seconds 则返回已读部分（截断）。"""
     total = 0
     chunks: list[bytes] = []
+    deadline = time.monotonic() + max_seconds if max_seconds else None
     for chunk in resp.iter_bytes():
         if total + len(chunk) > limit:
             chunks.append(chunk[: max(0, limit - total)])
+            break
+        if deadline and time.monotonic() > deadline:
+            logger.warning("event=icon_read_prefix_timeout limit=%d read=%d", limit, total)
             break
         chunks.append(chunk)
         total += len(chunk)
         if total >= limit:
             break
     return b"".join(chunks)
+
+
+def _read_max_seconds() -> float:
+    """流式读取总时长上限：单次读超时的 3 倍，下限 3 秒。
+
+    httpx read timeout 只限单次读空闲；慢速分块响应需 wall-clock 兜底防长期占并发。
+    """
+    single = max(1.0, float(settings.icon_fetch_timeout_s or 2.0))
+    return max(3.0, single * 3)
 
 
 def _same_site_url(url: str, domain: str) -> bool:
@@ -514,8 +546,8 @@ def _fetch_candidate_icon(client: httpx.Client, url: str, provider: str, slug: s
             detected = _detect_icon_type(final, _content_type(resp.headers))
             if not detected:
                 return None
-            data = _read_limited(resp, _max_icon_bytes())
-    except (httpx.RequestError, httpx.HTTPStatusError):
+            data = _read_limited(resp, _max_icon_bytes(), max_seconds=_read_max_seconds())
+    except (httpx.RequestError, httpx.HTTPStatusError, IconReadTimeout):
         _record_provider_failure(provider)
         return None
     if not data:
@@ -539,7 +571,7 @@ def _discover_icon_links(client: httpx.Client, domain: str) -> list[str]:
             content_type = _content_type(resp.headers)
             if content_type and content_type not in ("text/html", "application/xhtml+xml"):
                 return []
-            data = _read_prefix(resp, _HTML_READ_LIMIT)
+            data = _read_prefix(resp, _HTML_READ_LIMIT, max_seconds=_read_max_seconds())
             base_url = final
     except (httpx.RequestError, httpx.HTTPStatusError):
         return []
@@ -762,8 +794,8 @@ def import_from_url(payload: IconUrlIn, admin: User = Depends(get_admin_user)):
             with client.stream("GET", final, headers=_ICON_HEADERS) as resp:
                 resp.raise_for_status()
                 ctype = resp.headers.get("content-type", "")
-                content = _read_limited(resp, MAX_BYTES)
-    except httpx.HTTPError:
+                content = _read_limited(resp, MAX_BYTES, max_seconds=_read_max_seconds())
+    except (httpx.HTTPError, IconReadTimeout):
         raise HTTPException(502, "下载失败，请检查图标地址是否可访问")
     if content is None:
         raise HTTPException(400, "图标过大（上限 2MB）")

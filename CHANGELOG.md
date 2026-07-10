@@ -33,6 +33,8 @@
 - 实时日志时间按容器 `TZ` / `settings.tz`（默认 `Asia/Shanghai`）显示：`/api/logs` 现在返回带 UTC 时区标记的 `created_at`，前端按系统时区格式化。
 
 ### Changed
+- 图标抓取流式读取加 wall-clock deadline（单次读超时的 3 倍，下限 3 秒）：httpx 的 read timeout 只限单次读空闲，慢速分块响应可长期占住抓取并发，现超总时长即中止并记 provider failure 触发冷却（避免后续 slug 反复重试同一慢 provider）。
+- 清理自有代码中已弃用的 `datetime.utcnow()`，改为 `datetime.now(timezone.utc)`（存 naive UTC 列时用 `.replace(tzinfo=None)` 保持一致），消除 DeprecationWarning；上游 jose / passlib 的弃用告警待其发版。
 - README、Docker Hub、NAS 与技术文档统一项目名表述：正式名称使用 `Subly`，中文定位调整为“你的自托管续费雷达”。
 - 桌面端订阅卡片动作区降权为更轻的续费雷达工具条，并补充「续费」仅更新记录与到期日、不触发付款的说明，避免误认为支付入口。
 - 桌面端订阅卡片仅保留「续费」快捷操作，编辑与删除收进 `⋯` 菜单，降低低频 / 高危操作对卡片主体的干扰。

@@ -17,6 +17,7 @@ from app.database import get_db
 from app.deps import get_admin_user, get_current_user
 from app.models import Bundle, Category, Currency, PaymentMethod, Subscription, User
 from app.schemas import sanitize_url
+from app.services.scheduler import utcnow
 from app.security import hash_password
 from app.subscription_rules import apply_keepalive_scope
 
@@ -341,7 +342,7 @@ def export_data(user: User = Depends(get_current_user), db: Session = Depends(ge
     return {
         "export_version": EXPORT_VERSION,
         "app": "Subly",
-        "exported_at": datetime.utcnow().isoformat(timespec="seconds"),
+        "exported_at": utcnow().isoformat(timespec="seconds"),
         "user": {
             "username": user.username,
             "base_currency": user.base_currency,
@@ -412,7 +413,7 @@ def export_all(admin: User = Depends(get_admin_user), db: Session = Depends(get_
         "export_version": EXPORT_VERSION,
         "app": "Subly",
         "scope": "all",
-        "exported_at": datetime.utcnow().isoformat(timespec="seconds"),
+        "exported_at": utcnow().isoformat(timespec="seconds"),
         "users": payload_users,
     }
 

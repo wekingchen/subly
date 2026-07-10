@@ -5,7 +5,7 @@
 返回 { "rates": { "CNY": 7.2, "EUR": 0.93, ... } }
 """
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import httpx
 from sqlalchemy import select
@@ -70,9 +70,8 @@ def refresh_rates(db: Session) -> int:
         )
         if row:
             row.rate = rate
-            from datetime import datetime
-
-            row.updated_at = datetime.utcnow()
+            # naive UTC，替代已弃用的 datetime.utcnow()；不 import scheduler.utcnow 避免循环依赖
+            row.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
         else:
             db.add(ExchangeRate(base=base, quote=quote, rate=rate))
         count += 1
@@ -92,7 +91,7 @@ def is_stale(db: Session, max_age_hours: int = 12) -> bool:
     )
     if newest is None:
         return True
-    return datetime.utcnow() - newest > timedelta(hours=max_age_hours)
+    return datetime.now(timezone.utc).replace(tzinfo=None) - newest > timedelta(hours=max_age_hours)
 
 
 def refresh_if_stale(db: Session, max_age_hours: int = 12) -> dict:

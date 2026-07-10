@@ -193,3 +193,47 @@ def test_from_url_rejects_oversized_without_full_download(monkeypatch):
     with pytest.raises(HTTPException) as exc:
         icons.import_from_url(icons.IconUrlIn(url="https://example.com/big.png"), _user(is_admin=True))
     assert exc.value.status_code == 400
+
+
+def test_read_limited_aborts_on_slow_stream():
+    """图标 deadline：慢速分块（总时长超 max_seconds）应中止抛 IconReadTimeout，不长期占住。"""
+    import time as _time
+
+    class _SlowResp:
+        headers = {}  # 无 content-length，走 iter_bytes
+        def iter_bytes(self):
+            for _ in range(100):
+                _time.sleep(0.02)  # 每块 20ms，累积超过 max_seconds=0.05
+                yield b"x" * 10
+
+    # max_seconds=0.05，100 块 * 20ms = 2s 远超，应在中途超时抛 IconReadTimeout
+    with pytest.raises(icons.IconReadTimeout):
+        icons._read_limited(_SlowResp(), limit=10 * 1024, max_seconds=0.05)
+
+
+def test_fetch_candidate_records_provider_failure_on_timeout(monkeypatch):
+    """慢速 provider 触发 deadline 后应记 provider failure，后续被冷却而非反复重试。"""
+    import time as _time
+    recorded = []
+    monkeypatch.setattr(icons, "_record_provider_failure", lambda p: recorded.append(p))
+
+    class _SlowResp:
+        headers = {"content-type": "image/png"}
+        def raise_for_status(self): pass
+        def iter_bytes(self):
+            _time.sleep(0.06)  # 单块就超 max_seconds
+            yield b"x" * 10
+
+    class _Stream:
+        def __enter__(self): return _SlowResp()
+        def __exit__(self, *a): return False
+
+    class _Client:
+        def stream(self, method, url, **k): return _Stream()
+
+    monkeypatch.setattr(icons, "_safe_resolve", lambda c, url, **k: url)
+    monkeypatch.setattr(icons, "_read_max_seconds", lambda: 0.02)
+
+    result = icons._fetch_candidate_icon(_Client(), "https://example.com/x.png", "unavatar")
+    assert result is None  # 超时 -> 失败
+    assert "unavatar" in recorded  # 记了 failure，后续会被 _provider_skipped 冷却

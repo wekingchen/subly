@@ -48,6 +48,16 @@ def _local_today() -> date:
     return datetime.now(_local_zone()).date()
 
 
+def utcnow() -> datetime:
+    """当前 UTC 时刻（naive，无 tzinfo）。
+
+    替代已弃用的 datetime.utcnow()。返回 naive 以与库里既有的 naive UTC 列
+    （sent_at / updated_at 等 server_default=func.now()）保持一致，避免 aware/naive
+    混用导致比较错乱。
+    """
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
 def _as_local_date(value) -> date | None:
     """把存储为 naive UTC 的 sent_at 转成本地日期；None / 非法值返回 None。"""
     if value is None:
@@ -127,7 +137,7 @@ def _send_one(
             user=user,
             level="error",
         )
-    log.sent_at = datetime.utcnow()
+    log.sent_at = utcnow()
     db.add(log)
     if seen is not None:
         seen.add(key)

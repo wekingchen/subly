@@ -1,4 +1,4 @@
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 import pytest
 from sqlalchemy import create_engine, select
@@ -61,7 +61,7 @@ def test_run_data_diagnostics_reports_core_data_issues():
         add_subscription(db, user, name="提醒异常", remind_days_before="bad")
         add_subscription(db, user, name="保号越界", is_keepalive=True, category_id=None)
         add_subscription(db, user, name="买断残留", billing_type="one_time", auto_renew=True, next_renewal_date=date(2024, 2, 1), category_id=carrier.id)
-        db.add(NotificationLog(user_id=user.id, subscription_id=9999, channel="bark", days_before=7, status="failed", message="RuntimeError", sent_at=datetime.utcnow()))
+        db.add(NotificationLog(user_id=user.id, subscription_id=9999, channel="bark", days_before=7, status="failed", message="RuntimeError", sent_at=datetime.now(timezone.utc)))
         db.commit()
 
         out = diagnostics.run_data_diagnostics(db)

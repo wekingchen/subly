@@ -23,6 +23,7 @@ from app.schemas import (
     IconServiceUpdate,
     is_internal_host,
 )
+from app.services.scheduler import utcnow
 
 router = APIRouter(prefix="/api/admin/icon-services", tags=["admin-icons"])
 
@@ -243,7 +244,7 @@ def update_service(
 
     for k, v in data.items():
         setattr(row, k, v)
-    row.updated_at = datetime.utcnow()
+    row.updated_at = utcnow()
     db.commit()
     db.refresh(row)
     activity.log("admin.icon_service_update", f"更新服务「{row.name}」({row.slug})", user=admin)
@@ -261,7 +262,7 @@ def delete_service(
     if not row:
         raise HTTPException(404, "服务不存在")
     row.is_active = False
-    row.updated_at = datetime.utcnow()
+    row.updated_at = utcnow()
     db.commit()
     db.refresh(row)
     activity.log("admin.icon_service_delete", f"停用服务「{row.name}」({row.slug})", user=admin, level="warn")
@@ -278,7 +279,7 @@ def restore_service(
     if not row:
         raise HTTPException(404, "服务不存在")
     row.is_active = True
-    row.updated_at = datetime.utcnow()
+    row.updated_at = utcnow()
     db.commit()
     db.refresh(row)
     activity.log("admin.icon_service_restore", f"启用服务「{row.name}」({row.slug})", user=admin)
@@ -387,7 +388,7 @@ def _run_preheat(job_id: str, targets: list[dict], force: bool) -> None:
             job["status"] = "failed"
     finally:
         with _preheat_lock:
-            job["finished_at"] = datetime.utcnow().timestamp()
+            job["finished_at"] = utcnow().timestamp()
             job["current"] = None
             _purge_old_jobs()
 
@@ -430,7 +431,7 @@ def start_prewarm(
             "failed": 0,
             "skipped": 0,
             "current": None,
-            "started_at": datetime.utcnow().timestamp(),
+            "started_at": utcnow().timestamp(),
             "finished_at": None,
             "items": [],
         }
@@ -439,7 +440,7 @@ def start_prewarm(
     if not targets:
         with _preheat_lock:
             job["status"] = "completed"
-            job["finished_at"] = datetime.utcnow().timestamp()
+            job["finished_at"] = utcnow().timestamp()
             _purge_old_jobs()
             return _snapshot(job)
 
