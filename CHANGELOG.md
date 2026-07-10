@@ -18,6 +18,7 @@
 - 内置服务库新增「智谱 GLM」（AI）与「火山引擎 / 豆包」（AI + VPS，因火山引擎同时提供豆包大模型与火山云服务器）。
 
 ### Fixed
+- 修复发布镜像被 Starlette 高危 DoS 漏洞阻断：将 FastAPI 升级至 `0.133.1` 并显式固定已修复的 Starlette `1.3.1`，保留 Trivy 对可修复 High/Critical 项的发布硬门禁，不以忽略规则绕过；`pip-audit` 当前仅剩 ecdsa 无可用修复版本项。
 - 浏览器会话与响应头安全收口：新前端不再把 Token 写入 `localStorage`，Access Token 仅驻留页面内存，Refresh Token 使用 `Path=/api/auth` 的 HttpOnly/SameSite Cookie，并以 `refresh_sessions.jti` 实现服务端一次性轮换：刷新原子消费旧 session，logout 撤销当前 session 后删除 Cookie，旧 token 重放返回 401；旧 localStorage Refresh Token 仅在 Cookie 401 后迁移一次（旧版无 jti token 用 SHA-256 指纹防重复消费），明确 401/403 才删除，网络/5xx 保留供下次重试；logout 网络失败时不清本地状态并提示重试，避免假退出。后端暂时保留 body/响应体 refresh token 兼容桥供旧页面迁移；移除 wildcard+credentials CORS，并为 SPA、API 文档和通用响应补 CSP、nosniff、Referrer、Frame、Permissions 安全头。
 - 数据库结构迁移改为 fail-fast：旧库补必需列时若 DDL 失败，记录表/列上下文并终止启动，不再打印“跳过”后带着半迁移结构继续运行；缺表与已有列仍保持幂等跳过，历史数据回填/清理维持兼容告警策略。
 - 认证安全闭环：登录、Refresh Token 与受保护接口统一检查邮箱验证、管理员审核和账号启用状态，撤销审核/禁用后旧 Access Token 与 Refresh Token 均立即失效；登录、注册和邮箱验证码入口新增线程安全的单进程滑动窗口限流并返回 `Retry-After`，默认 Caddy compose 信任其代理头以按真实客户端区分限流桶；启动时拒绝空值、占位值或过短的 `JWT_SECRET`，首次创建管理员时拒绝默认/弱密码（已有管理员不受环境变量旧值影响）；SMTP 验证码改为发送成功后再提交用户，失败不再留下占用用户名/邮箱的半注册账号，客户端错误不回显底层 SMTP 异常；验证码过期后可凭相同用户名、邮箱和原密码重新注册并签发新验证码，不再陷入唯一约束死锁。
@@ -37,7 +38,7 @@
 - 实时日志时间按容器 `TZ` / `settings.tz`（默认 `Asia/Shanghai`）显示：`/api/logs` 现在返回带 UTC 时区标记的 `created_at`，前端按系统时区格式化。
 
 ### Changed
-- Docker 与发布链路加固：前端镜像构建只使用 `npm ci`，新增 `.dockerignore`，运行时切换为固定 UID/GID `10001` 的非 root 用户；GitHub Actions 在发布前强制执行后端/前端测试、前端构建、Compose 校验与 amd64/arm64 双架构 Trivy 可修复 High/Critical 门禁；双架构发布归档只构建一次，扫描通过后直接推送同一批产物并组装 manifest，避免二次构建漂移；同一 ref 的旧发布会被并发取消以防旧构建回写 `latest`，手动发布仅允许从 `main` 运行以防未合并分支覆盖正式镜像；pip/npm 审计先以可见性检查接入，Dependabot 每周检查四类依赖。同步将 `python-jose` 升至 `3.5.0`、`python-multipart` 升至 `0.0.31`、`cryptography` 升至 `48.0.1`，`pip-audit` 已知漏洞从 21 个降至 8 个；剩余为 FastAPI 当前约束下的 Starlette 上游项与 ecdsa 无修复项。
+- Docker 与发布链路加固：前端镜像构建只使用 `npm ci`，新增 `.dockerignore`，运行时切换为固定 UID/GID `10001` 的非 root 用户；PR 只运行后端/前端测试、lint、构建、Compose 与非阻塞依赖审计，main/tag/手动发布才构建 amd64/arm64 归档、执行 Trivy 可修复 High/Critical 门禁与 Chromium E2E；双架构发布归档只构建一次，扫描通过后直接推送同一批产物并组装 manifest，避免二次构建漂移；同一 ref 的旧发布会被并发取消以防旧构建回写 `latest`，手动发布仅允许从 `main` 运行；`v*` tag 必须指向 `main` 历史且只写版本 tag，不再用旧提交回滚 `latest`；pip/npm 审计失败改为 warning，避免成功 job 携带误导性的 error annotation。Dependabot 将 pip/npm/GitHub Actions 的 minor/patch 更新各自分组并忽略 semver major，0.x 更新仍须人工审查且不自动合并；暂停 Docker version PR，基础镜像安全继续由发布产物 Trivy 覆盖。同步将 `python-jose` 升至 `3.5.0`、`python-multipart` 升至 `0.0.31`、`cryptography` 升至 `48.0.1`、FastAPI 升至 `0.133.1` 并固定 Starlette `1.3.1`。
 - 图标抓取流式读取加 wall-clock deadline（单次读超时的 3 倍，下限 3 秒）：httpx 的 read timeout 只限单次读空闲，慢速分块响应可长期占住抓取并发，现超总时长即中止并记 provider failure 触发冷却（避免后续 slug 反复重试同一慢 provider）。
 - 清理自有代码中已弃用的 `datetime.utcnow()`，改为 `datetime.now(timezone.utc)`（存 naive UTC 列时用 `.replace(tzinfo=None)` 保持一致），消除 DeprecationWarning；上游 jose / passlib 的弃用告警待其发版。
 - README、Docker Hub、NAS 与技术文档统一项目名表述：正式名称使用 `Subly`，中文定位调整为“你的自托管续费雷达”。

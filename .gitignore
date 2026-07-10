@@ -1,6 +1,9 @@
 # Claude / local agent state
 /.claude/
 
+# OS metadata
+.DS_Store
+
 # Python caches and virtual environments
 __pycache__/
 *.py[cod]

@@ -25,12 +25,24 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
       - name: Reject manual releases outside main
         if: github.event_name == 'workflow_dispatch' && github.ref != 'refs/heads/main'
         run: |
           echo "Manual image releases must run from the main branch." >&2
           exit 1
+
+      - name: Reject release tags outside main history
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          git fetch --no-tags origin main:refs/remotes/origin/main
+          if ! git merge-base --is-ancestor "${GITHUB_SHA}" origin/main; then
+            echo "Release tags must point to a commit contained in main." >&2
+            exit 1
+          fi
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -53,8 +65,11 @@ jobs:
         run: python -m ruff check app
 
       - name: Audit Python dependencies
-        continue-on-error: true
-        run: python -m pip_audit -r backend/requirements.txt
+        shell: bash
+        run: |
+          if ! python -m pip_audit -r backend/requirements.txt; then
+            echo "::warning::Python 依赖审计发现已知漏洞；该步骤仅报告，最终镜像 Trivy 门禁仍会阻断可修复的 High/Critical 项。"
+          fi
 
       - name: Set up Node.js
         uses: actions/setup-node@v6
@@ -80,9 +95,12 @@ jobs:
         run: npm run build
 
       - name: Audit frontend dependencies
-        continue-on-error: true
         working-directory: frontend
-        run: npm audit --audit-level=high
+        shell: bash
+        run: |
+          if ! npm audit --audit-level=high; then
+            echo "::warning::前端依赖审计发现 High/Critical 漏洞；该步骤仅报告，需单独评估并升级。"
+          fi
 
       - name: Validate Docker Compose files
         run: |
@@ -91,6 +109,7 @@ jobs:
           docker compose -f docker-compose.hub.yml config
 
   image-scan:
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     needs: verify
     permissions:
@@ -304,7 +323,12 @@ jobs:
             docker push "${AMD64_REF}"
             docker push "${ARM64_REF}"
 
-            for TAG in latest "${VERSION}"; do
+            TAGS=("${VERSION}")
+            if [[ "${GITHUB_REF_TYPE}" != "tag" ]]; then
+              TAGS=(latest "${VERSION}")
+            fi
+
+            for TAG in "${TAGS[@]}"; do
               TARGET="${REPO}:${TAG}"
               docker manifest rm "${TARGET}" >/dev/null 2>&1 || true
               docker manifest create "${TARGET}" "${AMD64_REF}" "${ARM64_REF}"

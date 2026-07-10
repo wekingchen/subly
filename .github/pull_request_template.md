@@ -18,7 +18,7 @@ Closes #
 
 ## 测试与验证
 
-请列出你实际运行过的验证命令和结果。
+请列出你实际运行过的验证命令和结果。PR CI 只运行快速验证；双架构 Trivy、容器 Playwright E2E 与镜像发布在 main/tag/手动发布链路执行。
 
 - [ ] `cd backend && python -m pytest`
 - [ ] `cd backend && python -m ruff check app`
