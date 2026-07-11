@@ -226,6 +226,18 @@ jobs:
             -e ALLOW_INSECURE_DEFAULTS=false \
             subly:ci-amd64
 
+      - name: Reject non-root UID other than 10001
+        run: |
+          set +e
+          docker run --rm --user 1000:1000 subly:ci-amd64 true > /tmp/subly-uid-stderr 2>&1
+          status=$?
+          if [ "${status}" = "0" ]; then
+            echo "ERROR: container accepted UID 1000, expected hard failure" >&2
+            cat /tmp/subly-uid-stderr
+            exit 1
+          fi
+          grep -q 'must run as UID 10001' /tmp/subly-uid-stderr
+
       - name: Wait for application health
         run: |
           for attempt in $(seq 1 60); do

@@ -19,6 +19,7 @@
 
 ### Fixed
 - 修复旧数据卷升级后 SQLite 启动报 `attempt to write a readonly database`：容器入口先修复 `/app/data` 中历史 root-owned 目录和文件的 ownership，再通过 `gosu` 以 UID/GID `10001` 启动 Uvicorn；CI 使用真实 root-owned bind mount 验证数据库可写、PID 1 已降权、浏览器 E2E 与双架构发布均正常。
+- 容器入口权限校验收紧：`chown` 改为按设备号过滤、不跨文件系统（避免修改嵌套挂载到其他卷的内容）；启动前校验 `/app/data` 整棵树的可写与目录可搜索权限，遍历失败不再被静默吞掉；非 root 运行且 UID 不为 `10001` 时直接拒绝启动，错误信息统一指向 `10001:10001`。CI 增加非 root UID 校验。
 - 修复发布镜像被 Starlette 高危 DoS 漏洞阻断：将 FastAPI 升级至 `0.133.1` 并显式固定已修复的 Starlette `1.3.1`，保留 Trivy 对可修复 High/Critical 项的发布硬门禁，不以忽略规则绕过；`pip-audit` 当前仅剩 ecdsa 无可用修复版本项。
 - 浏览器会话与响应头安全收口：新前端不再把 Token 写入 `localStorage`，Access Token 仅驻留页面内存，Refresh Token 使用 `Path=/api/auth` 的 HttpOnly/SameSite Cookie，并以 `refresh_sessions.jti` 实现服务端一次性轮换：刷新原子消费旧 session，logout 撤销当前 session 后删除 Cookie，旧 token 重放返回 401；旧 localStorage Refresh Token 仅在 Cookie 401 后迁移一次（旧版无 jti token 用 SHA-256 指纹防重复消费），明确 401/403 才删除，网络/5xx 保留供下次重试；logout 网络失败时不清本地状态并提示重试，避免假退出。后端暂时保留 body/响应体 refresh token 兼容桥供旧页面迁移；移除 wildcard+credentials CORS，并为 SPA、API 文档和通用响应补 CSP、nosniff、Referrer、Frame、Permissions 安全头。
 - 数据库结构迁移改为 fail-fast：旧库补必需列时若 DDL 失败，记录表/列上下文并终止启动，不再打印“跳过”后带着半迁移结构继续运行；缺表与已有列仍保持幂等跳过，历史数据回填/清理维持兼容告警策略。
