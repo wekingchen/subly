@@ -1,11 +1,18 @@
 """首次启动时写入系统预置数据：货币、分类、付款方式、管理员账户。"""
-from sqlalchemy import select
+import logging
+import math
+from datetime import datetime, timezone
+
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app import icon_library
 from app.config import settings, validate_initial_admin_password
-from app.models import Category, Currency, IconLibraryService, User
+from app.models import Category, Currency, ExchangeRate, IconLibraryService, User
 from app.security import hash_password
+from app.services import exchange
+
+logger = logging.getLogger(__name__)
 
 # 全球常用流通货币
 CURRENCIES = [
@@ -24,6 +31,7 @@ CURRENCIES = [
     ("CHF", "瑞士法郎 Swiss Franc", "Fr"),
     ("INR", "印度卢比 Indian Rupee", "₹"),
     ("BRL", "巴西雷亚尔 Brazilian Real", "R$"),
+    ("BOB", "玻利维亚诺 Bolivian Boliviano", "Bs"),
     ("THB", "泰铢 Thai Baht", "฿"),
     ("MYR", "马来西亚林吉特 Malaysian Ringgit", "RM"),
     ("PHP", "菲律宾比索 Philippine Peso", "₱"),
@@ -64,10 +72,85 @@ PAYMENT_METHODS = [
 ]
 
 
+def _install_system_currency(
+    db: Session,
+    currency: Currency | None,
+    code: str,
+    name: str,
+    symbol: str,
+) -> bool:
+    base = (settings.exchange_api_base or "USD").upper()
+    try:
+        official_rates = exchange.fetch_rates(base)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "event=seed_currency_install_deferred code=%s error_type=%s status_code=%s",
+            code,
+            type(exc).__name__,
+            exchange.error_status_code(exc),
+        )
+        return False
+
+    required_codes = set(
+        db.scalars(select(Currency.code).where(Currency.is_custom.is_(False))).all()
+    )
+    required_codes.add(code)
+    for required_code in required_codes:
+        rate = 1.0 if required_code == base else official_rates.get(required_code)
+        if rate is None or not math.isfinite(rate) or rate <= 0:
+            logger.warning(
+                "event=seed_currency_install_deferred code=%s reason=official_rates_incomplete",
+                code,
+            )
+            return False
+
+    if currency is None:
+        db.add(Currency(code=code, name=name, symbol=symbol, is_custom=False))
+    else:
+        currency.name = name
+        currency.symbol = symbol
+        currency.is_custom = False
+        currency.user_id = None
+
+    # 历史手动 BOB 汇率来源不可验证；系统报价全量更新，自定义币种报价保持不变。
+    db.execute(delete(ExchangeRate).where(ExchangeRate.quote == code))
+    updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
+    for quote, rate in official_rates.items():
+        if not math.isfinite(rate) or rate <= 0:
+            continue
+        row = db.scalar(
+            select(ExchangeRate).where(
+                ExchangeRate.base == base,
+                ExchangeRate.quote == quote,
+            )
+        )
+        if row is None:
+            db.add(
+                ExchangeRate(
+                    base=base,
+                    quote=quote,
+                    rate=rate,
+                    updated_at=updated_at,
+                )
+            )
+        else:
+            row.rate = rate
+            row.updated_at = updated_at
+    return True
+
+
 def seed_all(db: Session) -> None:
-    if not db.scalar(select(Currency).limit(1)):
-        for code, name, symbol in CURRENCIES:
-            db.add(Currency(code=code, name=name, symbol=symbol, is_custom=False))
+    existing_currencies = {currency.code: currency for currency in db.scalars(select(Currency)).all()}
+    fresh_currency_table = not existing_currencies
+    for code, name, symbol in CURRENCIES:
+        currency = existing_currencies.get(code)
+        if currency is None:
+            if code == "BOB" and not fresh_currency_table:
+                _install_system_currency(db, None, code, name, symbol)
+            else:
+                db.add(Currency(code=code, name=name, symbol=symbol, is_custom=False))
+        elif currency.is_custom:
+            _install_system_currency(db, currency, code, name, symbol)
 
     existing_category_names = set(db.scalars(select(Category.name).where(Category.is_system.is_(True))).all())
     for i, (name, icon, color) in enumerate(CATEGORIES):
