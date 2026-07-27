@@ -62,10 +62,16 @@ test('登录、Cookie 恢复、旧令牌迁移与退出形成闭环', async ({ p
   await expect(page).toHaveURL(/\/dashboard$/)
   await expect(page.locator('.user .uname')).toHaveText(username)
 
-  for (const path of ['/subscriptions', '/settings', '/admin-diagnostics']) {
+  for (const { path, heading } of [
+    { path: '/subscriptions', heading: '订阅账本' },
+    { path: '/settings', heading: '设置' },
+    { path: '/admin-diagnostics', heading: '数据诊断' }
+  ]) {
     const response = await page.goto(path)
     expectSpaCsp(response)
-    await expect(page).not.toHaveURL(/\/login$/)
+    await expect(page.locator('.user .uname')).toHaveText(username)
+    await expect(page).toHaveURL(new RegExp(`${path}$`))
+    await expect(page.getByRole('heading', { level: 1, name: heading, exact: true })).toBeVisible()
   }
 
   await page.route('**/api/auth/logout', (route) => route.abort())
