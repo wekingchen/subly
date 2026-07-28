@@ -370,7 +370,8 @@ def test_import_all_rejects_missing_username(monkeypatch):
     db = Session()
     admin = User(username="admin", email="a@example.com", password_hash=hash_password("x"),
                  base_currency="CNY", is_admin=True, is_active=True)
-    db.add(admin); db.commit()
+    db.add(admin)
+    db.commit()
     main.app.dependency_overrides[get_current_user] = lambda: admin
     main.app.dependency_overrides[backup.get_db] = lambda: db
     try:
@@ -381,4 +382,5 @@ def test_import_all_rejects_missing_username(monkeypatch):
     finally:
         main.app.dependency_overrides.pop(get_current_user, None)
         main.app.dependency_overrides.pop(backup.get_db, None)
-        db.close(); engine.dispose()
+        db.close()
+        engine.dispose()

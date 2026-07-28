@@ -4,13 +4,9 @@ import io
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import StaticPool
 from starlette.datastructures import UploadFile
 
 from app import main, models
-from app.database import Base, get_db
 from app.deps import get_current_user
 from app.routers import icons
 from app.security import hash_password
@@ -82,7 +78,8 @@ def _upload(name, content):
 def test_upload_rejects_svg_with_script(monkeypatch):
     """B1: 含 <script> 的 SVG 必须被拒（防同源 XSS 窃取 token）。"""
     monkeypatch.setattr(icons, "UPLOAD_DIR", "/tmp/subly-test-icons")
-    import os, shutil
+    import os
+    import shutil
     os.makedirs("/tmp/subly-test-icons", exist_ok=True)
     try:
         evil = b'<svg xmlns="http://www.w3.org/2000/svg"><script>alert(localStorage.access_token)</script></svg>'
@@ -96,7 +93,8 @@ def test_upload_rejects_svg_with_script(monkeypatch):
 def test_upload_sanitizes_clean_svg(monkeypatch):
     """B1: 干净 SVG 通过消毒后落盘。"""
     monkeypatch.setattr(icons, "UPLOAD_DIR", "/tmp/subly-test-icons2")
-    import os, shutil
+    import os
+    import shutil
     os.makedirs("/tmp/subly-test-icons2", exist_ok=True)
     try:
         clean = b'<svg xmlns="http://www.w3.org/2000/svg"><rect width="10" height="10"/></svg>'
@@ -109,7 +107,8 @@ def test_upload_sanitizes_clean_svg(monkeypatch):
 def test_upload_png_unaffected(monkeypatch):
     """B1: PNG 不走 SVG 消毒，正常上传。"""
     monkeypatch.setattr(icons, "UPLOAD_DIR", "/tmp/subly-test-icons3")
-    import os, shutil
+    import os
+    import shutil
     os.makedirs("/tmp/subly-test-icons3", exist_ok=True)
     try:
         out = _upload("x.png", b"\x89PNG\r\n\x1a\n")

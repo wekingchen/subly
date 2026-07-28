@@ -4,11 +4,11 @@ from types import SimpleNamespace
 import pytest
 from fastapi import HTTPException
 from pydantic import ValidationError
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.database import Base
-from app.models import ActivityLog, Bundle, Category, PaymentMethod, Subscription, User
+from app.models import Bundle, Category, PaymentMethod, Subscription, User
 from app.routers import subscriptions
 from app.schemas import SubscriptionIn, SubscriptionUpdate
 from app.security import hash_password

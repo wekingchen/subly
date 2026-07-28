@@ -1,7 +1,7 @@
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timezone
 
 import pytest
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.database import Base
@@ -177,13 +177,19 @@ def test_repair_clears_dangling_or_owned_refs(code, field, bad_value):
             # 越权：引用 bob 的私有实体
             if field == "category_id":
                 bob_cat = Category(user_id=bob.id, name="bob分类", is_system=False)
-                db.add(bob_cat); db.flush(); sub.category_id = bob_cat.id
+                db.add(bob_cat)
+                db.flush()
+                sub.category_id = bob_cat.id
             elif field == "payment_method_id":
                 bob_pm = PaymentMethod(user_id=bob.id, name="bob卡", is_system=False)
-                db.add(bob_pm); db.flush(); sub.payment_method_id = bob_pm.id
+                db.add(bob_pm)
+                db.flush()
+                sub.payment_method_id = bob_pm.id
             else:
                 bob_bun = Bundle(user_id=bob.id, name="bob套餐")
-                db.add(bob_bun); db.flush(); sub.bundle_id = bob_bun.id
+                db.add(bob_bun)
+                db.flush()
+                sub.bundle_id = bob_bun.id
         else:
             setattr(sub, field, bad_value)
         db.commit()
