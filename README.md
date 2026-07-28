@@ -28,7 +28,7 @@ docker run -d --name subly -p 8842:8000 \
 | 💳 **订阅账本** | 周期订阅 + 一次性买断，支持套餐名、个性备注、URL、VPS IPv4 / IPv6、家庭成员、套餐包、日历开关与同分类排序 |
 | 📱 **保号场景** | 针对电信运营商保号：续费后可从当前时间重新计算周期，也可按原到期日滚动 |
 | 🔔 **Telegram 提醒** | 续费日前自动推送，每个订阅可配置提醒天数；支持 Bot Token、Chat ID、TG API 反代与 HTTP 代理 |
-| 🔔 **Bark 推送** | iOS 推送提醒，与 Telegram 可同时开启、各发各的；支持自建 Bark 服务器、提示音、分组与可选 TTL |
+| 🔔 **Bark 推送** | iOS 推送提醒，与 Telegram 可同时开启、各发各的；支持订阅图片图标、自建服务器、提示音、分组与可选 TTL |
 | 📊 **雷达总览 & 报表** | 月度 / 年度支出、支出洞察、排行、永久购买、即将续费、已过期、最近付款与分类明细 |
 | 🗓️ **续费日历** | 日历化查看续费日，可按订阅设置是否显示 |
 | 💱 **多货币** | 全球主流货币 + 自定义货币，汇率缓存与每日自动刷新，按用户基准货币统计 |
@@ -104,7 +104,7 @@ docker compose up -d --build
 | `DB_PATH` | | SQLite 数据库文件路径，默认 `data/subly.db`，容器内一般不需要改 |
 | `REMINDER_SCAN_TIME` | | 每天扫描到期订阅、发送提醒的时间，如 `09:00` |
 | `REQUIRE_ADMIN_APPROVAL` | | 新用户注册是否需要管理员审核，默认 `true` |
-| `APP_PUBLIC_URL` | | 对外可访问地址（如 `https://subly.example.com`）；仅影响 Bark 测试推送的点击跳转，真实续费提醒点击地址取订阅 `url` |
+| `APP_PUBLIC_URL` | | 对外可访问地址（如 `https://subly.example.com`）；用于 Bark 测试推送跳转，并把上传/内置订阅图标转换为 Bark 设备可访问的绝对 URL；真实提醒点击地址仍取订阅 `url` |
 | `TELEGRAM_BOT_TOKEN` | | 仅声明保留，当前不参与发送；Telegram Bot Token、Chat ID、代理、API 反代均在网页「设置」里按用户配置 |
 
 ### 注册邮件 / SMTP
@@ -151,7 +151,7 @@ docker compose up -d --build
 
 浏览器会话中，Access Token 只保存在当前页面内存，Refresh Token 使用 HttpOnly Cookie，并由服务端 `refresh_sessions` 一次性消费/轮换；刷新后的旧 Token 和 logout 后的当前 Token 都不能重放。旧版本 `localStorage` 中的 Refresh Token 会在首次加载时迁移一次并立即删除；服务端退出请求网络失败时保留当前登录态并提示重试，避免 Cookie 仍在却显示“已退出”。生产与开发均按同源部署，不再开放 wildcard CORS；SPA 响应带 CSP、`nosniff`、Referrer、Frame 与 Permissions 安全头。
 
-Bark 推送的 Device Key、服务器、提示音、分组与 TTL 均在网页「设置」里按用户配置，无对应环境变量；`APP_PUBLIC_URL` 仅影响 Bark 测试推送的点击跳转地址。完整示例见 [.env.example](./.env.example)。
+Bark 推送的 Device Key、服务器、提示音、分组与 TTL 均在网页「设置」里按用户配置。iOS 15+ 可显示订阅图片图标：绝对 HTTP(S) 图标可直接使用；上传图标和内置图标需要配置 `APP_PUBLIC_URL`，且该地址必须能被接收 Bark 的设备访问。未配置或图标不可用时提醒仍会正常送达，只显示 Bark 默认图标；Emoji/普通文本不会作为 Bark 图标发送。真实提醒点击地址仍取订阅自身 `url`。完整示例见 [.env.example](./.env.example)。
 
 ---
 

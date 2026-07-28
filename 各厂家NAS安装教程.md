@@ -32,6 +32,7 @@
 | `TZ` | 时区 | `Asia/Shanghai` |
 | `REMINDER_SCAN_TIME` | 每天扫描到期订阅、发送提醒的时间 | `09:00` |
 | `REQUIRE_ADMIN_APPROVAL` | 新用户注册后是否需要管理员审核 | `true` |
+| `APP_PUBLIC_URL` | Subly 对外可访问地址；用于 Bark 测试推送跳转，并把上传/内置订阅图标转换为设备可访问的绝对 URL；真实提醒点击地址仍取订阅 `url` | `https://subly.example.com` |
 | `TELEGRAM_BOT_TOKEN` | 仅声明保留，当前不参与发送；Bot Token、Chat ID 等在网页「设置」里配置 | |
 
 ### 邮箱验证 / SMTP（可选）
@@ -63,7 +64,7 @@
 | `ICON_FETCH_CONCURRENCY` | 冷缓存时 favicon 下载并发数 | `6` |
 | `ICON_FETCH_SVG_ENABLED` | 是否接受并消毒缓存远端 SVG favicon | `true` |
 
-> Bark 推送的 Device Key、服务器、提示音、分组与 TTL 均在网页「设置」里按用户配置，无对应环境变量；`APP_PUBLIC_URL` 仅影响 Bark 测试推送的点击跳转（真实续费提醒用订阅自身 `url`）。Telegram 的 Chat ID、API 反代和 HTTP 代理也建议在网页「设置」里配置。
+> Bark 推送的 Device Key、服务器、提示音、分组与 TTL 均在网页「设置」里按用户配置。iOS 15+ 的真实续费提醒可显示订阅图片图标：绝对 HTTP(S) 图标可直接使用；上传图标和内置图标需要配置接收设备可访问的 `APP_PUBLIC_URL`。图标不可用时仍正常推送并使用 Bark 默认图标，真实提醒点击地址继续使用订阅自身 `url`。Telegram 的 Chat ID、API 反代和 HTTP 代理也建议在网页「设置」里配置。
 
 - **端口**：容器内部 `8000`，映射到宿主任意端口（本文统一用 `8842`）。
 - **持久化目录**：把容器内 `/app/data` 映射到 NAS 的一个目录。这里保存 SQLite 数据库文件、上传图标和内置图标库缓存。**这个目录一定要持久化，否则重建容器会丢数据。**

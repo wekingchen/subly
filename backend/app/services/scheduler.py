@@ -199,6 +199,7 @@ def run_reminder_scan() -> dict:
                     failed += 0 if ok else 1
                 if bark_ready:
                     title, body = _build_bark_text(db, sub, user, days_left)
+                    icon_url = bark.resolve_push_icon_url(sub.icon, settings.app_public_url)
 
                     def _do_bark():
                         bark.send_push(
@@ -208,6 +209,7 @@ def run_reminder_scan() -> dict:
                             group=user.bark_group,
                             ttl=user.bark_ttl,
                             url=sub.url,
+                            icon=icon_url,
                         )
                         return f"{title}\n{body}"
 

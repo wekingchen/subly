@@ -88,6 +88,7 @@ volumes:
 | `DB_PATH` | SQLite file path, default `data/subly.db`. Usually keep the default inside `/app/data`. |
 | `REMINDER_SCAN_TIME` | Daily renewal scan time, e.g. `09:00`. |
 | `REQUIRE_ADMIN_APPROVAL` | Whether new registrations require admin approval. Default `true`. |
+| `APP_PUBLIC_URL` | Public Subly address, e.g. `https://subly.example.com`; used by Bark test-push links and to turn uploaded/built-in subscription icons into device-reachable absolute URLs. Real renewal click-through still uses the subscription's own `url`. |
 | `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASSWORD` / `SMTP_FROM` / `SMTP_TLS` | Optional SMTP settings for registration email verification. |
 | `TELEGRAM_BOT_TOKEN` | Declared but not used in sending; configure Telegram Bot Token, Chat ID, API reverse proxy, and HTTP proxy per user in the web Settings page. |
 | `EXCHANGE_API_BASE` / `EXCHANGE_API_URL` / `EXCHANGE_API_KEY` | Exchange-rate source and optional API key. |
@@ -110,9 +111,9 @@ Authentication endpoints use an in-memory rate limit for the default single-work
 
 认证入口按默认单 worker 部署使用内存限流；SMTP 发送失败不会占用用户名/邮箱，验证码过期后可用相同注册信息重新获取，禁用、未审核或未验证用户的现有 Access/Refresh Token 也会被拒绝。浏览器 Access Token 仅驻留内存，Refresh Token 使用 HttpOnly Cookie 与一次性服务端 session，刷新后的旧 token 和 logout 后 token 均不可重放；旧 localStorage Token 首次加载后自动迁移并删除。同源部署不开放 wildcard CORS，HTML 响应带 CSP 与通用安全头。
 
-Bark needs no env var; `APP_PUBLIC_URL` only affects the click-through URL of Bark test pushes (real renewal reminders use the subscription's own `url`). — configure Device Key, server, sound, group, and optional non-negative TTL in the web Settings page.
+Configure Bark Device Key, server, sound, group, and optional non-negative TTL in the web Settings page. On iOS 15+, renewal pushes can use each subscription's image icon. Absolute HTTP(S) icons work directly; uploaded and built-in icons need `APP_PUBLIC_URL` set to an address reachable by the receiving device. Missing or unusable icons are omitted, and real renewal click-through still uses the subscription's own `url`.
 
-Bark 无需环境变量，请在网页「设置」里配置 Device Key、服务器、提示音、分组与 TTL；`APP_PUBLIC_URL` 仅影响 Bark 测试推送的点击跳转（真实续费提醒用订阅自身 `url`）。
+请在网页「设置」里配置 Bark Device Key、服务器、提示音、分组与 TTL。iOS 15+ 的真实续费提醒可显示订阅图片图标：绝对 HTTP(S) 图标可直接使用；上传图标和内置图标需要配置接收设备可访问的 `APP_PUBLIC_URL`。图标不可用时仍正常推送并使用 Bark 默认图标，真实提醒点击地址继续使用订阅自身 `url`。
 
 ## Volumes / 数据卷
 

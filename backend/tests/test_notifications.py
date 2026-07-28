@@ -50,6 +50,7 @@ def test_bark_test_passes_app_public_url_when_configured(monkeypatch):
         # device_key/title/body 是位置参数
         assert captured["args"][1] == "✅ 连接成功！"
         assert captured["url"] == "https://subly.example.com"
+        assert "icon" not in captured
     finally:
         db.close()
         engine.dispose()

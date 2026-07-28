@@ -50,6 +50,60 @@ def add_subscription(db, user, **overrides):
     return sub
 
 
+def test_run_reminder_scan_sends_subscription_icon_without_changing_click_url(monkeypatch):
+    db, engine = make_db()
+    Session = sessionmaker(bind=engine)
+    try:
+        user = add_user(
+            db,
+            bark_enabled=True,
+            bark_device_key="device-key",
+            bark_server="https://api.day.app",
+            bark_group="Renewals",
+            bark_ttl=0,
+        )
+        sub = add_subscription(
+            db,
+            user,
+            icon="/static/icons/subscription.png",
+            url="https://billing.example.com/account",
+        )
+        sub_id = sub.id
+        db.commit()
+        db.close()
+
+        captured = {}
+        monkeypatch.setattr(scheduler.database, "SessionLocal", lambda: Session())
+        monkeypatch.setattr(scheduler, "_local_today", lambda: date(2024, 1, 1))
+        monkeypatch.setattr(scheduler.settings, "app_public_url", "https://subly.example.com")
+        monkeypatch.setattr(scheduler.activity, "log", lambda *args, **kwargs: None)
+        monkeypatch.setattr(
+            scheduler.bark,
+            "send_push",
+            lambda *args, **kwargs: captured.update({"args": args, **kwargs}) or {},
+        )
+
+        result = scheduler.run_reminder_scan()
+
+        assert result == {"sent": 1, "failed": 0}
+        assert captured["url"] == "https://billing.example.com/account"
+        assert captured["icon"] == "https://subly.example.com/static/icons/subscription.png"
+        assert captured["ttl"] == 0
+
+        check_db = Session()
+        try:
+            log = check_db.scalar(
+                select(NotificationLog).where(NotificationLog.subscription_id == sub_id)
+            )
+            assert log.status == "sent"
+            assert log.channel == "bark"
+        finally:
+            check_db.close()
+    finally:
+        db.close()
+        engine.dispose()
+
+
 def test_parse_days_ignores_empty_and_non_numeric_values():
     assert scheduler._parse_days("7, 1, bad, ,0,-1") == [7, 1, 0]
 
@@ -217,7 +271,8 @@ def test_bark_text_is_natural_and_omits_empty_fields(monkeypatch):
         # 句子化：套餐起头 + 由…扣款 + 备注/分类带标签
         cat = Category(user_id=user_cny.id, name="流媒体", icon="", color="#00f")
         pm = PaymentMethod(user_id=user_cny.id, name="招行信用卡", icon="")
-        db.add_all([cat, pm]); db.flush()
+        db.add_all([cat, pm])
+        db.flush()
         sub_full = add_subscription(db, user_cny, name="Disney+", amount=35.0, currency="CNY",
                                     plan="标准版", category_id=cat.id, payment_method_id=pm.id,
                                     remark="家庭共享", next_renewal_date=date(2024, 1, 9))
