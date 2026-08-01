@@ -137,12 +137,13 @@
         :family-text="detailFamilyText"
       />
       <template #footer>
-        <button v-if="detailTarget?.billing_type === 'recurring'" class="btn ghost"
+        <button v-if="detailTarget?.billing_type === 'recurring'"
+                class="btn detail-action detail-action-primary"
                 @click="askRenew(detailTarget)">
           {{ detailTarget?.is_keepalive ? t('sub.keepalive.renewMark') : t('sub.renewMark') }}
         </button>
-        <button class="btn ghost" @click="openEdit(detailTarget)">{{ t('sub.edit') }}</button>
-        <button class="btn danger" @click="askDelete(detailTarget)">{{ t('sub.delete') }}</button>
+        <button class="btn ghost detail-action" @click="openEdit(detailTarget)">{{ t('sub.edit') }}</button>
+        <button class="btn ghost detail-action detail-action-danger" @click="askDelete(detailTarget)">{{ t('sub.delete') }}</button>
       </template>
     </AppModal>
 
@@ -543,7 +544,16 @@ h3 { margin-top: 0; }
 .event-line.clickable:hover { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--primary) 22%, transparent); }
 .cc-item.clickable:hover { background: color-mix(in srgb, var(--primary) 6%, transparent); }
 .rc.clickable:hover { border-color: color-mix(in srgb, var(--primary) 40%, var(--border)); box-shadow: var(--shadow); }
-/* 详情弹窗底部按钮：窄屏纵向堆叠（AppModal 内部 .modal-foot 需 :deep 穿透） */
+/* 详情操作条：主操作柔和强调，编辑保持中性，删除降为红色描边而非大块实心警示。 */
+.detail-action { box-shadow: none; }
+.detail-action-primary { color: var(--primary); background: var(--primary-soft);
+  border: 1px solid color-mix(in srgb, var(--primary) 30%, var(--border)); }
+.detail-action-danger { color: var(--danger); background: transparent;
+  border-color: color-mix(in srgb, var(--danger) 42%, var(--border)); }
+.detail-action:hover { transform: none; box-shadow: none; }
+.detail-action-primary:hover { color: var(--primary); background: color-mix(in srgb, var(--primary-soft) 72%, var(--primary) 10%); }
+.detail-action-danger:hover { color: var(--danger); background: color-mix(in srgb, var(--danger) 8%, transparent); border-color: var(--danger); }
+/* 详情弹窗底部按钮：移动端横向等分紧凑排列。 */
 @media (max-width: 980px) { .stats { grid-template-columns: 1fr 1fr; } .main { grid-template-columns: 1fr; } }
 @media (max-width: 720px) {
   .stats { grid-template-columns: 1fr 1fr; }
@@ -561,8 +571,9 @@ h3 { margin-top: 0; }
   .l-right { grid-column: 2; flex-wrap: wrap; justify-content: flex-start; }
   .donut-wrap { flex-wrap: wrap; }
   .cat-cols, .recent-grid { grid-template-columns: 1fr; }
-  :deep(.modal-foot) { flex-direction: column; }
-  :deep(.modal-foot) .btn { width: 100%; }
+  /* 详情弹窗底部三按钮：移动端横向等分紧凑排列，避免三个全宽大按钮纵向堆叠 */
+  :deep(.modal-foot) { gap: 6px; }
+  :deep(.modal-foot) .btn { flex: 1 1 0; min-height: 38px; padding: 6px 8px; font-size: 13px; }
 }
 @media (max-width: 430px) { .stats { grid-template-columns: 1fr; } }
 </style>
