@@ -114,7 +114,9 @@ def test_send_one_records_success_failure_and_duplicate_skip(monkeypatch):
         monkeypatch.setattr(scheduler.activity, "log", lambda *args, **kwargs: None)
         user = add_user(db)
         sub = add_subscription(db, user)
-        today = date.today()
+        # 用业务本地今天，与 _already_sent 的判日口径（settings.tz）一致，
+        # 避免进程时区（CI 默认 UTC）与业务时区不一致时跨日去重误判。
+        today = scheduler._local_today()
 
         ok, status = scheduler._send_one(db, sub, user, 7, today, "telegram", lambda: "sent body")
         assert (ok, status) == (True, "sent")
@@ -187,7 +189,7 @@ def test_send_one_sanitizes_provider_failure_messages(monkeypatch):
         def fail_with_sensitive_url():
             raise RuntimeError("https://api.telegram.org/botsecret-token/sendMessage")
 
-        ok, status = scheduler._send_one(db, sub, user, 3, date.today(), "telegram", fail_with_sensitive_url)
+        ok, status = scheduler._send_one(db, sub, user, 3, scheduler._local_today(), "telegram", fail_with_sensitive_url)
 
         assert (ok, status) == (False, "failed")
         failed = db.scalar(
