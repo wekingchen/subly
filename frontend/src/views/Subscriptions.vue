@@ -123,7 +123,7 @@ import SubscriptionFormModal from '../components/subscriptions/SubscriptionFormM
 import SubscriptionToolbar from '../components/subscriptions/SubscriptionToolbar.vue'
 import { useAuth } from '../stores/auth'
 import { useBodyLock } from '../composables/useBodyLock'
-import { addCycleDate, parseLocalDate, toISODate } from '../utils/date'
+import { useSubscriptionActions } from '../composables/useSubscriptionActions'
 import { amountOf, hasBaseEquivalent } from '../utils/money'
 import { buildGroupedSubscriptions, buildSubscriptionOrderState, categoryOrderToPersistedIds, getCategoryMeta, getSubscriptionCategoryKey, moveCategoryByOffset, moveCategoryToTarget, moveValueByOffset, moveValueToTarget, UNCATEGORIZED_KEY } from '../utils/subscriptionOrdering'
 
@@ -136,17 +136,6 @@ const methods = ref([])
 const bundles = ref([])
 const iconLib = ref([])
 const filter = ref('')
-const showForm = ref(false)
-const formTarget = ref(null)
-
-const renewTarget = ref(null)
-const renewMode = ref('today')
-const renewing = ref(false)
-
-const delTarget = ref(null)
-const delPwd = ref('')
-const delErr = ref('')
-const deleting = ref(false)
 
 const actionTarget = ref(null)
 const actionCatKey = ref(null)
@@ -184,6 +173,20 @@ function bundleName(s) {
 }
 function categoryName(s) { return catMeta(catKeyOf(s)).name }
 function familyText(s) { return s.family_members && s.family_members.length ? s.family_members.join('、') : DASH }
+
+// 续费 / 删除 / 编辑表单的弹窗编排由 composable 统一管理，订阅账本与雷达总览共用同一份实现。
+const {
+  renewTarget, renewMode, renewing,
+  delTarget, delPwd, delErr, deleting,
+  showForm, formTarget,
+  askRenew, closeRenew, confirmRenew, previewToday, previewDue,
+  askDelete, closeDelete, confirmDelete,
+  openEdit, closeForm, onFormSaved, onBundleCreated
+} = useSubscriptionActions({
+  reload: load,
+  toast,
+  onBundleCreated: (bundle) => { bundles.value.push(bundle) }
+})
 
 // 统一汇总订阅页所有 overlay 状态，交给引用计数式 body lock 管理，
 // 避免 modal / action sheet 之间互相提前解锁。
@@ -336,8 +339,7 @@ async function load() {
 function setFilter(f) { filter.value = f; load() }
 
 function openNew() {
-  formTarget.value = null
-  showForm.value = true
+  openEdit(null)
 }
 function readAnchor(el) {
   if (!el?.getBoundingClientRect) return null
@@ -390,82 +392,6 @@ function moveFromActions(dir) {
   const catKey = actionCatKey.value
   closeCardActions()
   if (target && catKey != null) moveSub(catKey, target.id, dir)
-}
-
-function openEdit(s) {
-  formTarget.value = s
-  showForm.value = true
-}
-
-function closeForm() {
-  showForm.value = false
-  formTarget.value = null
-}
-
-function onFormSaved() {
-  closeForm()
-  toast(t('settings.saved'))
-  load()
-}
-
-function onBundleCreated(bundle) {
-  bundles.value.push(bundle)
-}
-
-/* ---------- 续费 ---------- */
-function askRenew(s) {
-  renewTarget.value = s
-  renewMode.value = 'today'
-}
-function closeRenew() {
-  renewTarget.value = null
-}
-const previewToday = computed(() =>
-  renewTarget.value ? toISODate(addCycleDate(new Date(), renewTarget.value.cycle, renewTarget.value.cycle_count)) : ''
-)
-const previewDue = computed(() => {
-  if (!renewTarget.value) return ''
-  const base = renewTarget.value.next_renewal_date ? parseLocalDate(renewTarget.value.next_renewal_date) : new Date()
-  return toISODate(addCycleDate(base, renewTarget.value.cycle, renewTarget.value.cycle_count))
-})
-async function confirmRenew() {
-  if (!renewTarget.value || renewing.value) return
-  renewing.value = true
-  try {
-    const { data } = await api.post(`/api/subscriptions/${renewTarget.value.id}/renew`, { mode: renewMode.value })
-    const kaKey = renewTarget.value.is_keepalive ? 'sub.keepalive.renewOk' : 'sub.renewOk'
-    toast(t(kaKey, { date: data.next_renewal_date }))
-    closeRenew()
-    load()
-  } catch (e) {
-    toast(e.response?.data?.detail || 'Error', 'err')
-  } finally {
-    renewing.value = false
-  }
-}
-
-function askDelete(s) {
-  delTarget.value = s
-  delPwd.value = ''
-  delErr.value = ''
-}
-function closeDelete() {
-  delTarget.value = null
-}
-async function confirmDelete() {
-  if (!delTarget.value || deleting.value || !delPwd.value) return
-  deleting.value = true
-  delErr.value = ''
-  try {
-    await api.delete(`/api/subscriptions/${delTarget.value.id}`, { data: { password: delPwd.value } })
-    closeDelete()
-    toast(t('sub.delete'))
-    load()
-  } catch (e) {
-    delErr.value = e.response?.data?.detail || 'Error'
-  } finally {
-    deleting.value = false
-  }
 }
 
 onMounted(async () => {
