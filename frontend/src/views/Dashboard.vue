@@ -138,12 +138,12 @@
       />
       <template #footer>
         <button v-if="detailTarget?.billing_type === 'recurring'"
-                class="btn detail-action detail-action-primary"
+                class="btn detail-action detail-action-primary" :disabled="busy"
                 @click="askRenew(detailTarget)">
           {{ detailTarget?.is_keepalive ? t('sub.keepalive.renewMark') : t('sub.renewMark') }}
         </button>
-        <button class="btn ghost detail-action" @click="openEdit(detailTarget)">{{ t('sub.edit') }}</button>
-        <button class="btn ghost detail-action detail-action-danger" @click="askDelete(detailTarget)">{{ t('sub.delete') }}</button>
+        <button class="btn ghost detail-action" :disabled="busy" @click="openEdit(detailTarget)">{{ t('sub.edit') }}</button>
+        <button class="btn ghost detail-action detail-action-danger" :disabled="busy" @click="askDelete(detailTarget)">{{ t('sub.delete') }}</button>
       </template>
     </AppModal>
 
@@ -293,7 +293,7 @@ async function reload() {
 const {
   renewTarget, renewMode, renewing,
   delTarget, delPwd, delErr, deleting,
-  showForm, formTarget,
+  showForm, formTarget, busy,
   askRenew, closeRenew, confirmRenew, previewToday, previewDue,
   askDelete, closeDelete, confirmDelete,
   openEdit, closeForm, onFormSaved, onBundleCreated

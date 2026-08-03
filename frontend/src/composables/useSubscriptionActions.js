@@ -32,7 +32,15 @@ export function useSubscriptionActions({ reload, toast, onBundleCreated: handleB
   const showForm = ref(false)
   const formTarget = ref(null)
 
+  // 操作成功后的整页刷新进行中。期间详情操作条应禁用：reload 未完成前 detailTarget
+  // 仍是旧快照，立即再次编辑/续费会把旧字段写回，覆盖刚保存的新数据。
+  const reloading = ref(false)
+  const busy = computed(() => renewing.value || deleting.value || reloading.value)
+
   function askRenew(s) {
+    // reload 未完成前 detailTarget/卡片仍是旧快照，基于旧周期/日期续费会与后端实际结果错位。
+    // busy 守卫作为最终防线，覆盖详情 footer、卡片直接按钮、操作菜单等所有调用入口。
+    if (busy.value) return
     renewTarget.value = s
     renewMode.value = 'today'
   }
@@ -67,6 +75,7 @@ export function useSubscriptionActions({ reload, toast, onBundleCreated: handleB
   }
 
   function askDelete(s) {
+    if (busy.value) return
     delTarget.value = s
     delPwd.value = ''
     delErr.value = ''
@@ -93,6 +102,7 @@ export function useSubscriptionActions({ reload, toast, onBundleCreated: handleB
   }
 
   function openEdit(s) {
+    if (busy.value) return
     formTarget.value = s
     showForm.value = true
   }
@@ -108,8 +118,10 @@ export function useSubscriptionActions({ reload, toast, onBundleCreated: handleB
 
   // 写入已成功后的刷新单独建错误边界：刷新失败不应回滚成功语义。
   // 各页 reload 自身应对刷新失败降级（保留旧数据），这里仅兜底防未处理 rejection。
+  // 期间置 reloading，让详情操作条禁用，避免基于旧快照的二次操作覆盖刚保存的数据。
   async function safeReload() {
-    try { await reload() } catch { /* reload 负责降级，此处静默 */ }
+    reloading.value = true
+    try { await reload() } catch { /* reload 负责降级，此处静默 */ } finally { reloading.value = false }
   }
   function onBundleCreated(bundle) {
     handleBundleCreated?.(bundle)
@@ -118,7 +130,7 @@ export function useSubscriptionActions({ reload, toast, onBundleCreated: handleB
   return {
     renewTarget, renewMode, renewing,
     delTarget, delPwd, delErr, deleting,
-    showForm, formTarget,
+    showForm, formTarget, busy,
     askRenew, closeRenew, confirmRenew, previewToday, previewDue,
     askDelete, closeDelete, confirmDelete,
     openEdit, closeForm, onFormSaved, onBundleCreated

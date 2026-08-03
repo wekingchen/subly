@@ -178,7 +178,7 @@ function familyText(s) { return s.family_members && s.family_members.length ? s.
 const {
   renewTarget, renewMode, renewing,
   delTarget, delPwd, delErr, deleting,
-  showForm, formTarget,
+  showForm, formTarget, busy,
   askRenew, closeRenew, confirmRenew, previewToday, previewDue,
   askDelete, closeDelete, confirmDelete,
   openEdit, closeForm, onFormSaved, onBundleCreated
@@ -351,6 +351,9 @@ function refreshActionAnchor() {
   actionAnchor.value = readAnchor(actionAnchorEl.value)
 }
 function openCardActions(s, catKey, evt) {
+  // reload 进行中时卡片仍是旧快照，此时开操作菜单会基于旧 next_renewal_date 触发续费/删除，
+  // 可能覆盖刚保存的数据；等刷新落地后再允许操作。
+  if (busy.value) return
   actionTarget.value = s
   actionCatKey.value = catKey
   const el = evt?.currentTarget
