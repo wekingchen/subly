@@ -7,6 +7,7 @@ from app.database import get_db
 from app.deps import get_admin_user
 from app.models import (
     Bundle,
+    CalendarFeedToken,
     Category,
     Currency,
     NotificationLog,
@@ -113,6 +114,7 @@ def delete_user(
         raise HTTPException(400, "不能删除唯一的管理员")
 
     # 清理该用户的全部数据（保持外键完整）
+    db.execute(delete(CalendarFeedToken).where(CalendarFeedToken.user_id == user_id))
     db.execute(delete(NotificationLog).where(NotificationLog.user_id == user_id))
     db.execute(delete(RenewalHistory).where(RenewalHistory.user_id == user_id))
     db.execute(delete(Subscription).where(Subscription.user_id == user_id))

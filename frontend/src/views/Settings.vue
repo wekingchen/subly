@@ -131,6 +131,8 @@
       <CurrencyManager :base-currency="auth.user?.base_currency || baseCurrency" @changed="handleCurrencyChanged" />
     </section>
 
+    <CalendarFeedManager />
+
     <!-- Telegram -->
     <div class="card sect panel-card channel-card">
       <div class="panel-head">
@@ -317,6 +319,7 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import api from '../api'
+import CalendarFeedManager from '../components/settings/CalendarFeedManager.vue'
 import CategoryManager from '../components/settings/CategoryManager.vue'
 import CurrencyManager from '../components/settings/CurrencyManager.vue'
 import PaymentMethodManager from '../components/settings/PaymentMethodManager.vue'

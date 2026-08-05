@@ -33,6 +33,17 @@ def test_normalize_url_rejects_dangerous_protocols():
             normalize_url(bad)
 
 
+def test_normalize_url_rejects_control_characters():
+    for bad in [
+        "https://example.com/\r\nATTENDEE:mailto:x@example.com",
+        "https://example.com/\x00hidden",
+        "https://example.com/\x7fhidden",
+    ]:
+        with pytest.raises(ValueError, match="控制字符"):
+            normalize_url(bad)
+    assert sanitize_url("https://example.com/\ninvalid") is None
+
+
 def test_subscription_in_validates_url():
     sub = SubscriptionIn(name="x", url="https://ok.com")
     assert sub.url == "https://ok.com"
@@ -48,6 +59,14 @@ def test_subscription_update_validates_url():
     assert SubscriptionUpdate(url="https://ok.com").url == "https://ok.com"
     with pytest.raises(ValidationError):
         SubscriptionUpdate(url="data:text/html,<x>")
+
+
+def test_subscription_cycle_count_has_safe_upper_bound():
+    assert SubscriptionIn(name="x", cycle_count=1000).cycle_count == 1000
+    with pytest.raises(ValidationError):
+        SubscriptionIn(name="x", cycle_count=1001)
+    with pytest.raises(ValidationError):
+        SubscriptionUpdate(cycle_count=1001)
 
 
 def test_sanitize_url_drops_invalid_instead_of_raising():

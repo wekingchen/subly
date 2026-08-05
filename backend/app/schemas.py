@@ -32,6 +32,8 @@ def normalize_url(value: str | None) -> str | None:
     v = value.strip()
     if v == "":
         return None
+    if any(ord(char) < 32 or ord(char) == 127 for char in v):
+        raise ValueError("链接不能包含控制字符")
     if not v.lower().startswith(("http://", "https://")):
         raise ValueError("链接必须以 http:// 或 https:// 开头")
     return v
@@ -314,7 +316,7 @@ class SubscriptionIn(BaseModel):
     billing_type: str = "recurring"      # recurring | one_time
     is_keepalive: bool = False           # 保号套餐（短信保号），仅 recurring 可用
     cycle: str = "month"                 # day | week | month | year
-    cycle_count: int = 1
+    cycle_count: int = Field(default=1, le=1000)
 
     @field_validator("url")
     @classmethod
@@ -360,7 +362,7 @@ class SubscriptionUpdate(BaseModel):
     billing_type: str | None = None
     is_keepalive: bool | None = None
     cycle: str | None = None
-    cycle_count: int | None = None
+    cycle_count: int | None = Field(default=None, le=1000)
     start_date: date | None = None
     next_renewal_date: date | None = None
     end_date: date | None = None

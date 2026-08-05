@@ -10,3 +10,11 @@ const savedTheme = 'light'
 document.documentElement.setAttribute('data-theme', savedTheme)
 
 createApp(App).use(createPinia()).use(router).use(i18n).mount('#app')
+
+if (import.meta.env.PROD && 'serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js').catch((error) => {
+      console.warn('Service Worker 注册失败', error)
+    })
+  })
+}

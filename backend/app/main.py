@@ -17,6 +17,7 @@ from app.routers import (
     auth,
     backup,
     bundles,
+    calendar_feed,
     categories,
     currencies,
     dashboard,
@@ -43,6 +44,8 @@ logging.basicConfig(
 # httpx 的 INFO 日志会包含完整请求 URL/query；避免 EXCHANGE_API_KEY 等敏感参数进入 docker logs。
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
+# Feed Token 位于 query；禁止 Uvicorn 默认 access log 输出完整请求目标。
+logging.getLogger("uvicorn.access").disabled = True
 logger = logging.getLogger(__name__)
 
 
@@ -74,6 +77,8 @@ _SPA_CSP = (
     "img-src 'self' data: blob: https: http:; "
     "font-src 'self' data:; "
     "connect-src 'self'; "
+    "worker-src 'self'; "
+    "manifest-src 'self'; "
     "object-src 'none'; "
     "base-uri 'self'; "
     "frame-ancestors 'none'; "
@@ -86,6 +91,8 @@ _DOCS_CSP = (
     "img-src 'self' data: https:; "
     "font-src 'self' data: https://cdn.jsdelivr.net; "
     "connect-src 'self'; "
+    "worker-src 'self'; "
+    "manifest-src 'self'; "
     "object-src 'none'; "
     "base-uri 'self'; "
     "frame-ancestors 'none'; "
@@ -99,11 +106,27 @@ def _content_security_policy(path: str) -> str:
 
 def _apply_security_headers(request: Request, response) -> None:
     response.headers["X-Content-Type-Options"] = "nosniff"
-    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
     if "text/html" in response.headers.get("content-type", "").lower():
         response.headers["Content-Security-Policy"] = _content_security_policy(request.url.path)
+
+
+def _apply_cache_headers(request: Request, response) -> None:
+    if "Cache-Control" in response.headers:
+        return
+    path = request.url.path
+    content_type = response.headers.get("content-type", "").lower()
+    if path.startswith("/assets/"):
+        response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+    elif path.startswith("/api/"):
+        response.headers["Cache-Control"] = "private, no-store"
+    elif path == "/sw.js" or "text/html" in content_type:
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
+    elif path in {"/manifest.webmanifest", "/offline.html"}:
+        response.headers["Cache-Control"] = "no-cache"
 
 
 def _client_host(request: Request) -> str:
@@ -137,6 +160,7 @@ async def request_logging_middleware(request: Request, call_next):
 
     response.headers["X-Request-ID"] = request_id
     _apply_security_headers(request, response)
+    _apply_cache_headers(request, response)
     duration_ms = int((time.perf_counter() - start) * 1000)
     if path == "/api/health":
         logger.debug(
@@ -187,6 +211,7 @@ for r in (
     categories.router,
     payment_methods.router,
     currencies.router,
+    calendar_feed.router,
     subscriptions.router,
     bundles.router,
     dashboard.router,

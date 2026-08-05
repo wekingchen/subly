@@ -88,7 +88,7 @@ volumes:
 | `DB_PATH` | SQLite file path, default `data/subly.db`. Usually keep the default inside `/app/data`. |
 | `REMINDER_SCAN_TIME` | Daily renewal scan time, e.g. `09:00`. |
 | `REQUIRE_ADMIN_APPROVAL` | Whether new registrations require admin approval. Default `true`. |
-| `APP_PUBLIC_URL` | Public Subly address, e.g. `https://subly.example.com`; used by Bark test-push links and to turn uploaded/built-in subscription icons into device-reachable absolute URLs. Real renewal click-through still uses the subscription's own `url`. |
+| `APP_PUBLIC_URL` | Public Subly address, e.g. `https://subly.example.com`; used for private iCal feed URLs, Bark test-push links, and device-reachable uploaded/built-in subscription icons. Real renewal click-through still uses the subscription's own `url`. |
 | `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASSWORD` / `SMTP_FROM` / `SMTP_TLS` | Optional SMTP settings for registration email verification. |
 | `TELEGRAM_BOT_TOKEN` | Declared but not used in sending; configure Telegram Bot Token, Chat ID, API reverse proxy, and HTTP proxy per user in the web Settings page. |
 | `EXCHANGE_API_BASE` / `EXCHANGE_API_URL` / `EXCHANGE_API_KEY` | Exchange-rate source and optional API key. |
@@ -114,6 +114,8 @@ Authentication endpoints use an in-memory rate limit for the default single-work
 Configure Bark Device Key, server, sound, group, and optional non-negative TTL in the web Settings page. On iOS 15+, renewal pushes can use each subscription's image icon. Absolute HTTP(S) icons work directly; uploaded and built-in icons need `APP_PUBLIC_URL` set to an address reachable by the receiving device. Missing or unusable icons are omitted, and real renewal click-through still uses the subscription's own `url`.
 
 请在网页「设置」里配置 Bark Device Key、服务器、提示音、分组与 TTL。iOS 15+ 的真实续费提醒可显示订阅图片图标：绝对 HTTP(S) 图标可直接使用；上传图标和内置图标需要配置接收设备可访问的 `APP_PUBLIC_URL`。图标不可用时仍正常推送并使用 Bark 默认图标，真实提醒点击地址继续使用订阅自身 `url`。
+
+设置页也可生成私有 iCal 订阅链接。公网云日历需要可访问的 HTTPS `APP_PUBLIC_URL`；链接等同访问凭据，只在生成/重置时显示一次，重置或撤销后旧链接立即失效。生产构建支持 PWA 安装，离线缓存仅包含静态离线页和品牌图标，不包含账户、订阅或 API 数据。
 
 ## Volumes / 数据卷
 

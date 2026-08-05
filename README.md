@@ -31,7 +31,8 @@ docker run -d --name subly -p 8842:8000 \
 | 🔔 **Bark 推送** | iOS 推送提醒，与 Telegram 可同时开启、各发各的；支持订阅图片图标、自建服务器、提示音、分组与可选 TTL |
 | 🔗 **Webhook 通知** | 向自建自动化服务发送结构化 JSON，使用必填共享密钥对原始请求体生成 HMAC-SHA256 签名；可与 Telegram、Bark 同时启用并独立记录 |
 | 📊 **雷达总览 & 报表** | 月度 / 年度支出、支出洞察、排行、永久购买、即将续费、已过期、最近付款与分类明细，以及可切换 3 / 6 / 12 个月的历史付款 + 未来预计趋势柱状图；雷达总览页每条订阅可直接点击查看详情并标记续费 / 编辑 / 删除；可设置月度预算，超支时雷达与报表预警 |
-| 🗓️ **续费日历** | 日历化查看续费日（桌面月历 + 移动端议程），可按订阅设置是否显示；每个续费事件可点击弹出详情并直接标记已续费/已保号、编辑或删除 |
+| 🗓️ **续费日历** | 日历化查看续费日（桌面月历 + 移动端议程），可按订阅设置是否显示；每个续费事件可点击弹出详情并直接标记已续费/已保号、编辑或删除；设置页可生成只存哈希、可重置/撤销的私有 iCal 链接，订阅到系统或云日历 |
+| 📲 **安全 PWA** | 生产构建支持安装到桌面或手机；Service Worker 只预缓存静态离线页与品牌图标，断网导航可安全回退，不缓存账户、订阅、API 或登录数据 |
 | 💱 **多货币** | 全球主流货币 + 自定义货币；设置页可维护自定义名称、符号及「1 自定义币 = X 用户基准币」手动汇率，汇率缓存与每日自动刷新，按用户基准货币统计；自定义货币需先设置可用汇率才能用于订阅或基准币，使用中不能清空汇率 |
 | 🗂️ **分类与套餐包** | 设置页可管理用户自定义分类与付款方式，系统预置项只读；删除使用中的自定义项会安全解除订阅引用；支持套餐包 / 组合订阅管理 |
 | 🧭 **内置服务管理** | 100+ 常见服务，支持多分类 `category_keys`、服务 CRUD、软删除 / 恢复、图标预热 |
@@ -105,7 +106,7 @@ docker compose up -d --build
 | `DB_PATH` | | SQLite 数据库文件路径，默认 `data/subly.db`，容器内一般不需要改 |
 | `REMINDER_SCAN_TIME` | | 每天扫描到期订阅、发送提醒的时间，如 `09:00` |
 | `REQUIRE_ADMIN_APPROVAL` | | 新用户注册是否需要管理员审核，默认 `true` |
-| `APP_PUBLIC_URL` | | 对外可访问地址（如 `https://subly.example.com`）；用于 Bark 测试推送跳转，并把上传/内置订阅图标转换为 Bark 设备可访问的绝对 URL；真实提醒点击地址仍取订阅 `url` |
+| `APP_PUBLIC_URL` | | 对外可访问地址（如 `https://subly.example.com`）；用于生成公网日历服务可订阅的私有 iCal URL、Bark 测试推送跳转，以及把上传/内置订阅图标转换为设备可访问的绝对 URL；真实提醒点击地址仍取订阅 `url` |
 | `TELEGRAM_BOT_TOKEN` | | 仅声明保留，当前不参与发送；Telegram Bot Token、Chat ID、代理、API 反代均在网页「设置」里按用户配置 |
 
 ### 注册邮件 / SMTP
@@ -150,7 +151,7 @@ docker compose up -d --build
 | `ICON_FETCH_CONCURRENCY` | `6` | 冷缓存时 favicon 下载并发数 |
 | `ICON_FETCH_SVG_ENABLED` | `true` | 是否接受并消毒缓存远端 SVG favicon |
 
-浏览器会话中，Access Token 只保存在当前页面内存，Refresh Token 使用 HttpOnly Cookie，并由服务端 `refresh_sessions` 一次性消费/轮换；刷新后的旧 Token 和 logout 后的当前 Token 都不能重放。旧版本 `localStorage` 中的 Refresh Token 会在首次加载时迁移一次并立即删除；服务端退出请求网络失败时保留当前登录态并提示重试，避免 Cookie 仍在却显示“已退出”。生产与开发均按同源部署，不再开放 wildcard CORS；SPA 响应带 CSP、`nosniff`、Referrer、Frame 与 Permissions 安全头。
+浏览器会话中，Access Token 只保存在当前页面内存，Refresh Token 使用 HttpOnly Cookie，并由服务端 `refresh_sessions` 一次性消费/轮换；刷新后的旧 Token 和 logout 后的当前 Token 都不能重放。旧版本 `localStorage` 中的 Refresh Token 会在首次加载时迁移一次并立即删除；服务端退出请求网络失败时保留当前登录态并提示重试，避免 Cookie 仍在却显示“已退出”。生产与开发均按同源部署，不再开放 wildcard CORS；SPA 响应带 CSP、`nosniff`、Referrer、Frame 与 Permissions 安全头。私有 iCal 原始 Token 只在生成/重置时显示一次，数据库仅保存 SHA-256；Feed、Token 管理接口、HTML 与 Service Worker 禁止持久缓存，Vite 哈希资源才使用长期 immutable 缓存。
 
 Bark 推送的 Device Key、服务器、提示音、分组与 TTL 均在网页「设置」里按用户配置。iOS 15+ 可显示订阅图片图标：绝对 HTTP(S) 图标可直接使用；上传图标和内置图标需要配置 `APP_PUBLIC_URL`，且该地址必须能被接收 Bark 的设备访问。未配置或图标不可用时提醒仍会正常送达，只显示 Bark 默认图标；Emoji/普通文本不会作为 Bark 图标发送。真实提醒点击地址仍取订阅自身 `url`。完整示例见 [.env.example](./.env.example)。
 

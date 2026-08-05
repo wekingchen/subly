@@ -1,3 +1,4 @@
+from fastapi import Request, Response
 from fastapi.responses import HTMLResponse
 from fastapi.testclient import TestClient
 
@@ -38,3 +39,47 @@ def test_docs_receive_compatible_csp_without_weakening_spa_policy():
     assert "script-src 'self' 'unsafe-inline'" not in spa_csp
     assert "object-src 'none'" in spa_csp
     assert "frame-ancestors 'none'" in spa_csp
+    assert "worker-src 'self'" in spa_csp
+    assert "manifest-src 'self'" in spa_csp
+
+
+def _request(path: str) -> Request:
+    return Request({
+        "type": "http",
+        "method": "GET",
+        "path": path,
+        "root_path": "",
+        "scheme": "https",
+        "query_string": b"",
+        "headers": [],
+        "client": ("testclient", 50000),
+        "server": ("testserver", 443),
+    })
+
+
+def test_cache_headers_separate_private_pages_and_hashed_assets():
+    cases = [
+        ("/api/private", "application/json", "private, no-store", None),
+        ("/assets/app-HASH.js", "text/javascript", "public, max-age=31536000, immutable", None),
+        ("/sw.js", "text/javascript", "no-store, no-cache, must-revalidate", "no-cache"),
+        ("/settings", "text/html", "no-store, no-cache, must-revalidate", "no-cache"),
+        ("/manifest.webmanifest", "application/manifest+json", "no-cache", None),
+        ("/offline.html", "text/html", "no-store, no-cache, must-revalidate", "no-cache"),
+    ]
+
+    for path, media_type, expected, pragma in cases:
+        response = Response(media_type=media_type)
+        main._apply_cache_headers(_request(path), response)
+        assert response.headers["Cache-Control"] == expected
+        assert response.headers.get("Pragma") == pragma
+
+
+def test_explicit_cache_policy_is_preserved():
+    response = Response(
+        media_type="application/json",
+        headers={"Cache-Control": "public, max-age=60"},
+    )
+
+    main._apply_cache_headers(_request("/api/public-icon"), response)
+
+    assert response.headers["Cache-Control"] == "public, max-age=60"

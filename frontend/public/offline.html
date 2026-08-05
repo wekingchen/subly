@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#0b6cff" />
+    <title>Subly · 当前离线</title>
+    <style>
+      :root { color-scheme: dark; font-family: Inter, "PingFang SC", "Microsoft YaHei", sans-serif; }
+      * { box-sizing: border-box; }
+      body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 24px; background: #07111f; color: #eef6ff; }
+      main { width: min(100%, 460px); padding: 28px; border: 1px solid #25415f; border-radius: 22px; background: #0c1a2c; box-shadow: 0 24px 70px #0007; }
+      img { width: 64px; height: 64px; border-radius: 16px; }
+      .kicker { margin-top: 22px; color: #54d6ff; font-size: 12px; letter-spacing: .16em; text-transform: uppercase; }
+      h1 { margin: 8px 0 10px; font-size: clamp(28px, 8vw, 42px); line-height: 1.08; }
+      p { margin: 0; color: #a9bdd2; line-height: 1.7; }
+      a { display: grid; place-items: center; width: 100%; min-height: 48px; margin-top: 24px; border-radius: 12px; background: #0b6cff; color: white; font-weight: 700; text-decoration: none; }
+      a:focus-visible { outline: 3px solid #54d6ff; outline-offset: 3px; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <img src="/pwa-192.png" alt="Subly" />
+      <div class="kicker">连接中断</div>
+      <h1>续费雷达暂时离线</h1>
+      <p>本页不会缓存你的订阅或账户数据。恢复网络后，重新加载即可返回控制台。</p>
+      <a href="/">重新加载</a>
+    </main>
+  </body>
+</html>

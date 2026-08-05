@@ -99,7 +99,7 @@
           <template v-if="form.billing_type === 'recurring'">
             <div style="flex:1">
               <label for="sub-cycle-count">{{ t('sub.cycleCount') }}</label>
-              <input id="sub-cycle-count" v-model.number="form.cycle_count" name="cycle_count" type="number" min="1" />
+              <input id="sub-cycle-count" v-model.number="form.cycle_count" name="cycle_count" type="number" min="1" max="1000" />
             </div>
             <div style="flex:1">
               <label for="sub-cycle">{{ t('sub.cycle') }}</label>

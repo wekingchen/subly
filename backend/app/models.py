@@ -71,6 +71,9 @@ class User(Base):
     refresh_sessions: Mapped[list["RefreshSession"]] = relationship(
         back_populates="user", cascade="all, delete-orphan"
     )
+    calendar_feed_token: Mapped["CalendarFeedToken | None"] = relationship(
+        back_populates="user", cascade="all, delete-orphan", uselist=False
+    )
 
 
 class RefreshSession(Base):
@@ -82,6 +85,22 @@ class RefreshSession(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
     user: Mapped["User"] = relationship(back_populates="refresh_sessions")
+
+
+class CalendarFeedToken(Base):
+    __tablename__ = "calendar_feed_tokens"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id"), unique=True, index=True
+    )
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    uid_namespace: Mapped[str] = mapped_column(String(32), unique=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    user: Mapped["User"] = relationship(back_populates="calendar_feed_token")
 
 
 class Category(Base):
