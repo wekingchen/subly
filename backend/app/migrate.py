@@ -40,6 +40,8 @@ _COLUMNS = [
     ("users", "webhook_enabled", "BOOLEAN NOT NULL DEFAULT 0"),
     ("users", "webhook_url", "VARCHAR(512)"),
     ("users", "webhook_secret", "VARCHAR(255)"),
+    ("exchange_rates", "is_manual", "BOOLEAN NOT NULL DEFAULT 0"),
+    ("exchange_rates", "user_id", "INTEGER"),
     ("icon_library_services", "category_keys", "JSON"),
 ]
 
@@ -125,6 +127,44 @@ def run_migrations(engine: Engine) -> None:
         except Exception as e:  # noqa: BLE001
             print(f"[migrate] 跳过 subscriptions.is_keepalive 范围清理：{e}")
 
+        try:
+            normalized = _normalize_currency_codes(conn)
+            if normalized:
+                print(f"[migrate] 已规范化 {normalized} 个历史货币代码")
+        except Exception as exc:  # noqa: BLE001
+            logger.exception(
+                "event=migration_currency_normalization_failed error_type=%s",
+                type(exc).__name__,
+            )
+            raise RuntimeError("数据库数据迁移失败：无法规范化历史货币代码") from exc
+
+        try:
+            if (
+                _table_exists(conn, "exchange_rates")
+                and _table_exists(conn, "currencies")
+                and _column_exists(conn, "exchange_rates", "is_manual")
+                and _column_exists(conn, "exchange_rates", "user_id")
+            ):
+                result = conn.execute(text("""
+                    UPDATE exchange_rates
+                    SET is_manual = 1,
+                        user_id = (
+                          SELECT currencies.user_id
+                          FROM currencies
+                          WHERE currencies.code = exchange_rates.quote
+                        )
+                    WHERE EXISTS (
+                      SELECT 1 FROM currencies
+                      WHERE currencies.code = exchange_rates.quote
+                        AND currencies.is_custom = 1
+                        AND currencies.user_id IS NOT NULL
+                    )
+                """))
+                if result.rowcount:
+                    print(f"[migrate] 已标记 {result.rowcount} 条自定义货币手动汇率")
+        except Exception as e:  # noqa: BLE001
+            print(f"[migrate] 跳过自定义货币手动汇率回填：{e}")
+
         # 清理 users 表中历史的危险出网配置：升级前写入的 telegram_api_base /
         # telegram_proxy / bark_server / webhook_url 可能含 query / userinfo / 元数据地址等，
         # 现在校验已收紧，旧值不合法则置空并打告警，避免继续生效。
@@ -133,6 +173,82 @@ def run_migrations(engine: Engine) -> None:
                 _scrub_outbound_urls(conn)
         except Exception as e:  # noqa: BLE001
             print(f"[migrate] 跳过 users 出网配置清理：{e}")
+
+
+def _normalize_currency_codes(conn) -> int:
+    from app.schemas import normalize_currency_code
+
+    normalized = 0
+
+    if _table_exists(conn, "currencies") and _column_exists(conn, "currencies", "code"):
+        codes = [row[0] for row in conn.execute(text("SELECT code FROM currencies")).all()]
+        normalized_codes: dict[str, list[str]] = {}
+        for code in codes:
+            target = normalize_currency_code(code)
+            normalized_codes.setdefault(target, []).append(code)
+        collisions = {
+            target: originals
+            for target, originals in normalized_codes.items()
+            if len(originals) > 1
+        }
+        if collisions:
+            target = sorted(collisions)[0]
+            raise ValueError(f"货币代码规范化冲突：{collisions[target]!r} -> {target}")
+
+    if (
+        _table_exists(conn, "exchange_rates")
+        and _column_exists(conn, "exchange_rates", "base")
+        and _column_exists(conn, "exchange_rates", "quote")
+    ):
+        pairs = conn.execute(text("SELECT id, base, quote FROM exchange_rates")).all()
+        normalized_pairs: dict[tuple[str, str], list[int]] = {}
+        for row_id, base, quote in pairs:
+            target = (
+                normalize_currency_code(base),
+                normalize_currency_code(quote),
+            )
+            normalized_pairs.setdefault(target, []).append(row_id)
+        collisions = {
+            target: row_ids
+            for target, row_ids in normalized_pairs.items()
+            if len(row_ids) > 1
+        }
+        if collisions:
+            target = sorted(collisions)[0]
+            raise ValueError(
+                f"汇率代码规范化冲突：rows={collisions[target]!r} -> {target!r}"
+            )
+
+    for table, columns in (
+        ("currencies", ("code",)),
+        ("exchange_rates", ("base", "quote")),
+        ("subscriptions", ("currency",)),
+        ("renewal_history", ("currency",)),
+        ("users", ("base_currency",)),
+    ):
+        if not _table_exists(conn, table):
+            continue
+        available = [column for column in columns if _column_exists(conn, table, column)]
+        if not available:
+            continue
+        for column in available:
+            values = conn.execute(text(
+                f'SELECT DISTINCT "{column}" FROM "{table}" '
+                f'WHERE "{column}" IS NOT NULL'
+            )).scalars().all()
+            for value in values:
+                normalize_currency_code(value)
+        assignments = ", ".join(
+            f'"{column}" = UPPER(TRIM("{column}"))' for column in available
+        )
+        conditions = " OR ".join(
+            f'("{column}" IS NOT NULL AND '
+            f'"{column}" != UPPER(TRIM("{column}")))'
+            for column in available
+        )
+        result = conn.execute(text(f'UPDATE "{table}" SET {assignments} WHERE {conditions}'))
+        normalized += result.rowcount or 0
+    return normalized
 
 
 def _scrub_outbound_urls(conn) -> None:

@@ -8,7 +8,7 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
 from app.database import Base
-from app.models import Bundle, Category, PaymentMethod, RenewalHistory, Subscription, User
+from app.models import Bundle, Category, Currency, PaymentMethod, RenewalHistory, Subscription, User
 from app.routers import reports, subscriptions
 from app.schemas import SubscriptionIn, SubscriptionUpdate
 from app.security import hash_password
@@ -33,6 +33,8 @@ def add_user(db, username="alice", password="correct-pass"):
         base_currency="CNY",
     )
     db.add(user)
+    if db.get(Currency, "CNY") is None:
+        db.add(Currency(code="CNY", name="人民币", symbol="¥", is_custom=False))
     db.commit()
     db.refresh(user)
     return user
@@ -49,7 +51,11 @@ def add_category(db, name="电信运营商 / Carrier (SIM 保号)"):
 @pytest.fixture(autouse=True)
 def quiet_subscription_side_effects(monkeypatch):
     monkeypatch.setattr(subscriptions.activity, "log", lambda *args, **kwargs: None)
-    monkeypatch.setattr(subscriptions.exchange, "convert", lambda db, amount, from_cur, to_cur: amount)
+    monkeypatch.setattr(
+        subscriptions.exchange,
+        "convert",
+        lambda db, amount, from_cur, to_cur, **kwargs: amount,
+    )
     monkeypatch.setattr(subscriptions.icon_library, "website_for_name", lambda db, name: None)
 
 
@@ -79,6 +85,57 @@ def test_create_recurring_subscription_computes_next_renewal(monkeypatch):
         engine.dispose()
 
 
+def test_subscription_currency_is_normalized_before_storage():
+    db, engine = make_db()
+    try:
+        user = add_user(db)
+        created = subscriptions.create_sub(
+            SubscriptionIn(name="币种规范化", currency=" cny "),
+            request_stub(),
+            user,
+            db,
+        )
+        assert created.currency == "CNY"
+        assert db.get(Subscription, created.id).currency == "CNY"
+
+        updated = subscriptions.update_sub(
+            created.id,
+            SubscriptionUpdate(currency=" cny "),
+            user,
+            db,
+        )
+        assert updated.currency == "CNY"
+        assert db.get(Subscription, created.id).currency == "CNY"
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_subscription_update_rejects_null_currency():
+    with pytest.raises(ValidationError, match="货币代码不能为空"):
+        SubscriptionUpdate(currency=None)
+
+
+def test_subscription_rejects_custom_currency_without_rate():
+    db, engine = make_db()
+    try:
+        user = add_user(db)
+        db.add(Currency(code="ABC", name="测试币", symbol="A", is_custom=True, user_id=user.id))
+        db.commit()
+
+        with pytest.raises(HTTPException, match="货币汇率") as error:
+            subscriptions.create_sub(
+                SubscriptionIn(name="缺汇率订阅", currency="ABC"),
+                request_stub(),
+                user,
+                db,
+            )
+        assert error.value.status_code == 400
+    finally:
+        db.close()
+        engine.dispose()
+
+
 def test_create_one_time_subscription_clears_renewal_and_auto_renew():
     db, engine = make_db()
     try:
@@ -100,6 +157,7 @@ def test_create_one_time_subscription_clears_renewal_and_auto_renew():
         assert out.auto_renew is False
         saved = db.get(Subscription, out.id)
         assert saved.next_renewal_date is None
+        assert saved.end_date is None
         assert saved.auto_renew is False
     finally:
         db.close()
@@ -478,12 +536,16 @@ def test_create_sub_rejects_refs_owned_by_other_user():
         their_cat = Category(user_id=other.id, name="bob 的分类", icon="", color="#000")
         their_pm = PaymentMethod(user_id=other.id, name="bob 的卡", icon="")
         their_bundle = Bundle(user_id=other.id, name="bob 的套餐")
-        db.add_all([their_cat, their_pm, their_bundle])
+        their_currency = Currency(
+            code="BOBPTS", name="bob 的币", symbol="B", is_custom=True, user_id=other.id
+        )
+        db.add_all([their_cat, their_pm, their_bundle, their_currency])
         db.commit()
         for field, value in [
             ("category_id", their_cat.id),
             ("payment_method_id", their_pm.id),
             ("bundle_id", their_bundle.id),
+            ("currency", their_currency.code),
         ]:
             with pytest.raises(HTTPException) as exc:
                 subscriptions.create_sub(
@@ -537,6 +599,32 @@ def test_update_sub_rejects_stale_cross_user_ref_even_when_ref_unchanged():
             billing_type="recurring", cycle="month", cycle_count=1,
             start_date=date(2024, 1, 1), next_renewal_date=date(2024, 2, 1),
             bundle_id=their_bundle.id,
+        )
+        db.add(sub)
+        db.commit()
+
+        with pytest.raises(HTTPException) as exc:
+            subscriptions.update_sub(sub.id, SubscriptionUpdate(remark="只改备注"), user, db)
+        assert exc.value.status_code == 400
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_update_sub_rejects_stale_cross_user_currency():
+    db, engine = make_db()
+    try:
+        user = add_user(db)
+        other = add_user(db, "bob")
+        their_currency = Currency(
+            code="BOBPTS", name="bob 的币", symbol="B", is_custom=True, user_id=other.id
+        )
+        db.add(their_currency)
+        db.commit()
+        sub = Subscription(
+            user_id=user.id, name="脏币种订阅", amount=1, currency=their_currency.code,
+            billing_type="recurring", cycle="month", cycle_count=1,
+            start_date=date(2024, 1, 1), next_renewal_date=date(2024, 2, 1),
         )
         db.add(sub)
         db.commit()
@@ -647,6 +735,147 @@ def test_reports_exclude_paused_subscriptions():
         all_detail_names = [it["name"] for it in detail.get("items", [])]
         assert "暂停周期" not in all_detail_names
         assert "暂停买断" not in all_detail_names
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_create_and_update_validate_inclusive_end_date():
+    db, engine = make_db()
+    try:
+        user = add_user(db)
+        with pytest.raises(HTTPException) as create_error:
+            subscriptions.create_sub(
+                SubscriptionIn(
+                    name="错误截止日",
+                    start_date=date(2024, 2, 1),
+                    end_date=date(2024, 1, 31),
+                ),
+                request_stub(),
+                user,
+                db,
+            )
+        assert create_error.value.status_code == 400
+
+        sub = Subscription(
+            user_id=user.id,
+            name="可编辑订阅",
+            amount=10,
+            currency="CNY",
+            billing_type="recurring",
+            start_date=date(2024, 1, 1),
+            next_renewal_date=date(2024, 2, 1),
+            end_date=date(2024, 2, 1),
+        )
+        db.add(sub)
+        db.commit()
+
+        out = subscriptions.update_sub(
+            sub.id,
+            SubscriptionUpdate(start_date=date(2024, 2, 1), end_date=date(2024, 2, 1)),
+            user,
+            db,
+        )
+        assert out.end_date == date(2024, 2, 1)
+
+        with pytest.raises(HTTPException) as update_error:
+            subscriptions.update_sub(
+                sub.id,
+                SubscriptionUpdate(start_date=date(2024, 2, 2)),
+                user,
+                db,
+            )
+        assert update_error.value.status_code == 400
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_one_time_create_and_update_clear_end_date():
+    db, engine = make_db()
+    try:
+        user = add_user(db)
+        out = subscriptions.create_sub(
+            SubscriptionIn(
+                name="买断",
+                billing_type="one_time",
+                start_date=date(2024, 1, 1),
+                end_date=date(2024, 12, 31),
+            ),
+            request_stub(),
+            user,
+            db,
+        )
+        assert out.end_date is None
+
+        recurring = Subscription(
+            user_id=user.id,
+            name="改买断",
+            amount=10,
+            currency="CNY",
+            billing_type="recurring",
+            start_date=date(2024, 1, 1),
+            next_renewal_date=date(2024, 2, 1),
+            end_date=date(2024, 12, 31),
+        )
+        db.add(recurring)
+        db.commit()
+        updated = subscriptions.update_sub(
+            recurring.id,
+            SubscriptionUpdate(billing_type="one_time"),
+            user,
+            db,
+        )
+        assert updated.end_date is None
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_renew_allows_cutoff_day_and_rejects_after_cutoff():
+    db, engine = make_db()
+    try:
+        user = add_user(db)
+        allowed = Subscription(
+            user_id=user.id,
+            name="截止日续费",
+            amount=10,
+            currency="CNY",
+            billing_type="recurring",
+            cycle="month",
+            cycle_count=1,
+            start_date=date(2024, 1, 1),
+            next_renewal_date=date(2024, 2, 1),
+            end_date=date(2024, 2, 1),
+        )
+        rejected = Subscription(
+            user_id=user.id,
+            name="截止后续费",
+            amount=10,
+            currency="CNY",
+            billing_type="recurring",
+            cycle="month",
+            cycle_count=1,
+            start_date=date(2024, 1, 1),
+            next_renewal_date=date(2024, 2, 2),
+            end_date=date(2024, 2, 1),
+        )
+        db.add_all([allowed, rejected])
+        db.commit()
+
+        out = subscriptions.renew_sub(
+            allowed.id, subscriptions.RenewIn(mode="due"), user, db
+        )
+        assert out.next_renewal_date == date(2024, 3, 1)
+
+        with pytest.raises(HTTPException) as error:
+            subscriptions.renew_sub(
+                rejected.id, subscriptions.RenewIn(mode="due"), user, db
+            )
+        assert error.value.status_code == 400
+        assert db.scalars(
+            select(RenewalHistory).where(RenewalHistory.subscription_id == rejected.id)
+        ).all() == []
     finally:
         db.close()
         engine.dispose()

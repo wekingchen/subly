@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.billing import is_renewal_within_end_date, is_subscription_current
 from app.database import get_db
 from app.deps import get_current_user
 from app.models import Subscription, User
@@ -15,7 +16,9 @@ router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
 
 def _monthly_cost_in_base(db: Session, sub: Subscription, base: str) -> float:
     """把一个周期订阅折算为「每月」成本（基准货币）。"""
-    amt = exchange.convert(db, sub.amount, sub.currency, base)
+    amt = exchange.convert(
+        db, sub.amount, sub.currency, base, user_id=sub.user_id
+    )
     n = max(1, sub.cycle_count)
     if sub.cycle == "day":
         return amt / n * 30
@@ -40,7 +43,11 @@ def dashboard(user: User = Depends(get_current_user), db: Session = Depends(get_
         )
     ).all()
 
-    recurring = [s for s in subs if s.billing_type == "recurring"]
+    recurring = [
+        s
+        for s in subs
+        if s.billing_type == "recurring" and is_subscription_current(today, s.end_date)
+    ]
     month_spend = sum(_monthly_cost_in_base(db, s, base) for s in recurring)
     year_spend = month_spend * 12
 
@@ -50,7 +57,9 @@ def dashboard(user: User = Depends(get_current_user), db: Session = Depends(get_
         [
             s
             for s in recurring
-            if s.next_renewal_date and today <= s.next_renewal_date <= horizon
+            if s.next_renewal_date
+            and today <= s.next_renewal_date <= horizon
+            and is_renewal_within_end_date(s.next_renewal_date, s.end_date)
         ],
         key=lambda s: s.next_renewal_date,
     )[:8]
@@ -61,7 +70,10 @@ def dashboard(user: User = Depends(get_current_user), db: Session = Depends(get_
         out = []
         for s in items:
             o = SubscriptionOut.model_validate(s)
-            o.amount_in_base = round(exchange.convert(db, s.amount, s.currency, base), 2)
+            o.amount_in_base = round(
+                exchange.convert(db, s.amount, s.currency, base, user_id=s.user_id),
+                2,
+            )
             out.append(o)
         return out
 
@@ -69,7 +81,11 @@ def dashboard(user: User = Depends(get_current_user), db: Session = Depends(get_
         base_currency=base,
         month_spend=round(month_spend, 2),
         year_spend=round(year_spend, 2),
-        active_count=len(subs),
+        active_count=sum(
+            1
+            for s in subs
+            if s.billing_type != "recurring" or is_subscription_current(today, s.end_date)
+        ),
         upcoming=conv(upcoming),
         recent=conv(recent),
     )

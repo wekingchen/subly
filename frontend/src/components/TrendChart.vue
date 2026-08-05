@@ -4,15 +4,17 @@
       <span class="lg-item"><span class="lg-dot hist"></span>{{ t('reports.trendHistory') }}</span>
       <span class="lg-item"><span class="lg-dot fut"></span>{{ t('reports.trendFuture') }}</span>
     </div>
-    <div class="trend-chart" v-if="bars.length">
-      <div v-for="b in bars" :key="b.key" class="trend-col">
-        <div class="trend-bar-wrap" :title="b.tooltip">
-          <div class="trend-stack">
-            <div v-if="b.futH" class="trend-segment fut" :style="{ height: b.futH + '%' }"></div>
-            <div v-if="b.histH" class="trend-segment hist" :style="{ height: b.histH + '%' }"></div>
+    <div v-if="bars.length" class="trend-scroll" tabindex="0">
+      <div class="trend-chart" :style="{ minWidth: `${Math.max(260, bars.length * 46)}px` }">
+        <div v-for="b in bars" :key="b.key" class="trend-col">
+          <div class="trend-bar-wrap" role="img" tabindex="0" :title="b.tooltip" :aria-label="b.ariaLabel">
+            <div class="trend-stack">
+              <div v-if="b.futH" class="trend-segment fut" :style="{ height: b.futH + '%' }"></div>
+              <div v-if="b.histH" class="trend-segment hist" :style="{ height: b.histH + '%' }"></div>
+            </div>
           </div>
+          <span class="trend-month" :class="{ current: b.current }">{{ b.label }}</span>
         </div>
-        <span class="trend-month" :class="{ current: b.current }">{{ b.label }}</span>
       </div>
     </div>
     <p v-else class="muted trend-empty">{{ t('reports.trendEmpty') }}</p>
@@ -57,7 +59,8 @@ const bars = computed(() => {
       current: r.month === props.currentMonth,
       histH: r.hist > 0 ? (r.hist / max) * 100 : 0,
       futH: r.fut > 0 ? (r.fut / max) * 100 : 0,
-      tooltip: `${r.month}\n${details.join('\n')}\n${t('reports.total')}: ${formatMoney(total, props.baseCurrency)}`
+      tooltip: `${r.month}\n${details.join('\n')}\n${t('reports.total')}: ${formatMoney(total, props.baseCurrency)}`,
+      ariaLabel: `${r.month}，${details.join('，')}，${t('reports.total')}：${formatMoney(total, props.baseCurrency)}`
     }
   })
 })
@@ -70,6 +73,8 @@ const bars = computed(() => {
 .lg-dot { width: 9px; height: 9px; border-radius: 3px; }
 .lg-dot.hist { background: var(--primary); }
 .lg-dot.fut { background: color-mix(in srgb, var(--primary) 30%, var(--border)); }
+.trend-scroll { max-width: 100%; overflow-x: auto; overscroll-behavior-inline: contain; }
+.trend-scroll:focus-visible, .trend-bar-wrap:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
 .trend-chart { display: flex; align-items: flex-end; gap: 6px; height: 140px; padding: 8px 4px 0; }
 .trend-col { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; align-items: center; gap: 4px; height: 100%; }
 .trend-bar-wrap { flex: 1 1 0; width: 100%; display: flex; align-items: flex-end; justify-content: center; min-height: 0; }

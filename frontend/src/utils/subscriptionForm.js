@@ -60,5 +60,6 @@ export function normalizeKeepaliveScope(form, categories = []) {
 export function buildSubscriptionPayload(form) {
   const payload = { ...form }
   if (!payload.next_renewal_date) delete payload.next_renewal_date
+  payload.end_date = payload.billing_type === 'one_time' ? null : (payload.end_date || null)
   return payload
 }

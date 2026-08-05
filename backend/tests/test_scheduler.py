@@ -122,7 +122,7 @@ def test_run_reminder_scan_sends_webhook_and_records_safe_text_log(monkeypatch):
         captured = {}
         monkeypatch.setattr(scheduler.database, "SessionLocal", lambda: Session())
         monkeypatch.setattr(scheduler, "_local_today", lambda: date(2024, 1, 1))
-        monkeypatch.setattr(scheduler.exchange, "convert", lambda db, amount, from_cur, to_cur: amount)
+        monkeypatch.setattr(scheduler.exchange, "convert", lambda db, amount, from_cur, to_cur, **kwargs: amount)
         monkeypatch.setattr(scheduler.activity, "log", lambda *args, **kwargs: None)
         monkeypatch.setattr(
             scheduler.webhook,
@@ -180,7 +180,7 @@ def test_run_reminder_scan_isolates_webhook_failure_from_other_channels(monkeypa
         calls = []
         monkeypatch.setattr(scheduler.database, "SessionLocal", lambda: Session())
         monkeypatch.setattr(scheduler, "_local_today", lambda: date(2024, 1, 1))
-        monkeypatch.setattr(scheduler.exchange, "convert", lambda db, amount, from_cur, to_cur: amount)
+        monkeypatch.setattr(scheduler.exchange, "convert", lambda db, amount, from_cur, to_cur, **kwargs: amount)
         monkeypatch.setattr(scheduler.activity, "log", lambda *args, **kwargs: None)
         monkeypatch.setattr(scheduler.telegram, "send_message", lambda *args, **kwargs: calls.append("telegram"))
         monkeypatch.setattr(scheduler.bark, "send_push", lambda *args, **kwargs: calls.append("bark") or {})
@@ -246,7 +246,7 @@ def test_run_reminder_scan_executes_ready_channels_concurrently(monkeypatch):
 
         monkeypatch.setattr(scheduler.database, "SessionLocal", lambda: Session())
         monkeypatch.setattr(scheduler, "_local_today", lambda: date(2024, 1, 1))
-        monkeypatch.setattr(scheduler.exchange, "convert", lambda db, amount, from_cur, to_cur: amount)
+        monkeypatch.setattr(scheduler.exchange, "convert", lambda db, amount, from_cur, to_cur, **kwargs: amount)
         monkeypatch.setattr(scheduler.activity, "log", lambda *args, **kwargs: None)
         monkeypatch.setattr(scheduler.telegram, "send_message", rendezvous)
         monkeypatch.setattr(scheduler.bark, "send_push", rendezvous)
@@ -365,7 +365,7 @@ def test_send_one_sanitizes_provider_failure_messages(monkeypatch):
 def test_reminder_text_includes_core_subscription_context(monkeypatch):
     db, engine = make_db()
     try:
-        monkeypatch.setattr(scheduler.exchange, "convert", lambda db, amount, from_cur, to_cur: 88.88)
+        monkeypatch.setattr(scheduler.exchange, "convert", lambda db, amount, from_cur, to_cur, **kwargs: 88.88)
         user = add_user(db, base_currency="CNY")
         category = Category(user_id=user.id, name="云服务器", icon="", color="#00f")
         payment = PaymentMethod(user_id=user.id, name="Visa", icon="")
@@ -404,7 +404,7 @@ def test_bark_text_is_natural_and_omits_empty_fields(monkeypatch):
     db, engine = make_db()
     try:
         monkeypatch.setattr(scheduler.exchange, "convert",
-                            lambda db, amount, from_cur, to_cur: amount if from_cur == to_cur else 88.0)
+                            lambda db, amount, from_cur, to_cur, **kwargs: amount if from_cur == to_cur else 88.0)
         # 同币种：不折算；无套餐/付款/备注/分类：正文停在到期语句
         user_cny = add_user(db, username="cn", base_currency="CNY")
         sub_plain = add_subscription(db, user_cny, name="Netflix", amount=88.0, currency="CNY",
@@ -463,7 +463,7 @@ def test_bark_text_uses_keepalive_phrasing_when_flag_set(monkeypatch):
     db, engine = make_db()
     try:
         monkeypatch.setattr(scheduler.exchange, "convert",
-                            lambda db, amount, from_cur, to_cur: amount if from_cur == to_cur else 88.0)
+                            lambda db, amount, from_cur, to_cur, **kwargs: amount if from_cur == to_cur else 88.0)
         user = add_user(db, base_currency="CNY")
         sub = add_subscription(db, user, name="香港保号卡", amount=10.0, currency="CNY",
                                plan="保号", is_keepalive=True,
@@ -623,7 +623,7 @@ def test_bark_text_uses_overdue_phrasing_when_days_left_negative(monkeypatch):
     db, engine = make_db()
     try:
         monkeypatch.setattr(scheduler.exchange, "convert",
-                            lambda db, amount, from_cur, to_cur: amount if from_cur == to_cur else 88.0)
+                            lambda db, amount, from_cur, to_cur, **kwargs: amount if from_cur == to_cur else 88.0)
         user = add_user(db, base_currency="CNY")
         sub = add_subscription(db, user, name="域名", amount=120.0, currency="CNY",
                                plan=None, next_renewal_date=date(2024, 1, 9))
@@ -731,6 +731,61 @@ def test_run_reminder_scan_skips_paused_subscriptions(monkeypatch):
         result = scheduler.run_reminder_scan()
         assert result == {"sent": 0, "failed": 0}
         assert sent_calls == []  # 暂停订阅未触发外发
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_run_reminder_scan_respects_inclusive_end_date(monkeypatch):
+    db, engine = make_db()
+    Session = sessionmaker(bind=engine)
+    try:
+        today = date(2024, 1, 1)
+        user = add_user(
+            db,
+            bark_enabled=True,
+            bark_device_key="dk",
+            bark_server="https://api.day.app",
+        )
+        add_subscription(
+            db,
+            user,
+            name="截止日 occurrence",
+            next_renewal_date=date(2024, 1, 8),
+            end_date=date(2024, 1, 8),
+            remind_days_before="7",
+        )
+        add_subscription(
+            db,
+            user,
+            name="订阅已截止",
+            next_renewal_date=date(2024, 1, 8),
+            end_date=date(2023, 12, 31),
+            remind_days_before="7",
+        )
+        add_subscription(
+            db,
+            user,
+            name="occurrence 越界",
+            next_renewal_date=date(2024, 1, 8),
+            end_date=date(2024, 1, 7),
+            remind_days_before="7",
+        )
+        db.commit()
+        db.close()
+
+        calls = []
+        monkeypatch.setattr(scheduler.database, "SessionLocal", lambda: Session())
+        monkeypatch.setattr(scheduler, "_local_today", lambda: today)
+        monkeypatch.setattr(scheduler.activity, "log", lambda *args, **kwargs: None)
+        monkeypatch.setattr(
+            scheduler.bark,
+            "send_push",
+            lambda *args, **kwargs: calls.append(kwargs) or {},
+        )
+
+        assert scheduler.run_reminder_scan() == {"sent": 1, "failed": 0}
+        assert len(calls) == 1
     finally:
         db.close()
         engine.dispose()

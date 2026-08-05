@@ -171,22 +171,75 @@ describe('cloneSubscriptionForEdit', () => {
 
 describe('buildSubscriptionPayload', () => {
   it('deletes empty next renewal date without mutating the form', () => {
-    const form = { id: 1, name: 'Test', next_renewal_date: '', bundle_id: 2 }
+    const form = {
+      id: 1,
+      name: 'Test',
+      billing_type: 'recurring',
+      next_renewal_date: '',
+      end_date: null,
+      bundle_id: 2
+    }
     const payload = buildSubscriptionPayload(form)
 
-    expect(payload).toEqual({ id: 1, name: 'Test', bundle_id: 2 })
-    expect(form).toEqual({ id: 1, name: 'Test', next_renewal_date: '', bundle_id: 2 })
+    expect(payload).toEqual({
+      id: 1,
+      name: 'Test',
+      billing_type: 'recurring',
+      end_date: null,
+      bundle_id: 2
+    })
+    expect(form).toEqual({
+      id: 1,
+      name: 'Test',
+      billing_type: 'recurring',
+      next_renewal_date: '',
+      end_date: null,
+      bundle_id: 2
+    })
   })
 
   it('keeps non-empty next renewal date', () => {
     expect(buildSubscriptionPayload({
       id: 1,
       name: 'Test',
-      next_renewal_date: '2024-02-01'
+      billing_type: 'recurring',
+      next_renewal_date: '2024-02-01',
+      end_date: '2024-12-31'
     })).toEqual({
       id: 1,
       name: 'Test',
-      next_renewal_date: '2024-02-01'
+      billing_type: 'recurring',
+      next_renewal_date: '2024-02-01',
+      end_date: '2024-12-31'
+    })
+  })
+
+  it('sends null when an existing end date is cleared', () => {
+    const form = {
+      id: 1,
+      name: 'Test',
+      billing_type: 'recurring',
+      next_renewal_date: '2024-02-01',
+      end_date: ''
+    }
+
+    expect(buildSubscriptionPayload(form)).toEqual({
+      id: 1,
+      name: 'Test',
+      billing_type: 'recurring',
+      next_renewal_date: '2024-02-01',
+      end_date: null
+    })
+    expect(form.end_date).toBe('')
+  })
+
+  it('clears end date for one-time subscriptions', () => {
+    expect(buildSubscriptionPayload({
+      billing_type: 'one_time',
+      end_date: '2024-12-31'
+    })).toEqual({
+      billing_type: 'one_time',
+      end_date: null
     })
   })
 })

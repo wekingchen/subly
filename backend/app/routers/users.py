@@ -9,6 +9,7 @@ from app.deps import get_current_user
 from app.models import User
 from app.schemas import UserOut, UserUpdate, validate_outbound_url
 from app.security import hash_password, verify_password
+from app.subscription_rules import currency_allowed_for_user, custom_currency_has_rate
 
 router = APIRouter(prefix="/api/me", tags=["me"])
 
@@ -33,6 +34,14 @@ def update_me(
     db: Session = Depends(get_db),
 ):
     data = payload.model_dump(exclude_unset=True)
+    if "base_currency" in data:
+        if not isinstance(data["base_currency"], str) or not data["base_currency"]:
+            raise HTTPException(400, "基准货币不能为空")
+        if data["base_currency"] != user.base_currency:
+            if not currency_allowed_for_user(db, user.id, data["base_currency"]):
+                raise HTTPException(400, "基准货币不存在或不在你的账户下")
+            if not custom_currency_has_rate(db, user.id, data["base_currency"]):
+                raise HTTPException(409, "自定义基准货币缺少可用汇率")
     # 月预算以基准货币计价；切换币种时若调用方未显式给出新预算，原子清空旧预算，
     # 避免旧数字被按新币种解释。调用方也可在同一请求里提交新的 monthly_budget。
     if (

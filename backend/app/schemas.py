@@ -6,6 +6,20 @@ from urllib.parse import urlsplit
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
 
 
+_CURRENCY_CODE_CHARS = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
+
+
+def normalize_currency_code(value: str) -> str:
+    if not isinstance(value, str):
+        raise ValueError("货币代码必须是字符串")
+    normalized = value.strip().upper()
+    if not 1 <= len(normalized) <= 8:
+        raise ValueError("货币代码必须为 1 至 8 位")
+    if any(char not in _CURRENCY_CODE_CHARS for char in normalized):
+        raise ValueError("货币代码只能包含英文字母和数字")
+    return normalized
+
+
 def normalize_url(value: str | None) -> str | None:
     """订阅官网 URL 归一化与协议白名单校验。
     空/None → None；仅允许 http/https（大小写不敏感，自动 strip 前后空白），
@@ -180,6 +194,11 @@ class UserOut(BaseModel):
 class UserUpdate(BaseModel):
     theme: str | None = None
     base_currency: str | None = None
+
+    @field_validator("base_currency")
+    @classmethod
+    def normalize_base_currency(cls, value):
+        return normalize_currency_code(value) if isinstance(value, str) else value
     monthly_budget: float | None = Field(default=None, ge=0, allow_inf_nan=False)
     category_order: list[int] | None = None
     telegram_enabled: bool | None = None
@@ -239,13 +258,42 @@ class CurrencyOut(BaseModel):
     name: str
     symbol: str
     is_custom: bool
+    # 直觉口径：1 单位自定义货币 = X 单位当前用户基准货币。
+    rate_to_user_base: float | None = None
 
 
 class CurrencyIn(BaseModel):
     code: str
     name: str
     symbol: str = ""
-    rate_to_base: float | None = None  # 自定义货币可手动指定相对基准货币的汇率
+    # 旧接口兼容：系统汇率基准币 -> 自定义币的原始报价。
+    rate_to_base: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+    # 新接口口径：1 单位自定义货币 = X 单位当前用户基准货币。
+    rate_to_user_base: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+
+    @field_validator("code")
+    @classmethod
+    def _normalize_code(cls, value):
+        return normalize_currency_code(value)
+
+    @model_validator(mode="after")
+    def _validate_rate_fields(self):
+        if {"rate_to_base", "rate_to_user_base"}.issubset(self.model_fields_set):
+            raise ValueError("rate_to_base 与 rate_to_user_base 不能同时提交")
+        return self
+
+
+class CurrencyUpdate(BaseModel):
+    name: str | None = None
+    symbol: str | None = None
+    rate_to_base: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+    rate_to_user_base: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+
+    @model_validator(mode="after")
+    def _validate_rate_fields(self):
+        if {"rate_to_base", "rate_to_user_base"}.issubset(self.model_fields_set):
+            raise ValueError("rate_to_base 与 rate_to_user_base 不能同时提交")
+        return self
 
 
 # ---------- Subscription ----------
@@ -272,6 +320,11 @@ class SubscriptionIn(BaseModel):
     @classmethod
     def _validate_url(cls, v):
         return normalize_url(v)
+
+    @field_validator("currency")
+    @classmethod
+    def _normalize_currency(cls, v):
+        return normalize_currency_code(v)
 
     @model_validator(mode="after")
     def _validate_keepalive_requires_recurring(self):
@@ -322,6 +375,13 @@ class SubscriptionUpdate(BaseModel):
     @classmethod
     def _validate_url(cls, v):
         return normalize_url(v)
+
+    @field_validator("currency")
+    @classmethod
+    def _normalize_currency(cls, v):
+        if v is None:
+            raise ValueError("货币代码不能为空")
+        return normalize_currency_code(v)
 
     @model_validator(mode="after")
     def _validate_keepalive_requires_recurring(self):

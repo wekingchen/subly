@@ -16,6 +16,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app import activity, database
+from app.billing import is_renewal_within_end_date, is_subscription_current
 from app.config import settings
 from app.models import Category, NotificationLog, PaymentMethod, Subscription, User
 from app.services import bark, exchange, telegram, webhook
@@ -202,6 +203,10 @@ def run_reminder_scan() -> dict:
                 continue
             if not user.is_active:
                 continue  # 禁用用户不参与提醒扫描
+            if not is_subscription_current(today, sub.end_date):
+                continue
+            if not is_renewal_within_end_date(sub.next_renewal_date, sub.end_date):
+                continue
             tg_ready = user.telegram_enabled and user.telegram_bot_token and user.telegram_chat_id
             bark_ready = user.bark_enabled and user.bark_device_key
             webhook_ready = user.webhook_enabled and user.webhook_url and user.webhook_secret and user.webhook_secret.strip()
@@ -299,7 +304,13 @@ def _escape_md(text: str) -> str:
 def _renewal_facts(db, sub: Subscription, user: User, days_left: int):
     """提醒文案的共用要素，避免 Telegram / Bark 两份文案逻辑分叉走偏。"""
     amount = f"{sub.amount:.2f} {sub.currency}"
-    in_base = exchange.convert(db, sub.amount, sub.currency, user.base_currency)
+    in_base = exchange.convert(
+        db,
+        sub.amount,
+        sub.currency,
+        user.base_currency,
+        user_id=user.id,
+    )
     base_str = ""
     if abs(in_base - sub.amount) > 1e-6 or sub.currency != user.base_currency:
         base_str = f"（约 {in_base:.2f} {user.base_currency}）"
@@ -536,6 +547,11 @@ def simulate_reminder_scan(
             continue
         if not sub.next_renewal_date:
             add({**base, "channel": "all", "status": "missing_next_renewal", "reason": "周期订阅缺少下次续费日。"})
+            continue
+        if not is_subscription_current(as_of, sub.end_date) or not is_renewal_within_end_date(
+            sub.next_renewal_date, sub.end_date
+        ):
+            add({**base, "channel": "all", "status": "outside_end_date", "reason": "订阅或本次续费日已超过结束日期。"})
             continue
         reminder_days = _unique_days(sub.remind_days_before)
         if not reminder_days:

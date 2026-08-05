@@ -9,7 +9,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app import activity, icon_library
-from app.billing import add_cycle, compute_next_renewal
+from app.billing import add_cycle, compute_next_renewal, is_subscription_current
 from app.database import get_db
 from app.deps import get_current_user
 from app.models import RenewalHistory, Subscription, User
@@ -34,7 +34,14 @@ def _name_hash(name: str | None) -> str:
 def _to_out(db: Session, sub: Subscription, base_currency: str) -> SubscriptionOut:
     out = SubscriptionOut.model_validate(sub)
     out.amount_in_base = round(
-        exchange.convert(db, sub.amount, sub.currency, base_currency), 2
+        exchange.convert(
+            db,
+            sub.amount,
+            sub.currency,
+            base_currency,
+            user_id=sub.user_id,
+        ),
+        2,
     )
     return out
 
@@ -104,13 +111,17 @@ def create_sub(
         )
     if data["billing_type"] == "one_time":
         data["next_renewal_date"] = None
+        data["end_date"] = None
         data["auto_renew"] = False
+    elif data.get("end_date") and data["end_date"] < data["start_date"]:
+        raise HTTPException(400, "结束日期不能早于开始日期")
     normalize_keepalive_data(data, db)
     bad_ref = validate_subscription_refs(
         db, user.id,
         category_id=data.get("category_id"),
         payment_method_id=data.get("payment_method_id"),
         bundle_id=data.get("bundle_id"),
+        currency=data.get("currency"),
     )
     if bad_ref:
         raise HTTPException(400, f"{bad_ref}不存在或不在你的账户下")
@@ -181,13 +192,25 @@ def update_sub(
         category_id=changes.get("category_id", sub.category_id),
         payment_method_id=changes.get("payment_method_id", sub.payment_method_id),
         bundle_id=changes.get("bundle_id", sub.bundle_id),
+        currency=changes.get("currency", sub.currency),
     )
     if bad_ref:
         raise HTTPException(400, f"{bad_ref}不存在或不在你的账户下")
+    final_billing_type = changes.get("billing_type", sub.billing_type)
+    final_start_date = changes.get("start_date", sub.start_date)
+    final_end_date = changes.get("end_date", sub.end_date)
+    if (
+        final_billing_type == "recurring"
+        and final_start_date
+        and final_end_date
+        and final_end_date < final_start_date
+    ):
+        raise HTTPException(400, "结束日期不能早于开始日期")
     for k, v in changes.items():
         setattr(sub, k, v)
     if sub.billing_type == "one_time":
         sub.next_renewal_date = None
+        sub.end_date = None
         sub.auto_renew = False
     apply_keepalive_scope(db, sub)
     db.commit()
@@ -226,8 +249,10 @@ def renew_sub(
         mode = "today"  # 兼容旧前端
 
     prev_due = sub.next_renewal_date
+    base = (sub.next_renewal_date or today) if mode == "due" else today
+    if not is_subscription_current(base, sub.end_date):
+        raise HTTPException(400, "订阅已超过结束日期，无法续费")
     if mode == "due":
-        base = sub.next_renewal_date or today
         sub.next_renewal_date = add_cycle(base, sub.cycle, sub.cycle_count)
     else:  # today
         sub.start_date = today

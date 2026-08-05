@@ -1,5 +1,5 @@
 const SEVERITY_ORDER = { error: 0, warn: 1, info: 2 }
-const STATUS_ORDER = { would_send: 0, already_sent: 1, channel_not_ready: 2, not_due: 3 }
+const STATUS_ORDER = { would_send: 0, already_sent: 1, channel_not_ready: 2, outside_end_date: 3, not_due: 4 }
 
 // 直接影响「提醒能否正确发出 / 扫描」的诊断项，显式枚举而非按 scope 猜测。
 // 与后端 diagnostics.py 的 code 保持一致：新增相关 code 时在此补一行。
@@ -8,8 +8,11 @@ const REMINDER_CODES = new Set([
   'bark_config_incomplete',
   'webhook_config_incomplete',
   'subscription_missing_next_renewal',
+  'end_date_before_start_date',
   'invalid_remind_days',
   'keepalive_scope_invalid',
+  'currency_rate_missing',
+  'user_base_currency_rate_missing',
   'recent_notification_failures',
   'notification_subscription_missing'
 ])
@@ -73,6 +76,7 @@ export function simulationStatusLabel(status) {
     not_due: '未到提醒日',
     invalid_reminder_days: '提醒配置异常',
     missing_next_renewal: '缺少续费日',
+    outside_end_date: '已超过结束日期',
     inactive: '未启用',
     not_recurring: '非周期订阅'
   }
@@ -82,7 +86,7 @@ export function simulationStatusLabel(status) {
 export function simulationStatusClass(status) {
   if (status === 'would_send') return 'ok'
   if (status === 'already_sent') return 'info'
-  if (['channel_not_ready', 'invalid_reminder_days', 'missing_next_renewal'].includes(status)) return 'warn'
+  if (['channel_not_ready', 'invalid_reminder_days', 'missing_next_renewal', 'outside_end_date'].includes(status)) return 'warn'
   return 'muted'
 }
 

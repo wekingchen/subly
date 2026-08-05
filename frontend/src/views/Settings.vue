@@ -39,8 +39,13 @@
                   @click="theme = th.v; changeTheme()"></button>
         </div>
         <label>{{ t('settings.baseCurrency') }}</label>
-        <select v-model="baseCurrency" @change="changeCurrency">
-          <option v-for="c in currencies" :key="c.code" :value="c.code">{{ c.code }} {{ c.symbol }}</option>
+        <select v-model="baseCurrency" :disabled="currencySaving" @change="changeCurrency">
+          <option
+            v-for="c in currencies"
+            :key="c.code"
+            :value="c.code"
+            :disabled="c.is_custom && c.rate_to_user_base == null && c.code !== auth.user?.base_currency"
+          >{{ c.code }} {{ c.symbol }}</option>
         </select>
         <label>{{ t('settings.monthlyBudget') }} <span class="muted mono-data">({{ baseCurrency }})</span></label>
         <div class="budget-row">
@@ -112,6 +117,19 @@
       </div>
       <p v-else class="muted empty-text">{{ t('settings.noRates') }}</p>
     </div>
+
+    <!-- 订阅参考数据 -->
+    <section class="reference-section" aria-labelledby="reference-data-title">
+      <div class="section-intro">
+        <h2 id="reference-data-title">{{ t('settings.referenceDataTitle') }}</h2>
+        <p class="muted">{{ t('settings.referenceDataTip') }}</p>
+      </div>
+      <div class="grid two reference-grid">
+        <CategoryManager />
+        <PaymentMethodManager />
+      </div>
+      <CurrencyManager :base-currency="auth.user?.base_currency || baseCurrency" @changed="handleCurrencyChanged" />
+    </section>
 
     <!-- Telegram -->
     <div class="card sect panel-card channel-card">
@@ -299,6 +317,9 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import api from '../api'
+import CategoryManager from '../components/settings/CategoryManager.vue'
+import CurrencyManager from '../components/settings/CurrencyManager.vue'
+import PaymentMethodManager from '../components/settings/PaymentMethodManager.vue'
 import { useAuth } from '../stores/auth'
 import { formatDateTimeInZone } from '../utils/time'
 
@@ -315,6 +336,7 @@ const themes = [
 
 const theme = ref(auth.user?.theme || 'light')
 const baseCurrency = ref(auth.user?.base_currency || 'CNY')
+const currencySaving = ref(false)
 const monthlyBudget = ref(auth.user?.monthly_budget ?? null)
 const prefMsg = ref('')
 const prefOk = ref(true)
@@ -477,18 +499,30 @@ async function changePwd() {
 
 async function changeTheme() { await auth.updateMe({ theme: theme.value }) }
 async function changeCurrency() {
+  if (currencySaving.value) return
+  const savedCurrency = auth.user?.base_currency || 'CNY'
   const hadBudget = monthlyBudget.value !== null && monthlyBudget.value !== ''
-  // 币种与预算必须同一请求更新，避免第一次成功、第二次失败后旧预算被按新币种解释。
-  await auth.updateMe({
-    base_currency: baseCurrency.value,
-    ...(hadBudget ? { monthly_budget: null } : {})
-  })
-  if (hadBudget) {
-    monthlyBudget.value = null
-    prefOk.value = true
-    prefMsg.value = t('settings.budgetClearedOnCurrencyChange')
+  prefMsg.value = ''
+  currencySaving.value = true
+  try {
+    // 币种与预算必须同一请求更新，避免第一次成功、第二次失败后旧预算被按新币种解释。
+    await auth.updateMe({
+      base_currency: baseCurrency.value,
+      ...(hadBudget ? { monthly_budget: null } : {})
+    })
+    if (hadBudget) {
+      monthlyBudget.value = null
+      prefOk.value = true
+      prefMsg.value = t('settings.budgetClearedOnCurrencyChange')
+    }
+    loadRates()
+  } catch (error) {
+    baseCurrency.value = savedCurrency
+    prefOk.value = false
+    prefMsg.value = error.response?.data?.detail || t('common.networkError')
+  } finally {
+    currencySaving.value = false
   }
-  loadRates()
 }
 async function saveBudget() {
   const v = monthlyBudget.value
@@ -503,6 +537,13 @@ async function saveBudget() {
 }
 
 function fmtTime(s) { return formatDateTimeInZone(s, sys.value?.timezone || 'Asia/Shanghai') }
+async function loadCurrencies() {
+  try { currencies.value = (await api.get('/api/currencies')).data || [] }
+  catch { currencies.value = [] }
+}
+async function handleCurrencyChanged() {
+  await Promise.all([loadCurrencies(), loadRates()])
+}
 async function loadRates() {
   try { rates.value = (await api.get('/api/currencies/rate-table')).data }
   catch { /* ignore */ }
@@ -633,8 +674,7 @@ async function getUpdates() {
 }
 
 onMounted(async () => {
-  try { currencies.value = (await api.get('/api/currencies')).data }
-  catch { currencies.value = [] }
+  await loadCurrencies()
   try { sys.value = (await api.get('/api/system/info')).data }
   catch { sys.value = null }
   loadRates()
@@ -690,6 +730,10 @@ hr { border: none; border-top: 1px solid var(--border); margin: 16px 0; }
 .rate:hover { transform: translateY(-2px); border-color: var(--primary); }
 .rate-code { font-weight: 750; font-size: 14px; }
 .rate-val { font-size: 13px; color: var(--text); margin-top: 4px; }
+.reference-section { display: flex; flex-direction: column; gap: 12px; }
+.section-intro h2 { margin: 0; font-size: 18px; }
+.section-intro p { margin: 5px 0 0; font-size: 13px; line-height: 1.6; }
+.reference-grid { align-items: start; }
 .hint-box { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 8px 10px; padding: 12px;
   border: 1px solid var(--border); border-radius: 13px; background: color-mix(in srgb, var(--surface-2) 82%, transparent); margin-bottom: 12px; }
 .hint-box span { color: var(--signal-cyan); font-size: 12px; }

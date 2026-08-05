@@ -54,3 +54,16 @@ def test_compute_next_renewal_with_explicit_today_does_not_touch_system_date():
     # 用一个明显不同于系统当前日期的 today，验证返回值由传入 today 决定。
     result = billing.compute_next_renewal(date(2024, 1, 15), "month", 1, date(2024, 3, 1))
     assert result == date(2024, 3, 15)
+
+
+def test_end_date_predicates_are_inclusive():
+    end = date(2024, 3, 1)
+    assert billing.is_subscription_current(date(2024, 2, 29), end) is True
+    assert billing.is_subscription_current(end, end) is True
+    assert billing.is_subscription_current(date(2024, 3, 2), end) is False
+    assert billing.is_subscription_current(date(2030, 1, 1), None) is True
+
+    assert billing.is_renewal_within_end_date(date(2024, 2, 29), end) is True
+    assert billing.is_renewal_within_end_date(end, end) is True
+    assert billing.is_renewal_within_end_date(date(2024, 3, 2), end) is False
+    assert billing.is_renewal_within_end_date(date(2030, 1, 1), None) is True

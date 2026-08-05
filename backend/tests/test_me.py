@@ -25,7 +25,26 @@ def _make_db():
         username="u", email="u@example.com",
         password_hash=hash_password("x"), base_currency="CNY", is_active=True,
     )
-    db.add(user)
+    other = models.User(
+        username="other", email="other@example.com",
+        password_hash=hash_password("x"), base_currency="CNY", is_active=True,
+    )
+    db.add_all([
+        user,
+        other,
+        models.Currency(code="CNY", name="人民币", symbol="¥", is_custom=False),
+        models.Currency(code="USD", name="美元", symbol="$", is_custom=False),
+        models.Currency(code="EUR", name="欧元", symbol="€", is_custom=False),
+    ])
+    db.flush()
+    db.add_all([
+        models.Currency(
+            code="OTHER", name="他人货币", symbol="O", is_custom=True, user_id=other.id,
+        ),
+        models.Currency(
+            code="OWN", name="本人无汇率货币", symbol="W", is_custom=True, user_id=user.id,
+        ),
+    ])
     db.commit()
     db.refresh(user)
     return db, engine, user
@@ -126,6 +145,31 @@ def test_changing_base_currency_atomically_clears_budget_unless_replaced():
     assert replaced.status_code == 200
     assert replaced.json()["base_currency"] == "EUR"
     assert replaced.json()["monthly_budget"] == 120
+
+
+def test_update_me_rejects_missing_or_foreign_custom_base_currency():
+    client = TestClient(main.app)
+
+    assert client.patch("/api/me", json={"base_currency": "MISSING"}).status_code == 400
+    assert client.patch("/api/me", json={"base_currency": "OTHER"}).status_code == 400
+
+
+def test_update_me_rejects_null_base_currency():
+    client = TestClient(main.app)
+
+    response = client.patch("/api/me", json={"base_currency": None})
+
+    assert response.status_code == 400
+    assert "不能为空" in response.json()["detail"]
+
+
+def test_update_me_rejects_custom_base_currency_without_rate():
+    client = TestClient(main.app)
+
+    response = client.patch("/api/me", json={"base_currency": " own "})
+
+    assert response.status_code == 409
+    assert "缺少可用汇率" in response.json()["detail"]
 
 
 def test_update_me_sets_and_returns_monthly_budget():

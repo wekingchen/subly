@@ -68,8 +68,23 @@
       </div>
 
       <div class="card trend-card">
-        <h3 class="panel-title"><span class="panel-signal"></span>{{ t('reports.trend') }}</h3>
+        <div class="trend-card-head">
+          <h3 class="panel-title"><span class="panel-signal"></span>{{ t('reports.trend') }}</h3>
+          <div class="seg trend-range" role="group" :aria-label="t('reports.trendRange')">
+            <button
+              v-for="months in trendMonthOptions"
+              :key="months"
+              type="button"
+              :class="{ on: trendMonths === months }"
+              :aria-pressed="trendMonths === months"
+              @click="setTrendMonths(months)"
+            >
+              {{ t('reports.trendMonths', { n: months }) }}
+            </button>
+          </div>
+        </div>
         <TrendChart :history="paymentHistory" :future="futureTrend" :base-currency="cur" :current-month="currentMonth" />
+        <p v-if="trendError" class="trend-error" role="alert">{{ trendError }}</p>
       </div>
 
       <div class="grid two">
@@ -335,11 +350,11 @@ import SignalDot from '../components/SignalDot.vue'
 import TrendChart from '../components/TrendChart.vue'
 import { useBreakpoint } from '../composables/useBreakpoint'
 import { useAuth } from '../stores/auth'
-import { daysLeft, toISODate } from '../utils/date'
+import { daysLeft } from '../utils/date'
 import { emojiOf } from '../utils/icon'
 import { amountOf, formatMoney } from '../utils/money'
-import { expandRenewalsInRange } from '../utils/recurrence'
 import { renewalStatus } from '../utils/renewal'
+import { buildFutureTrend, TREND_MONTH_OPTIONS } from '../utils/trend'
 
 const { t } = useI18n()
 const auth = useAuth()
@@ -351,26 +366,13 @@ const cur = computed(() => auth.user?.base_currency || 'CNY')
 const insights = ref({ breakdown: [] })
 const paymentHistory = ref([])
 const activeSubs = ref([])
+const trendMonthOptions = TREND_MONTH_OPTIONS
+const trendMonths = ref(6)
+const trendError = ref('')
+let paymentHistoryRequestId = 0
 const currentMonth = (() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}` })()
-// 未来支出投影：基于已加载生效订阅，按周期展开到未来 6 个月（含当月），按月聚合基准金额。
-// 用 ISO 日期字符串作边界（parseLocalDate 按本地零点），避免带当前时刻导致漏掉今天；
-// 报表包含 show_in_calendar=false 的订阅（与报表支出统计口径一致），传 includeHidden。
-const futureTrend = computed(() => {
-  if (!activeSubs.value.length) return []
-  const now = new Date()
-  const startISO = toISODate(now)
-  // 6 个月窗口的末尾：当月起算第 5 个月末（含当月共 6 个自然月）
-  const end = new Date(now.getFullYear(), now.getMonth() + 6, 0)  // 第6个月首日的前一天=第5个月末
-  const endISO = toISODate(end)
-  const events = expandRenewalsInRange(activeSubs.value, startISO, endISO, { includeHidden: true })
-  const byMonth = {}
-  for (const ev of events) {
-    const m = (ev.occurrence_date || '').slice(0, 7)
-    if (!m) continue
-    byMonth[m] = (byMonth[m] || 0) + amountOf(ev)
-  }
-  return Object.entries(byMonth).map(([month, amount]) => ({ month, amount: Math.round(amount * 100) / 100 }))
-})
+// 未来支出继续复用前端周期引擎，并补齐窗口内的空月份；隐藏日历的订阅仍属于财务统计。
+const futureTrend = computed(() => buildFutureTrend(activeSubs.value, trendMonths.value))
 const detail = ref({ recurring: [], one_time: [] })
 const ranking = ref([])
 const oneTime = ref([])
@@ -451,13 +453,41 @@ const riskRadarBars = computed(() => {
 })
 const riskTotal = computed(() => expired.value.length + upcoming.value.length)
 
+async function loadPaymentHistory() {
+  const requestedMonths = trendMonths.value
+  const requestId = ++paymentHistoryRequestId
+  try {
+    const response = await api.get('/api/reports/payment-history', { params: { months: requestedMonths } })
+    if (requestId === paymentHistoryRequestId && requestedMonths === trendMonths.value) {
+      paymentHistory.value = response.data.history || []
+      trendError.value = ''
+    }
+  } catch (error) {
+    if (requestId === paymentHistoryRequestId && requestedMonths === trendMonths.value) {
+      paymentHistory.value = []
+      trendError.value = t('reports.trendLoadFailed')
+    }
+    throw error
+  }
+}
+
+async function setTrendMonths(months) {
+  if (trendMonths.value === months) return
+  trendMonths.value = months
+  trendError.value = ''
+  try { await loadPaymentHistory() }
+  catch { /* 当前请求失败态由 loadPaymentHistory 负责；旧请求不会覆盖新范围。 */ }
+}
+
 async function loadOverview() {
+  const requestedMonths = trendMonths.value
+  const historyRequestId = ++paymentHistoryRequestId
   const results = await Promise.allSettled([
     api.get('/api/reports/insights'),
     api.get('/api/reports/category-detail'),
     api.get('/api/reports/upcoming'),
     api.get('/api/reports/expired'),
-    api.get('/api/reports/payment-history', { params: { months: 6 } }),
+    api.get('/api/reports/payment-history', { params: { months: requestedMonths } }),
     api.get('/api/subscriptions', { params: { active: true } })
   ])
   const [ins, det, u, e, hist, subs] = results.map((r) => (r.status === 'fulfilled' ? r.value : null))
@@ -465,7 +495,13 @@ async function loadOverview() {
   if (det) detail.value = det.data
   if (u) upcoming.value = u.data
   if (e) expired.value = e.data
-  if (hist) paymentHistory.value = hist.data.history || []
+  if (
+    historyRequestId === paymentHistoryRequestId
+    && requestedMonths === trendMonths.value
+  ) {
+    paymentHistory.value = hist?.data.history || []
+    trendError.value = hist ? '' : t('reports.trendLoadFailed')
+  }
   if (subs) activeSubs.value = subs.data || []
 }
 async function loadInsights() {
@@ -558,6 +594,12 @@ h1 { margin: 0; }
 .budget-fill.over { background: var(--danger); }
 .budget-head .over { color: var(--danger); font-weight: 700; }
 .budget-status { font-size: 12px; margin: 6px 0 0; }
+.trend-card { margin-bottom: 16px; overflow: hidden; }
+.trend-card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
+.trend-card-head .panel-title { margin-bottom: 0; }
+.trend-range { flex: 0 0 auto; margin: 0; }
+.trend-range button { min-height: 36px; padding: 6px 10px; white-space: nowrap; }
+.trend-error { margin: 10px 0 0; color: var(--danger); font-size: 13px; }
 .kpi { position: relative; overflow: hidden; border-color: color-mix(in srgb, var(--signal-cyan) 18%, var(--border)); }
 .kpi-l { font-size: 13px; color: var(--text-soft); }
 .kpi-v { font-size: 23px; font-weight: 800; margin-top: 6px; letter-spacing: -.03em; }
@@ -668,6 +710,9 @@ h1 { margin: 0; }
   .kpi-v { font-size: 20px; overflow-wrap: anywhere; }
   .two { grid-template-columns: 1fr; }
   .report-head-metrics { grid-template-columns: 1fr; }
+  .trend-card-head { align-items: stretch; flex-direction: column; }
+  .trend-range { width: 100%; }
+  .trend-range button { flex: 1; min-height: 44px; }
   .rb-label, .rb-amt, .ld-s, .ld-meta, .ld-date, .ld-remark { white-space: normal; line-height: 1.3; }
   .ld-remark { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
   .ld-row { align-items: flex-start; }

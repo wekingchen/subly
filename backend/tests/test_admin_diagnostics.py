@@ -5,7 +5,15 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.database import Base
-from app.models import Bundle, Category, Currency, NotificationLog, PaymentMethod, Subscription, User
+from app.models import (
+    Bundle,
+    Category,
+    Currency,
+    NotificationLog,
+    PaymentMethod,
+    Subscription,
+    User,
+)
 from app.routers import admin_diagnostics
 from app.schemas import ReminderSimulationIn
 from app.services import diagnostics
@@ -185,6 +193,26 @@ def test_diagnostics_flags_refs_owned_by_other_user():
         engine.dispose()
 
 
+def test_diagnostics_flags_referenced_custom_currency_without_rate():
+    db, engine = make_db()
+    try:
+        user = add_user(db, base_currency="ABC")
+        db.add(Currency(
+            code="ABC", name="测试币", symbol="A", is_custom=True, user_id=user.id,
+        ))
+        add_subscription(db, user, currency="ABC")
+        db.commit()
+
+        out = diagnostics.run_data_diagnostics(db)
+        codes = {issue["code"] for issue in out["issues"]}
+
+        assert "user_base_currency_rate_missing" in codes
+        assert "currency_rate_missing" in codes
+    finally:
+        db.close()
+        engine.dispose()
+
+
 # ---------- 第二期：一键修复 ----------
 
 def _sub_codes(db, sub):
@@ -261,11 +289,13 @@ def test_repair_cleans_one_time_recurring_fields():
     try:
         alice = add_user(db)
         sub = add_subscription(db, alice, name="买断残留", billing_type="one_time",
-                               next_renewal_date=date(2024, 2, 1), auto_renew=True)
+                               next_renewal_date=date(2024, 2, 1), end_date=date(2024, 3, 1),
+                               auto_renew=True)
         db.commit()
         assert "one_time_has_recurring_fields" in _sub_codes(db, sub)
         diagnostics.repair_subscription_issue(db, sub.id, "one_time_has_recurring_fields")
         assert sub.next_renewal_date is None
+        assert sub.end_date is None
         assert sub.auto_renew is False
         assert "one_time_has_recurring_fields" not in _sub_codes(db, sub)
     finally:
@@ -362,6 +392,45 @@ def test_repair_next_renewal_rejects_invalid_cycle_count():
         db.commit()
         with pytest.raises(ValueError, match="cycle_count"):
             diagnostics.repair_subscription_issue(db, sub.id, "subscription_missing_next_renewal")
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_diagnostics_syncs_end_date_semantics(monkeypatch):
+    db, engine = make_db()
+    try:
+        monkeypatch.setattr(diagnostics, "_local_today", lambda: date(2024, 1, 10))
+        user = add_user(db)
+        db.add(Currency(code="CNY", name="人民币", symbol="¥"))
+        ended_missing = add_subscription(
+            db,
+            user,
+            name="已截止且无续费日",
+            next_renewal_date=None,
+            end_date=date(2024, 1, 9),
+        )
+        invalid_range = add_subscription(
+            db,
+            user,
+            name="日期倒置",
+            start_date=date(2024, 2, 1),
+            end_date=date(2024, 1, 31),
+        )
+        db.commit()
+
+        out = diagnostics.run_data_diagnostics(db)
+        by_sub = {
+            sub_id: {
+                item["code"]
+                for item in out["issues"]
+                if item.get("subscription_id") == sub_id
+            }
+            for sub_id in (ended_missing.id, invalid_range.id)
+        }
+        assert "subscription_missing_next_renewal" not in by_sub[ended_missing.id]
+        assert "end_date_before_start_date" in by_sub[invalid_range.id]
+        assert out["summary"]["active_recurring"] == 1
     finally:
         db.close()
         engine.dispose()

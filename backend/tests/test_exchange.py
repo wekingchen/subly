@@ -107,6 +107,26 @@ def test_convert_uses_base_rates_and_falls_back_when_rate_missing(monkeypatch):
         engine.dispose()
 
 
+def test_convert_isolates_manual_rates_by_user(monkeypatch):
+    db, engine = make_db()
+    try:
+        monkeypatch.setattr(exchange.settings, "exchange_api_base", "USD", raising=False)
+        db.add_all([
+            ExchangeRate(base="USD", quote="CNY", rate=7.0, is_manual=False),
+            ExchangeRate(
+                base="USD", quote="ABC", rate=3.5, is_manual=True, user_id=1,
+            ),
+        ])
+        db.commit()
+
+        assert exchange.convert(db, 10, "ABC", "CNY", user_id=1) == 20
+        assert exchange.convert(db, 10, "ABC", "CNY", user_id=2) == 10
+        assert exchange.convert(db, 10, "ABC", "CNY") == 10
+    finally:
+        db.close()
+        engine.dispose()
+
+
 def test_refresh_rates_upserts_existing_quotes(monkeypatch):
     db, engine = make_db()
     try:

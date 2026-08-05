@@ -50,7 +50,7 @@ def add_subscription(db, user, **overrides):
 def test_simulate_reminder_scan_does_not_send_or_write_logs(monkeypatch):
     db, engine = make_db()
     try:
-        monkeypatch.setattr(scheduler.exchange, "convert", lambda db, amount, from_cur, to_cur: amount)
+        monkeypatch.setattr(scheduler.exchange, "convert", lambda db, amount, from_cur, to_cur, **kwargs: amount)
         monkeypatch.setattr(scheduler.telegram, "send_message", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("should not send")))
         monkeypatch.setattr(scheduler.bark, "send_push", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("should not send")))
         monkeypatch.setattr(scheduler.webhook, "send_notification", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("should not send")))
@@ -82,7 +82,7 @@ def test_simulate_reminder_scan_does_not_send_or_write_logs(monkeypatch):
 def test_simulate_reminder_scan_reports_not_ready_and_already_sent(monkeypatch):
     db, engine = make_db()
     try:
-        monkeypatch.setattr(scheduler.exchange, "convert", lambda db, amount, from_cur, to_cur: amount)
+        monkeypatch.setattr(scheduler.exchange, "convert", lambda db, amount, from_cur, to_cur, **kwargs: amount)
         user = add_user(db, telegram_enabled=True, telegram_bot_token="token", telegram_chat_id="chat", bark_enabled=True, bark_device_key="")
         sub = add_subscription(db, user, name="部分通道", next_renewal_date=date(2024, 1, 8))
         db.add(NotificationLog(subscription_id=sub.id, user_id=user.id, days_before=7, channel="telegram", status="sent", message="old", sent_at=datetime(2024, 1, 1, 8, 0, 0)))
@@ -104,7 +104,7 @@ def test_simulate_reminder_scan_reports_not_ready_and_already_sent(monkeypatch):
 def test_simulate_reminder_scan_keeps_keepalive_preview(monkeypatch):
     db, engine = make_db()
     try:
-        monkeypatch.setattr(scheduler.exchange, "convert", lambda db, amount, from_cur, to_cur: amount)
+        monkeypatch.setattr(scheduler.exchange, "convert", lambda db, amount, from_cur, to_cur, **kwargs: amount)
         user = add_user(db, bark_enabled=True, bark_device_key="key")
         add_subscription(db, user, name="保号卡", is_keepalive=True, next_renewal_date=date(2024, 1, 8))
         db.commit()
@@ -121,7 +121,7 @@ def test_simulate_reminder_scan_keeps_keepalive_preview(monkeypatch):
 def test_simulate_reminder_scan_builds_webhook_json_preview(monkeypatch):
     db, engine = make_db()
     try:
-        monkeypatch.setattr(scheduler.exchange, "convert", lambda db, amount, from_cur, to_cur: amount)
+        monkeypatch.setattr(scheduler.exchange, "convert", lambda db, amount, from_cur, to_cur, **kwargs: amount)
         user = add_user(
             db,
             webhook_enabled=True,
@@ -153,7 +153,7 @@ def test_simulate_reminder_scan_builds_webhook_json_preview(monkeypatch):
 def test_simulate_reminder_scan_deduplicates_repeated_reminder_days(monkeypatch):
     db, engine = make_db()
     try:
-        monkeypatch.setattr(scheduler.exchange, "convert", lambda db, amount, from_cur, to_cur: amount)
+        monkeypatch.setattr(scheduler.exchange, "convert", lambda db, amount, from_cur, to_cur, **kwargs: amount)
         user = add_user(db, bark_enabled=True, bark_device_key="key")
         add_subscription(db, user, name="重复提醒天数", next_renewal_date=date(2024, 1, 8), remind_days_before="7,7")
         db.commit()
@@ -170,7 +170,7 @@ def test_simulate_reminder_scan_deduplicates_repeated_reminder_days(monkeypatch)
 def test_simulate_reminder_scan_include_skipped_false_filters_not_due(monkeypatch):
     db, engine = make_db()
     try:
-        monkeypatch.setattr(scheduler.exchange, "convert", lambda db, amount, from_cur, to_cur: amount)
+        monkeypatch.setattr(scheduler.exchange, "convert", lambda db, amount, from_cur, to_cur, **kwargs: amount)
         user = add_user(db, bark_enabled=True, bark_device_key="key")
         add_subscription(db, user, name="未到提醒日", next_renewal_date=date(2024, 1, 9), remind_days_before="7")
         db.commit()
@@ -191,7 +191,7 @@ def test_simulate_reminder_scan_skips_disabled_user(monkeypatch):
     """
     db, engine = make_db()
     try:
-        monkeypatch.setattr(scheduler.exchange, "convert", lambda db, amount, from_cur, to_cur: amount)
+        monkeypatch.setattr(scheduler.exchange, "convert", lambda db, amount, from_cur, to_cur, **kwargs: amount)
         active = add_user(db, username="active", email="active@example.com",
                           telegram_enabled=True, telegram_bot_token="token", telegram_chat_id="chat")
         disabled = add_user(db, username="disabled", email="disabled@example.com", is_active=False,
@@ -206,6 +206,30 @@ def test_simulate_reminder_scan_skips_disabled_user(monkeypatch):
         names = {item["subscription_name"] for item in out["items"]}
         assert "活跃用户到期" in names
         assert "禁用用户到期" not in names  # 禁用用户被跳过
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_simulate_reminder_scan_reports_outside_end_date():
+    db, engine = make_db()
+    try:
+        user = add_user(db, bark_enabled=True, bark_device_key="key")
+        add_subscription(
+            db,
+            user,
+            next_renewal_date=date(2024, 1, 8),
+            end_date=date(2024, 1, 7),
+            remind_days_before="7",
+        )
+        db.commit()
+
+        out = scheduler.simulate_reminder_scan(
+            db, date(2024, 1, 1), channel="bark", include_skipped=True
+        )
+
+        assert out["summary"]["would_send"] == 0
+        assert out["items"][0]["status"] == "outside_end_date"
     finally:
         db.close()
         engine.dispose()

@@ -7,9 +7,9 @@ from sqlalchemy.pool import StaticPool
 
 from app.config import settings
 from app.database import Base
-from app.models import Currency, ExchangeRate, User
+from app.models import Currency, ExchangeRate, PaymentMethod, User
 from app.routers.currencies import list_currencies, rate_table
-from app.seed import CURRENCIES, seed_all
+from app.seed import CURRENCIES, PAYMENT_METHODS, seed_all
 
 
 def official_rates():
@@ -172,3 +172,21 @@ def test_seed_all_defers_custom_bob_promotion_when_official_rate_is_unavailable(
     assert bob.user_id == owner.id
     bob_rate = db.scalar(select(ExchangeRate).where(ExchangeRate.quote == "BOB"))
     assert bob_rate.rate == 999
+
+
+def test_seed_all_backfills_payment_methods_idempotently(db):
+    existing_name, existing_icon = PAYMENT_METHODS[0]
+    db.add(PaymentMethod(name=existing_name, icon="customized", is_system=True))
+    db.commit()
+
+    seed_all(db)
+    seed_all(db)
+
+    rows = db.scalars(
+        select(PaymentMethod).where(PaymentMethod.is_system.is_(True))
+    ).all()
+    assert {row.name for row in rows} == {name for name, _icon in PAYMENT_METHODS}
+    assert len(rows) == len(PAYMENT_METHODS)
+    existing = next(row for row in rows if row.name == existing_name)
+    assert existing.icon == "customized"
+    assert existing_icon != "customized"

@@ -43,7 +43,7 @@ const zh = {
     ledgerKicker: '续费雷达 · 订阅账本', ledgerSubtitle: '按分类收拢每一条续费信号，提前看见风险，也保留已买断的长期记录。', ledgerCount: '{n} 条信号', emptyTitle: '还没有订阅信号', emptyDesc: '添加第一条订阅，把续费日、付款方式和提醒规则收进账本。', emptyFilteredTitle: '当前筛选没有结果', emptyFilteredDesc: '切回全部订阅，或添加符合当前类型的新记录。',
     category: '分类', payment: '付款方式', billingType: '计费类型', recurring: '周期订阅', oneTime: '一次性买断',
     cycle: '周期', cycleCount: '每', day: '天', week: '周', month: '月', year: '年',
-    startDate: '开始日期', nextRenewal: '下次续费', endDate: '结束日期', url: '链接', notes: '备注',
+    startDate: '开始日期', nextRenewal: '下次续费', endDate: '结束日期', endDateHint: '可选；结束日期当天仍会计入续费，之后不再提醒、预测或计入当前支出。', url: '链接', notes: '备注',
     remindDays: '提醒天数（逗号分隔，负数=过期后）', active: '生效中', autoRenew: '自动续费',
     icon: '图标', save: '保存', cancel: '取消', delete: '删除', renew: '续费', confirmDelete: '确认删除该订阅？',
     uploadIcon: '上传图标', filterAll: '全部', filterRecurring: '周期', filterOneTime: '买断',
@@ -100,7 +100,7 @@ const zh = {
     category: '分类', monthly: '月支出', percent: '占比', total: '月支出合计', empty: '暂无数据',
     monthlyTotal: '每月合计', yearlyTotal: '每年合计', byCategory: '分类支出占比', spendTrend: '支出概览',
     budget: '月度预算', budgetUsed: '已用 {n}%', budgetOver: '超支 {n}',
-    trend: '支出趋势', trendHistory: '历史付款', trendFuture: '未来预计', trendEmpty: '暂无趋势数据',
+    trend: '支出趋势', trendHistory: '历史付款', trendFuture: '未来预计', trendEmpty: '暂无趋势数据', trendRange: '趋势月份范围', trendMonths: '{n} 个月', trendLoadFailed: '历史趋势加载失败，请检查网络后重试。',
     recurringSubs: '循环订阅', permanentBuy: '永久购买', count: '数量', countUnit: '项', amount: '金额', date: '日期', type: '类型',
     permanentTotal: '永久购买总额', recurringMonthly: '循环订阅月支出', noData: '暂无可视化数据',
     finRadar: '财务雷达', reportSubtitle: '支出结构、续费风险与近期付款信号', riskRadar: '续费压力', riskTotal: '风险信号'
@@ -120,7 +120,12 @@ const zh = {
     webhook: 'Webhook 通知', webhookEnabled: '启用 Webhook 通知', webhookUrl: '接收地址', webhookSecret: '签名密钥',
     webhookTip: '向你的自动化服务发送 HMAC-SHA256 签名 JSON；签名位于 X-Subly-Signature 请求头。',
     webhookUrlPh: 'https://example.com/subly-webhook', webhookSecretPh: '填写接收方共享的签名密钥',
-    rateTable: '常用货币汇率', rateTip: '1 单位货币兑换为 {base} 的当日金额', updatedAt: '更新于', noRates: '暂无汇率数据，请点击「刷新汇率」'
+    rateTable: '常用货币汇率', rateTip: '1 单位货币兑换为 {base} 的当日金额', updatedAt: '更新于', noRates: '暂无汇率数据，请点击「刷新汇率」',
+    referenceDataTitle: '分类、付款与货币', referenceDataTip: '维护订阅表单使用的分类、付款方式和自定义货币；系统预置项保持只读。',
+    categoryManager: '分类管理', categoryManagerTip: '自定义订阅分类的名称、图标和颜色。', addCategory: '新增分类', editCategory: '编辑分类', deleteCategory: '删除分类', deleteCategoryConfirm: '确认删除分类「{name}」？使用该分类的订阅会自动改为未分类。', categoryColor: '颜色', noCategories: '暂无分类',
+    paymentManager: '付款方式管理', paymentManagerTip: '补充银行卡、钱包或其他付款方式。', addPaymentMethod: '新增付款方式', editPaymentMethod: '编辑付款方式', deletePaymentMethod: '删除付款方式', deletePaymentConfirm: '确认删除付款方式「{name}」？使用该方式的订阅会自动清空付款方式。', noPaymentMethods: '暂无付款方式',
+    currencyManager: '自定义货币', currencyManagerTip: '添加积分、代币等系统未内置的货币，并设置相对基准货币的手动汇率。', addCurrency: '新增货币', editCurrency: '编辑货币', deleteCurrency: '删除货币', deleteCurrencyConfirm: '确认删除货币「{code}」？使用中的货币必须先从订阅或基准货币中移除。', currencyCode: '货币代码', currencySymbol: '符号', manualRate: '手动汇率（可选）', manualRateHint: '1 {code} = X {base}', rateSelfLocked: '当前货币就是基准货币，需先切换基准货币才能修改此汇率。', currentBaseCurrency: '当前基准货币（自身换算恒为 1）', rateMissing: '未设置汇率', noCustomCurrencies: '暂无自定义货币',
+    systemItem: '系统预置', customItem: '自定义', editItem: '编辑', nameRequired: '请填写名称', codeRequired: '请填写货币代码', ratePositive: '手动汇率必须是大于 0 的有限数值', referenceSaved: '已保存', referenceDeleted: '已删除，解除 {n} 条订阅引用', currencyDeleted: '自定义货币已删除'
   },
   backup: {
     title: '数据备份与恢复',
@@ -166,7 +171,7 @@ const zh = {
     overview: '概览', cachedCount: '{n} 已缓存', missingCount: '{n} 未缓存', activeCount: '{n} 启用', inactiveCount: '{n} 停用',
     exportList: '导出列表', refresh: '刷新', batch: '批量', selectAll: '全选', batchFetch: '抓取所选'
   },
-  common: { loading: '加载中...', actions: '操作', confirm: '确认', close: '关闭' }
+  common: { loading: '加载中...', actions: '操作', confirm: '确认', close: '关闭', networkError: '请求失败，请检查网络后重试' }
 }
 
 export default createI18n({

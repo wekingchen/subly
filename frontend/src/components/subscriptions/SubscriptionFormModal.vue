@@ -127,7 +127,12 @@
             <label for="sub-next-renewal">{{ activeKeepalive ? t('sub.keepalive.nextRenewal') : t('sub.nextRenewal') }} <span class="auto-tip">· 自动</span></label>
             <input id="sub-next-renewal" v-model="form.next_renewal_date" name="next_renewal_date" type="date" />
           </div>
+          <div style="flex:1" v-if="form.billing_type === 'recurring'">
+            <label for="sub-end-date">{{ t('sub.endDate') }}</label>
+            <input id="sub-end-date" v-model="form.end_date" name="end_date" type="date" />
+          </div>
         </div>
+        <p v-if="form.billing_type === 'recurring'" class="muted end-date-hint">{{ t('sub.endDateHint') }}</p>
         <div class="row">
           <div style="flex:1">
             <label for="sub-active">{{ t('sub.active') }}</label>
@@ -433,6 +438,7 @@ async function save() {
 .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
 .chip { background: var(--primary-soft); color: var(--primary); padding: 3px 8px; border-radius: 16px; font-size: 13px; }
 .radio-row { gap: 18px; }
+.end-date-hint { margin: -2px 0 10px; font-size: 12px; line-height: 1.5; }
 .rb { display: flex; align-items: center; gap: 6px; width: auto; margin: 0; font-size: 14px; color: var(--text); }
 .rb input { width: auto; }
 @media (max-width: 720px) {

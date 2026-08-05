@@ -4,6 +4,7 @@
 捆绑包/货币导出为一个 JSON 文件离线保存，重装后再导入恢复。
 普通用户只能导出/导入自己的数据；管理员还可整站备份/恢复全部成员的数据。
 """
+import math
 from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -13,13 +14,28 @@ from sqlalchemy.orm import Session
 
 from app import activity
 from app.billing import compute_next_renewal
+from app.config import settings
 from app.database import get_db
 from app.deps import get_admin_user, get_current_user
-from app.models import Bundle, Category, Currency, PaymentMethod, RenewalHistory, Subscription, User
-from app.schemas import sanitize_url
+from app.models import (
+    Bundle,
+    Category,
+    Currency,
+    ExchangeRate,
+    PaymentMethod,
+    RenewalHistory,
+    Subscription,
+    User,
+)
+from app.schemas import normalize_currency_code, sanitize_url
+from app.services import exchange
 from app.services.scheduler import utcnow
 from app.security import hash_password
-from app.subscription_rules import apply_keepalive_scope
+from app.subscription_rules import (
+    apply_keepalive_scope,
+    currency_allowed_for_user,
+    custom_currency_has_rate,
+)
 
 router = APIRouter(prefix="/api/backup", tags=["backup"])
 
@@ -128,7 +144,17 @@ def _collect_entities(db: Session, user: User) -> dict:
         ],
         "bundles": [{"id": b.id, "name": b.name, "note": b.note} for b in bundles],
         "currencies": [
-            {"code": c.code, "name": c.name, "symbol": c.symbol} for c in currencies
+            {
+                "code": c.code,
+                "name": c.name,
+                "symbol": c.symbol,
+                # 备份保存系统基准币报价，才能在用户基准币本身是该自定义币时精确恢复。
+                "rate_to_base": exchange.system_quote_rate(
+                    db, c.code, user_id=user.id
+                ),
+                "rate_base": (settings.exchange_api_base or "USD").upper(),
+            }
+            for c in currencies
         ],
         "subscriptions": [_sub_dict(s, history_by_sub.get(s.id, [])) for s in subs],
     }
@@ -139,6 +165,65 @@ def _parse_date(v):
         return date.fromisoformat(v) if v else None
     except (TypeError, ValueError):
         return None
+
+
+def _restore_currency_rate(
+    db: Session, currency: Currency, payload: dict, user_base_currency: str
+) -> None:
+    if "rate_to_user_base" not in payload and "rate_to_base" not in payload:
+        return
+    if "rate_to_user_base" in payload:
+        user_rate = payload.get("rate_to_user_base")
+        stored_rate = (
+            None
+            if user_rate is None
+            else exchange.stored_rate_from_user_base(
+                db,
+                user_rate,
+                user_base_currency,
+                user_id=currency.user_id,
+            )
+        )
+        if user_rate is not None and stored_rate is None:
+            raise ValueError(f"缺少基准币 {user_base_currency} 的系统汇率，无法恢复 {currency.code}")
+    else:
+        stored_rate = payload.get("rate_to_base")
+        exported_base = str(
+            payload.get("rate_base") or settings.exchange_api_base or "USD"
+        ).strip().upper()
+        current_base = (settings.exchange_api_base or "USD").upper()
+        if stored_rate is not None and exported_base != current_base:
+            cross_rate = exchange.system_quote_rate(db, exported_base)
+            if cross_rate is None:
+                raise ValueError(
+                    f"缺少 {current_base} 到 {exported_base} 的交叉汇率，无法恢复 {currency.code}"
+                )
+            stored_rate *= cross_rate
+
+    base = (settings.exchange_api_base or "USD").upper()
+    row = db.scalar(
+        select(ExchangeRate).where(
+            ExchangeRate.base == base,
+            ExchangeRate.quote == currency.code,
+        )
+    )
+    if stored_rate is None:
+        if row is not None:
+            db.delete(row)
+    elif row is None:
+        db.add(
+            ExchangeRate(
+                base=base,
+                quote=currency.code,
+                rate=stored_rate,
+                is_manual=True,
+                user_id=currency.user_id,
+            )
+        )
+    else:
+        row.rate = stored_rate
+        row.is_manual = True
+        row.user_id = currency.user_id
 
 
 def _validate_backup_payload(data: dict) -> None:
@@ -166,6 +251,36 @@ def _validate_backup_payload(data: dict) -> None:
         for j, it in enumerate(items):
             if not isinstance(it, dict):
                 raise ValueError(f"备份 {key} 第 {j + 1} 项必须是对象")
+            if key == "currencies":
+                try:
+                    normalize_currency_code(it.get("code"))
+                except ValueError as exc:
+                    raise ValueError(
+                        f"备份 currencies 第 {j + 1} 项 code 非法：{exc}"
+                    ) from exc
+                if "rate_to_base" in it and "rate_to_user_base" in it:
+                    raise ValueError(
+                        f"备份 currencies 第 {j + 1} 项不能同时包含 rate_to_base 与 rate_to_user_base"
+                    )
+                rate_base = it.get("rate_base")
+                if rate_base is not None:
+                    try:
+                        normalize_currency_code(rate_base)
+                    except ValueError as exc:
+                        raise ValueError(
+                            f"备份 currencies 第 {j + 1} 项 rate_base 非法：{exc}"
+                        ) from exc
+                for rate_field in ("rate_to_base", "rate_to_user_base"):
+                    rate = it.get(rate_field)
+                    if rate is not None and (
+                        not isinstance(rate, (int, float))
+                        or isinstance(rate, bool)
+                        or not math.isfinite(rate)
+                        or rate <= 0
+                    ):
+                        raise ValueError(
+                            f"备份 currencies 第 {j + 1} 项 {rate_field} 必须是有限正数"
+                        )
     for i, s in enumerate(subs):
         if not isinstance(s, dict):
             raise ValueError(f"第 {i + 1} 条订阅格式错误")
@@ -197,6 +312,10 @@ def _validate_backup_payload(data: dict) -> None:
         bt = s.get("billing_type")
         if bt is not None and bt not in ("recurring", "one_time"):
             raise ValueError(f"第 {i + 1} 条订阅 billing_type 非法：{bt!r}")
+        start_date = _parse_date(s.get("start_date"))
+        end_date = _parse_date(s.get("end_date"))
+        if bt != "one_time" and start_date and end_date and end_date < start_date:
+            raise ValueError(f"第 {i + 1} 条订阅 end_date 不能早于 start_date")
         cy = s.get("cycle")
         if cy is not None and cy not in ("day", "week", "month", "year"):
             raise ValueError(f"第 {i + 1} 条订阅 cycle 非法：{cy!r}")
@@ -210,6 +329,79 @@ def _validate_backup_payload(data: dict) -> None:
             raise ValueError(f"第 {i + 1} 条订阅 family_members 元素必须是字符串")
 
 
+def _validate_restore_currency_refs(
+    db: Session,
+    user: User,
+    data: dict,
+    *,
+    replace: bool,
+) -> None:
+    imported: dict[str, dict] = {}
+    for item in data.get("currencies", []) or []:
+        code = str(item.get("code") or "").strip().upper()
+        if not code:
+            continue
+        existing = db.get(Currency, code)
+        if existing is not None and existing.is_custom and existing.user_id != user.id:
+            raise ValueError(f"自定义货币 {code} 已被其他用户占用")
+        imported[code] = item
+
+    meta = data.get("user") if isinstance(data.get("user"), dict) else {}
+    backup_base = meta.get("base_currency")
+    normalized_backup_base = str(backup_base or user.base_currency or "").strip().upper()
+
+    def allowed(code) -> bool:
+        normalized = str(code or "").strip().upper()
+        return normalized in imported or currency_allowed_for_user(db, user.id, normalized)
+
+    def has_rate(code) -> bool:
+        normalized = str(code or "").strip().upper()
+        currency = db.get(Currency, normalized)
+        item = imported.get(normalized)
+        if currency is not None and not currency.is_custom:
+            return True
+        if item is not None:
+            if "rate_to_base" in item:
+                return item.get("rate_to_base") is not None
+            if "rate_to_user_base" in item:
+                return (
+                    item.get("rate_to_user_base") is not None
+                    and normalized != normalized_backup_base
+                )
+        return custom_currency_has_rate(db, user.id, normalized)
+
+    final_references = {normalized_backup_base}
+    final_references.update(
+        str(sub.get("currency") or normalized_backup_base).strip().upper()
+        for sub in data.get("subscriptions", []) or []
+    )
+    if not replace:
+        final_references.update(
+            (sub.currency or "").strip().upper()
+            for sub in db.scalars(
+                select(Subscription).where(Subscription.user_id == user.id)
+            ).all()
+        )
+    for code, item in imported.items():
+        clears_rate = (
+            ("rate_to_base" in item and item.get("rate_to_base") is None)
+            or ("rate_to_user_base" in item and item.get("rate_to_user_base") is None)
+        )
+        if clears_rate and code in final_references:
+            raise ValueError(f"自定义货币 {code} 仍被基准币或订阅引用，不能清空汇率")
+
+    if backup_base and not allowed(backup_base):
+        raise ValueError(f"备份基准货币 {str(backup_base).upper()} 不存在或不属于该用户")
+    if backup_base and not has_rate(backup_base):
+        raise ValueError(f"备份基准货币 {str(backup_base).upper()} 缺少可用汇率")
+    for index, sub in enumerate(data.get("subscriptions", []) or [], start=1):
+        code = sub.get("currency") or backup_base or user.base_currency
+        if not allowed(code):
+            raise ValueError(f"第 {index} 条订阅货币 {str(code).upper()} 不存在或不属于该用户")
+        if not has_rate(code):
+            raise ValueError(f"第 {index} 条订阅货币 {str(code).upper()} 缺少可用汇率")
+
+
 def _restore_entities(db: Session, user: User, data: dict, replace: bool) -> int:
     """把一份导出数据恢复到指定用户名下，返回导入的订阅数（不提交事务）。
 
@@ -217,8 +409,9 @@ def _restore_entities(db: Session, user: User, data: dict, replace: bool) -> int
     """
     subs_in = data.get("subscriptions") or []
 
-    # 任何删除/写入前先校验，畸形备份直接抛错，避免 replace 先删后静默写错数据
+    # 任何删除/写入前先校验，畸形或越权货币引用直接抛错，避免 replace 先删后写错数据。
     _validate_backup_payload(data)
+    _validate_restore_currency_refs(db, user, data, replace=replace)
 
     if replace:
         # 覆盖恢复：先清本用户的续费历史与订阅，避免 SQLite 无 AUTOINCREMENT 时
@@ -313,15 +506,32 @@ def _restore_entities(db: Session, user: User, data: dict, replace: bool) -> int
         if b.get("id") is not None:
             bundle_map[b["id"]] = target.id
 
+    meta = data.get("user") if isinstance(data.get("user"), dict) else {}
+    backup_base_currency = user.base_currency
+    if isinstance(meta.get("base_currency"), str) and meta["base_currency"].strip():
+        backup_base_currency = meta["base_currency"].strip().upper()
+
     for cu in data.get("currencies", []) or []:
-        code = (cu.get("code") or "").upper()
-        if code and not db.get(Currency, code):
-            db.add(
-                Currency(
-                    code=code, name=cu.get("name", code), symbol=cu.get("symbol", ""),
-                    is_custom=True, user_id=user.id,
-                )
+        code = (cu.get("code") or "").strip().upper()
+        if not code:
+            continue
+        currency = db.get(Currency, code)
+        if currency is None:
+            currency = Currency(
+                code=code,
+                name=cu.get("name", code),
+                symbol=cu.get("symbol", ""),
+                is_custom=True,
+                user_id=user.id,
             )
+            db.add(currency)
+            db.flush()
+        elif not currency.is_custom or currency.user_id != user.id:
+            continue
+        else:
+            currency.name = cu.get("name", currency.name)
+            currency.symbol = cu.get("symbol", currency.symbol)
+        _restore_currency_rate(db, currency, cu, backup_base_currency)
     db.flush()
 
     count = 0
@@ -344,7 +554,9 @@ def _restore_entities(db: Session, user: User, data: dict, replace: bool) -> int
             payment_method_id=pm_map.get(s.get("payment_method_id")),
             bundle_id=bundle_map.get(s.get("bundle_id")),
             amount=s.get("amount", 0.0) or 0.0,
-            currency=s.get("currency") or user.base_currency,
+            currency=str(
+                s.get("currency") or backup_base_currency or user.base_currency
+            ).strip().upper(),
             billing_type=billing_type,
             is_keepalive=(s.get("is_keepalive", False) or False) if billing_type != "one_time" else False,
             cycle=s.get("cycle", "month"),
@@ -365,6 +577,7 @@ def _restore_entities(db: Session, user: User, data: dict, replace: bool) -> int
             sub.next_renewal_date = compute_next_renewal(start, sub.cycle, sub.cycle_count)
         if billing_type == "one_time":
             sub.next_renewal_date = None
+            sub.end_date = None
             sub.auto_renew = False
         apply_keepalive_scope(db, sub)
         db.add(sub)

@@ -1,6 +1,16 @@
 from datetime import date, timedelta
 
 
+def is_subscription_current(as_of: date, end_date: date | None) -> bool:
+    """截止日包含在有效期内；无截止日时始终有效。"""
+    return end_date is None or as_of <= end_date
+
+
+def is_renewal_within_end_date(renewal_date: date, end_date: date | None) -> bool:
+    """续费 occurrence 等于截止日仍有效，之后无效。"""
+    return end_date is None or renewal_date <= end_date
+
+
 def add_cycle(d: date, cycle: str, count: int) -> date:
     """在日期 d 上加 count 个 cycle 周期。"""
     count = max(1, count)

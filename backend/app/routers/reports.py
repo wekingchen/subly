@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.billing import is_renewal_within_end_date, is_subscription_current
 from app.database import get_db
 from app.deps import get_current_user
 from app.models import Category, RenewalHistory, Subscription, User
@@ -14,7 +15,9 @@ router = APIRouter(prefix="/api/reports", tags=["reports"])
 
 
 def _monthly_cost(db, sub, base):
-    amt = exchange.convert(db, sub.amount, sub.currency, base)
+    amt = exchange.convert(
+        db, sub.amount, sub.currency, base, user_id=sub.user_id
+    )
     n = max(1, sub.cycle_count)
     factor = {"day": 30 / n, "week": 52 / 12 / n, "month": 1 / n, "year": 1 / 12 / n}
     return amt * factor.get(sub.cycle, 1)
@@ -32,6 +35,7 @@ def insights(user: User = Depends(get_current_user), db: Session = Depends(get_d
             Subscription.billing_type == "recurring",
         )
     ).all()
+    subs = [s for s in subs if is_subscription_current(date.today(), s.end_date)]
     cats = {c.id: c.name for c in db.scalars(select(Category)).all()}
     by_cat: dict[str, float] = {}
     for s in subs:
@@ -61,6 +65,7 @@ def ranking(user: User = Depends(get_current_user), db: Session = Depends(get_db
             Subscription.billing_type == "recurring",
         )
     ).all()
+    subs = [s for s in subs if is_subscription_current(date.today(), s.end_date)]
     ranked = sorted(subs, key=lambda s: _monthly_cost(db, s, base), reverse=True)
     out = []
     for s in ranked:
@@ -85,7 +90,7 @@ def one_time(user: User = Depends(get_current_user), db: Session = Depends(get_d
     out = []
     for s in subs:
         o = SubscriptionOut.model_validate(s)
-        o.amount_in_base = round(exchange.convert(db, s.amount, s.currency, base), 2)
+        o.amount_in_base = round(exchange.convert(db, s.amount, s.currency, base, user_id=s.user_id), 2)
         out.append(o)
     return out
 
@@ -108,13 +113,19 @@ def upcoming(
         )
     ).all()
     items = sorted(
-        [s for s in subs if today <= s.next_renewal_date <= horizon],
+        [
+            s
+            for s in subs
+            if is_subscription_current(today, s.end_date)
+            and today <= s.next_renewal_date <= horizon
+            and is_renewal_within_end_date(s.next_renewal_date, s.end_date)
+        ],
         key=lambda s: s.next_renewal_date,
     )
     out = []
     for s in items:
         o = SubscriptionOut.model_validate(s)
-        o.amount_in_base = round(exchange.convert(db, s.amount, s.currency, base), 2)
+        o.amount_in_base = round(exchange.convert(db, s.amount, s.currency, base, user_id=s.user_id), 2)
         out.append(o)
     return out
 
@@ -134,14 +145,20 @@ def expired(user: User = Depends(get_current_user), db: Session = Depends(get_db
         )
     ).all()
     items = sorted(
-        [s for s in subs if s.next_renewal_date < today],
+        [
+            s
+            for s in subs
+            if is_subscription_current(today, s.end_date)
+            and s.next_renewal_date < today
+            and is_renewal_within_end_date(s.next_renewal_date, s.end_date)
+        ],
         key=lambda s: s.next_renewal_date,
         reverse=True,
     )
     out = []
     for s in items:
         o = SubscriptionOut.model_validate(s)
-        o.amount_in_base = round(exchange.convert(db, s.amount, s.currency, base), 2)
+        o.amount_in_base = round(exchange.convert(db, s.amount, s.currency, base, user_id=s.user_id), 2)
         out.append(o)
     return out
 
@@ -172,7 +189,7 @@ def recent_payments(
                 "date": paid_on,
                 "amount": round(s.amount, 2),
                 "currency": s.currency,
-                "amount_in_base": round(exchange.convert(db, s.amount, s.currency, base), 2),
+                "amount_in_base": round(exchange.convert(db, s.amount, s.currency, base, user_id=s.user_id), 2),
                 "billing_type": s.billing_type,
             }
         )
@@ -201,11 +218,13 @@ def category_detail(user: User = Depends(get_current_user), db: Session = Depend
     for s in subs:
         name = cat_name(s)
         if s.billing_type == "recurring":
+            if not is_subscription_current(date.today(), s.end_date):
+                continue
             d = recurring_map.setdefault(name, {"category": name, "count": 0, "monthly": 0.0})
             d["count"] += 1
             d["monthly"] += _monthly_cost(db, s, base)
         else:
-            amt = exchange.convert(db, s.amount, s.currency, base)
+            amt = exchange.convert(db, s.amount, s.currency, base, user_id=s.user_id)
             d = onetime_map.setdefault(name, {"category": name, "count": 0, "total": 0.0})
             d["count"] += 1
             d["total"] += amt
@@ -269,11 +288,13 @@ def payment_history(
     by_month: dict[str, float] = {}
     for r in rows:
         key = r.renewed_at.strftime("%Y-%m")
-        by_month[key] = by_month.get(key, 0.0) + exchange.convert(db, r.amount, r.currency, base)
+        by_month[key] = by_month.get(key, 0.0) + exchange.convert(
+            db, r.amount, r.currency, base, user_id=r.user_id
+        )
     for s in one_time_subs:
         if s.start_date:
             key = s.start_date.strftime("%Y-%m")
-            by_month[key] = by_month.get(key, 0.0) + exchange.convert(db, s.amount, s.currency, base)
+            by_month[key] = by_month.get(key, 0.0) + exchange.convert(db, s.amount, s.currency, base, user_id=s.user_id)
 
     # 填充连续月份（无数据补 0），用连续索引避免跨年递增错误
     out = []

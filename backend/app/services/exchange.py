@@ -5,6 +5,7 @@
 返回 { "rates": { "CNY": 7.2, "EUR": 0.93, ... } }
 """
 import logging
+import math
 from datetime import datetime, timedelta, timezone
 
 import httpx
@@ -12,10 +13,10 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.models import ExchangeRate
+from app.models import Currency, ExchangeRate
 
 logger = logging.getLogger(__name__)
-_missing_rate_warned: set[tuple[str, str, str]] = set()
+_missing_rate_warned: set[tuple[str, str, str, int | None]] = set()
 
 
 class ExchangeRateError(RuntimeError):
@@ -63,17 +64,26 @@ def refresh_rates(db: Session) -> int:
     """拉取最新汇率并写入数据库（以配置的 base 为基准）。返回更新条数。"""
     base = (settings.exchange_api_base or "USD").upper()
     rates = fetch_rates(base)
+    custom_codes = set(
+        db.scalars(select(Currency.code).where(Currency.is_custom.is_(True))).all()
+    )
     count = 0
     for quote, rate in rates.items():
+        if quote in custom_codes:
+            continue
         row = db.scalar(
             select(ExchangeRate).where(ExchangeRate.base == base, ExchangeRate.quote == quote)
         )
+        if row and row.is_manual:
+            continue
         if row:
             row.rate = rate
+            row.is_manual = False
+            row.user_id = None
             # naive UTC，替代已弃用的 datetime.utcnow()；不 import scheduler.utcnow 避免循环依赖
             row.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
         else:
-            db.add(ExchangeRate(base=base, quote=quote, rate=rate))
+            db.add(ExchangeRate(base=base, quote=quote, rate=rate, is_manual=False))
         count += 1
     db.commit()
     logger.info("event=exchange_refresh_done base=%s updated=%s", base, count)
@@ -85,7 +95,7 @@ def is_stale(db: Session, max_age_hours: int = 12) -> bool:
     base = (settings.exchange_api_base or "USD").upper()
     newest = db.scalar(
         select(ExchangeRate.updated_at)
-        .where(ExchangeRate.base == base)
+        .where(ExchangeRate.base == base, ExchangeRate.is_manual.is_(False))
         .order_by(ExchangeRate.updated_at.desc())
         .limit(1)
     )
@@ -111,28 +121,93 @@ def refresh_if_stale(db: Session, max_age_hours: int = 12) -> dict:
         return {"refreshed": False, "updated": 0}
 
 
-def _rate_from_base(db: Session, base: str, quote: str) -> float | None:
+def _rate_from_base(
+    db: Session,
+    base: str,
+    quote: str,
+    *,
+    user_id: int | None = None,
+) -> float | None:
     if base == quote:
         return 1.0
     row = db.scalar(
         select(ExchangeRate).where(ExchangeRate.base == base, ExchangeRate.quote == quote)
     )
-    return row.rate if row else None
+    if row is None:
+        return None
+    if row.is_manual and (user_id is None or row.user_id != user_id):
+        return None
+    return row.rate
 
 
-def convert(db: Session, amount: float, from_cur: str, to_cur: str) -> float:
+def system_quote_rate(
+    db: Session,
+    currency: str,
+    *,
+    user_id: int | None = None,
+) -> float | None:
+    """返回系统基准币到指定币种的可靠正数报价；缺失或非法时返回 None。"""
+    base = (settings.exchange_api_base or "USD").upper()
+    rate = _rate_from_base(
+        db,
+        base,
+        currency.strip().upper(),
+        user_id=user_id,
+    )
+    if rate is None or not math.isfinite(rate) or rate <= 0:
+        return None
+    return rate
+
+
+def stored_rate_from_user_base(
+    db: Session,
+    rate_to_user_base: float,
+    user_base_currency: str,
+    *,
+    user_id: int,
+) -> float | None:
+    """把「1 自定义币 = X 用户基准币」换算为系统基准币报价。"""
+    user_base_rate = system_quote_rate(db, user_base_currency, user_id=user_id)
+    if user_base_rate is None:
+        return None
+    return user_base_rate / rate_to_user_base
+
+
+def user_base_rate_from_stored(
+    db: Session,
+    custom_currency: str,
+    user_base_currency: str,
+    *,
+    user_id: int,
+) -> float | None:
+    """读取「1 自定义币 = X 用户基准币」；缺任一可靠系统报价时返回 None。"""
+    custom_rate = system_quote_rate(db, custom_currency, user_id=user_id)
+    user_base_rate = system_quote_rate(db, user_base_currency, user_id=user_id)
+    if custom_rate is None or user_base_rate is None:
+        return None
+    return user_base_rate / custom_rate
+
+
+def convert(
+    db: Session,
+    amount: float,
+    from_cur: str,
+    to_cur: str,
+    *,
+    user_id: int | None = None,
+) -> float:
     """换算金额。汇率以系统基准货币(base)存储，通过基准货币中转。"""
-    from_cur = from_cur.upper()
-    to_cur = to_cur.upper()
+    from_cur = from_cur.strip().upper()
+    to_cur = to_cur.strip().upper()
     if from_cur == to_cur:
         return amount
 
     base = (settings.exchange_api_base or "USD").upper()
     # base -> from_cur 与 base -> to_cur
-    r_from = _rate_from_base(db, base, from_cur)
-    r_to = _rate_from_base(db, base, to_cur)
+    r_from = _rate_from_base(db, base, from_cur, user_id=user_id)
+    r_to = _rate_from_base(db, base, to_cur, user_id=user_id)
     if not r_from or not r_to:
-        key = (base, from_cur, to_cur)
+        key = (base, from_cur, to_cur, user_id)
         if key not in _missing_rate_warned:
             _missing_rate_warned.add(key)
             logger.warning(

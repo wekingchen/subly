@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.deps import get_current_user
-from app.models import Category, User
+from app.models import Category, Subscription, User
 from app.schemas import CategoryIn, CategoryOut
 
 router = APIRouter(prefix="/api/categories", tags=["categories"])
@@ -55,6 +55,16 @@ def delete_category(
     cat = db.get(Category, cat_id)
     if not cat or cat.is_system or cat.user_id != user.id:
         raise HTTPException(404, "分类不存在或不可删除")
+    linked = db.scalars(
+        select(Subscription).where(
+            Subscription.user_id == user.id,
+            Subscription.category_id == cat.id,
+        )
+    ).all()
+    for sub in linked:
+        sub.category_id = None
+    if user.category_order:
+        user.category_order = [item for item in user.category_order if item != cat.id]
     db.delete(cat)
     db.commit()
-    return {"ok": True}
+    return {"ok": True, "unlinked_subscriptions": len(linked)}

@@ -20,14 +20,20 @@ describe('diagnostics issue helpers', () => {
     { severity: 'warn', scope: 'notification', code: 'telegram_config_incomplete' },
     { severity: 'warn', scope: 'notification', code: 'webhook_config_incomplete' },
     { severity: 'warn', scope: 'subscription', code: 'invalid_remind_days' },
+    { severity: 'warn', scope: 'subscription', code: 'currency_rate_missing' },
+    { severity: 'warn', scope: 'user', code: 'user_base_currency_rate_missing' },
+    { severity: 'error', scope: 'subscription', code: 'end_date_before_start_date' },
     { severity: 'info', scope: 'user', code: 'disabled_user_has_active_subscriptions' }
   ]
 
   it('sorts issues by severity then code', () => {
     expect(sortIssues(issues).map((x) => x.code)).toEqual([
+      'end_date_before_start_date',
       'negative_amount',
+      'currency_rate_missing',
       'invalid_remind_days',
       'telegram_config_incomplete',
+      'user_base_currency_rate_missing',
       'webhook_config_incomplete',
       'currency_missing',
       'disabled_user_has_active_subscriptions'
@@ -35,13 +41,16 @@ describe('diagnostics issue helpers', () => {
   })
 
   it('filters issues by severity and explicit reminder codes', () => {
-    expect(filterIssues(issues, 'error').map((x) => x.code)).toEqual(['negative_amount'])
+    expect(filterIssues(issues, 'error').map((x) => x.code)).toEqual(['end_date_before_start_date', 'negative_amount'])
     // 提醒筛选只纳入显式列出的提醒类 code，不受 scope 误导：
-    // 三类通道配置缺口 / invalid_remind_days 属于提醒相关；
+    // 三类通道配置缺口、汇率缺口与 invalid_remind_days 属于提醒相关；
     // disabled_user_has_active_subscriptions（scope=user）不再被误纳入。
     expect(filterIssues(issues, 'reminder').map((x) => x.code)).toEqual([
+      'end_date_before_start_date',
+      'currency_rate_missing',
       'invalid_remind_days',
       'telegram_config_incomplete',
+      'user_base_currency_rate_missing',
       'webhook_config_incomplete'
     ])
   })
@@ -72,8 +81,10 @@ describe('reminder simulation helpers', () => {
     expect(channelLabel('email')).toBe('email')
     expect(simulationStatusLabel('would_send')).toBe('将发送')
     expect(simulationStatusLabel('channel_not_ready')).toBe('通道未就绪')
+    expect(simulationStatusLabel('outside_end_date')).toBe('已超过结束日期')
     expect(simulationStatusClass('would_send')).toBe('ok')
     expect(simulationStatusClass('channel_not_ready')).toBe('warn')
+    expect(simulationStatusClass('outside_end_date')).toBe('warn')
   })
 
   it('sorts simulation items by actionable status first', () => {

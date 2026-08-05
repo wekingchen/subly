@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from app import icon_library
 from app.config import settings, validate_initial_admin_password
-from app.models import Category, Currency, ExchangeRate, IconLibraryService, User
+from app.models import Category, Currency, ExchangeRate, IconLibraryService, PaymentMethod, User
 from app.security import hash_password
 from app.services import exchange
 
@@ -156,6 +156,13 @@ def seed_all(db: Session) -> None:
     for i, (name, icon, color) in enumerate(CATEGORIES):
         if name not in existing_category_names:
             db.add(Category(name=name, icon=icon, color=color, is_system=True, sort=i))
+
+    existing_payment_names = set(
+        db.scalars(select(PaymentMethod.name).where(PaymentMethod.is_system.is_(True))).all()
+    )
+    for name, icon in PAYMENT_METHODS:
+        if name not in existing_payment_names:
+            db.add(PaymentMethod(name=name, icon=icon, is_system=True))
 
     # 服务图标库：幂等导入内置服务（仅插入缺失 slug，不覆盖管理员改动）
     existing_slugs = set(db.scalars(select(IconLibraryService.slug)).all())

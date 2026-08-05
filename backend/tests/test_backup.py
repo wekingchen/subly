@@ -5,7 +5,16 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
 from app.database import Base
-from app.models import Bundle, Category, Currency, PaymentMethod, RenewalHistory, Subscription, User
+from app.models import (
+    Bundle,
+    Category,
+    Currency,
+    ExchangeRate,
+    PaymentMethod,
+    RenewalHistory,
+    Subscription,
+    User,
+)
 from app.routers import backup
 
 
@@ -24,6 +33,8 @@ def add_user(db, username="alice"):
         base_currency="CNY",
     )
     db.add(user)
+    if db.get(Currency, "CNY") is None:
+        db.add(Currency(code="CNY", name="人民币", symbol="¥", is_custom=False))
     db.flush()
     return user
 
@@ -168,7 +179,9 @@ def test_restore_entities_reuses_named_entities_and_replaces_old_subscriptions(m
             "categories": [{"id": 10, "name": "云服务器", "icon": "server", "color": "#00f"}],
             "payment_methods": [{"id": 20, "name": "Visa", "icon": "card"}],
             "bundles": [{"id": 30, "name": "家庭包", "note": "新备注不应重复创建"}],
-            "currencies": [{"code": "xyz", "name": "测试币", "symbol": "X"}],
+            "currencies": [{
+                "code": "xyz", "name": "测试币", "symbol": "X", "rate_to_base": 2,
+            }],
             "subscriptions": [
                 {
                     "name": "周期订阅",
@@ -412,6 +425,8 @@ def test_restore_entities_restores_renewal_history_and_maps_to_new_sub():
     db, engine = make_db()
     try:
         user = add_user(db)
+        db.add(Currency(code="USD", name="美元", symbol="$", is_custom=False))
+        db.commit()
         data = {
             "subscriptions": [
                 {
@@ -608,5 +623,292 @@ def test_import_all_rejects_missing_username(monkeypatch):
     finally:
         main.app.dependency_overrides.pop(get_current_user, None)
         main.app.dependency_overrides.pop(backup.get_db, None)
+        db.close()
+        engine.dispose()
+
+
+def test_backup_roundtrips_end_date_and_normalizes_one_time():
+    db, engine = make_db()
+    try:
+        user = add_user(db)
+        db.add_all(
+            [
+                Subscription(
+                    user_id=user.id,
+                    name="有截止日",
+                    amount=10,
+                    currency="CNY",
+                    billing_type="recurring",
+                    start_date=date(2024, 1, 1),
+                    next_renewal_date=date(2024, 2, 1),
+                    end_date=date(2024, 6, 1),
+                ),
+                Subscription(
+                    user_id=user.id,
+                    name="买断脏数据",
+                    amount=100,
+                    currency="CNY",
+                    billing_type="one_time",
+                    start_date=date(2024, 1, 1),
+                    end_date=date(2024, 12, 31),
+                ),
+            ]
+        )
+        db.commit()
+        exported = backup._collect_entities(db, user)
+
+        other = add_user(db, "bob")
+        backup._restore_entities(db, other, exported, replace=False)
+        db.commit()
+        restored = {
+            sub.name: sub
+            for sub in db.scalars(
+                select(Subscription).where(Subscription.user_id == other.id)
+            ).all()
+        }
+        assert restored["有截止日"].end_date == date(2024, 6, 1)
+        assert restored["买断脏数据"].end_date is None
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_backup_rejects_invalid_end_date_before_replacing():
+    db, engine = make_db()
+    try:
+        user = add_user(db)
+        db.add(
+            Subscription(
+                user_id=user.id,
+                name="原有订阅",
+                amount=1,
+                currency="CNY",
+                start_date=date(2024, 1, 1),
+                next_renewal_date=date(2024, 2, 1),
+            )
+        )
+        db.commit()
+
+        with pytest.raises(ValueError, match="end_date"):
+            backup._restore_entities(
+                db,
+                user,
+                {
+                    "subscriptions": [
+                        {
+                            "name": "错误日期",
+                            "billing_type": "recurring",
+                            "start_date": "2024-02-01",
+                            "end_date": "2024-01-31",
+                        }
+                    ]
+                },
+                replace=True,
+            )
+        assert db.scalar(select(Subscription).where(Subscription.name == "原有订阅"))
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_backup_rejects_foreign_currency_before_replacing():
+    db, engine = make_db()
+    try:
+        user = add_user(db)
+        other = add_user(db, "bob")
+        db.add_all([
+            Currency(code="OTHER", name="他人货币", symbol="O", is_custom=True, user_id=other.id),
+            Subscription(
+                user_id=user.id,
+                name="原有订阅",
+                amount=1,
+                currency="CNY",
+                start_date=date(2024, 1, 1),
+                next_renewal_date=date(2024, 2, 1),
+            ),
+        ])
+        db.commit()
+
+        with pytest.raises(ValueError, match="不属于该用户"):
+            backup._restore_entities(
+                db,
+                user,
+                {
+                    "subscriptions": [{
+                        "name": "越权币种",
+                        "billing_type": "one_time",
+                        "currency": "OTHER",
+                        "start_date": "2024-01-01",
+                    }]
+                },
+                replace=True,
+            )
+        assert db.scalar(select(Subscription).where(Subscription.name == "原有订阅"))
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_backup_roundtrips_manual_currency_rate_and_accepts_old_backup(monkeypatch):
+    db, engine = make_db()
+    try:
+        monkeypatch.setattr(backup.settings, "exchange_api_base", "USD")
+        user = add_user(db)
+        db.add_all(
+            [
+                Currency(code="USD", name="美元", symbol="$", is_custom=False),
+                Currency(
+                    code="ABC", name="测试币", symbol="A", is_custom=True, user_id=user.id
+                ),
+                ExchangeRate(base="USD", quote="CNY", rate=7),
+                ExchangeRate(base="USD", quote="ABC", rate=3.5),
+            ]
+        )
+        db.commit()
+
+        exported = backup._collect_entities(db, user)
+        currency_data = exported["currencies"][0]
+        assert currency_data["rate_to_base"] == pytest.approx(3.5)
+        assert currency_data["rate_base"] == "USD"
+
+        db.query(ExchangeRate).filter(ExchangeRate.quote == "ABC").delete()
+        db.delete(db.get(Currency, "ABC"))
+        db.add(ExchangeRate(base="EUR", quote="USD", rate=1.2))
+        db.commit()
+        monkeypatch.setattr(backup.settings, "exchange_api_base", "EUR")
+        backup._restore_entities(db, user, exported, replace=False)
+        db.commit()
+        restored_rate = db.scalar(
+            select(ExchangeRate).where(
+                ExchangeRate.base == "EUR", ExchangeRate.quote == "ABC"
+            )
+        )
+        assert restored_rate.rate == pytest.approx(4.2)
+        assert restored_rate.is_manual is True
+        assert restored_rate.user_id == user.id
+
+        old_backup = {
+            "currencies": [{"code": "OLD", "name": "旧备份币", "symbol": "O"}],
+            "subscriptions": [],
+        }
+        backup._restore_entities(db, user, old_backup, replace=False)
+        db.commit()
+        assert db.get(Currency, "OLD") is not None
+        assert db.scalar(select(ExchangeRate).where(ExchangeRate.quote == "OLD")) is None
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_backup_does_not_trust_invalid_current_base_currency():
+    db, engine = make_db()
+    try:
+        user = add_user(db)
+        other = add_user(db, "bob")
+        db.add(Currency(
+            code="OTHER", name="他人货币", symbol="O", is_custom=True, user_id=other.id,
+        ))
+        user.base_currency = "OTHER"
+        db.commit()
+
+        with pytest.raises(ValueError, match="不属于该用户"):
+            backup._restore_entities(
+                db,
+                user,
+                {
+                    "subscriptions": [{
+                        "name": "省略币种",
+                        "billing_type": "one_time",
+                        "start_date": "2024-01-01",
+                    }],
+                },
+                replace=False,
+            )
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_backup_rejects_referenced_custom_currency_without_rate():
+    db, engine = make_db()
+    try:
+        user = add_user(db)
+        payload = {
+            "currencies": [{"code": "ABC", "name": "测试币", "symbol": "A"}],
+            "subscriptions": [{
+                "name": "缺汇率订阅",
+                "currency": "ABC",
+                "billing_type": "one_time",
+                "start_date": "2024-01-01",
+            }],
+        }
+
+        with pytest.raises(ValueError, match="缺少可用汇率"):
+            backup._restore_entities(db, user, payload, replace=False)
+        assert db.get(Currency, "ABC") is None
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_merge_backup_cannot_clear_rate_used_by_existing_subscription(monkeypatch):
+    db, engine = make_db()
+    try:
+        monkeypatch.setattr(backup.settings, "exchange_api_base", "USD")
+        user = add_user(db)
+        db.add_all([
+            Currency(code="ABC", name="测试币", symbol="A", is_custom=True, user_id=user.id),
+            ExchangeRate(
+                base="USD", quote="ABC", rate=3.5, is_manual=True, user_id=user.id,
+            ),
+            Subscription(
+                user_id=user.id,
+                name="现有订阅",
+                amount=10,
+                currency="ABC",
+                billing_type="one_time",
+                start_date=date(2024, 1, 1),
+            ),
+        ])
+        db.commit()
+
+        with pytest.raises(ValueError, match="不能清空汇率"):
+            backup._restore_entities(
+                db,
+                user,
+                {
+                    "currencies": [{
+                        "code": "ABC", "name": "测试币", "rate_to_base": None,
+                    }],
+                    "subscriptions": [],
+                },
+                replace=False,
+            )
+        assert db.scalar(select(ExchangeRate).where(ExchangeRate.quote == "ABC")) is not None
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_backup_normalizes_subscription_currency_before_storage():
+    db, engine = make_db()
+    try:
+        user = add_user(db)
+        payload = {
+            "currencies": [{
+                "code": "ABC", "name": "测试币", "symbol": "A", "rate_to_base": 3.5,
+            }],
+            "subscriptions": [{
+                "name": "币种规范化",
+                "currency": " abc ",
+                "billing_type": "one_time",
+                "start_date": "2024-01-01",
+            }],
+        }
+
+        backup._restore_entities(db, user, payload, replace=False)
+        saved = db.scalar(select(Subscription).where(Subscription.name == "币种规范化"))
+        assert saved.currency == "ABC"
+    finally:
         db.close()
         engine.dispose()

@@ -144,6 +144,8 @@ class ExchangeRate(Base):
     base: Mapped[str] = mapped_column(String(8), index=True)
     quote: Mapped[str] = mapped_column(String(8), index=True)
     rate: Mapped[float] = mapped_column(Float)
+    is_manual: Mapped[bool] = mapped_column(Boolean, default=False)
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
 

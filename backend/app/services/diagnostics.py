@@ -1,12 +1,17 @@
 from datetime import timedelta
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.billing import compute_next_renewal
+from app.billing import compute_next_renewal, is_subscription_current
 from app.models import Bundle, Category, Currency, NotificationLog, PaymentMethod, Subscription, User
 from app.services.scheduler import _as_local_date, _local_today, _parse_days
-from app.subscription_rules import apply_keepalive_scope, category_allows_keepalive, validate_subscription_refs
+from app.subscription_rules import (
+    apply_keepalive_scope,
+    category_allows_keepalive,
+    custom_currency_has_rate,
+    validate_subscription_refs,
+)
 
 VALID_BILLING_TYPES = {"recurring", "one_time"}
 VALID_CYCLES = {"day", "week", "month", "year"}
@@ -67,23 +72,69 @@ def run_data_diagnostics(db: Session, user_id: int | None = None) -> dict:
     logs = db.scalars(log_stmt.order_by(NotificationLog.id)).all()
     user_ids = {u.id for u in users}
     all_user_ids = set(db.scalars(select(User.id)).all())
-    currency_codes = set(db.scalars(select(Currency.code)).all())
+    currencies_by_code = {
+        currency.code: currency for currency in db.scalars(select(Currency)).all()
+    }
     sub_ids = set(db.scalars(select(Subscription.id)).all())
 
     issues: list[dict] = []
+    today = _local_today()
 
     active_sub_counts = {
-        uid: db.scalar(
-            select(func.count()).select_from(Subscription).where(
-                Subscription.user_id == uid,
-                Subscription.is_active.is_(True),
-                Subscription.is_paused.is_(False),
+        uid: sum(
+            1
+            for sub in subs
+            if sub.user_id == uid
+            and sub.is_active
+            and not sub.is_paused
+            and (
+                sub.billing_type != "recurring"
+                or is_subscription_current(today, sub.end_date)
             )
-        ) or 0
+        )
         for uid in user_ids
     }
 
     for user in users:
+        base_currency = currencies_by_code.get(user.base_currency)
+        if base_currency is None:
+            _issue(
+                issues,
+                severity="warn",
+                scope="user",
+                code="user_base_currency_missing",
+                title="用户基准货币不存在",
+                detail=f"用户 {user.username} 的基准货币 {user.base_currency} 未在币种表中找到。",
+                suggestion="在系统设置中切换为系统货币或本人自定义货币。",
+                user_id=user.id,
+                username=user.username,
+            )
+        elif base_currency.is_custom and base_currency.user_id != user.id:
+            _issue(
+                issues,
+                severity="warn",
+                scope="user",
+                code="user_base_currency_not_owned",
+                title="用户基准货币属于其他用户",
+                detail=f"用户 {user.username} 引用了其他用户的自定义币种 {user.base_currency}。",
+                suggestion="在系统设置中切换为系统货币或本人自定义货币。",
+                user_id=user.id,
+                username=user.username,
+            )
+        elif base_currency.is_custom and not custom_currency_has_rate(
+            db, user.id, base_currency.code
+        ):
+            _issue(
+                issues,
+                severity="warn",
+                scope="user",
+                code="user_base_currency_rate_missing",
+                title="用户基准货币缺少汇率",
+                detail=f"用户 {user.username} 的自定义基准货币 {base_currency.code} 没有可用汇率。",
+                suggestion="先切换基准货币，再为该自定义货币设置手动汇率。",
+                user_id=user.id,
+                username=user.username,
+            )
         if user.telegram_enabled and (not user.telegram_bot_token or not user.telegram_chat_id):
             _issue(
                 issues,
@@ -188,7 +239,8 @@ def run_data_diagnostics(db: Session, user_id: int | None = None) -> dict:
                 suggestion="确认是否录入错误；通常订阅金额应为 0 或正数。",
                 **common,
             )
-        if not sub.currency or sub.currency not in currency_codes:
+        currency = currencies_by_code.get(sub.currency)
+        if not sub.currency or currency is None:
             _issue(
                 issues,
                 severity="warn",
@@ -197,6 +249,30 @@ def run_data_diagnostics(db: Session, user_id: int | None = None) -> dict:
                 title="订阅币种不存在",
                 detail=f"订阅「{sub.name}」使用的币种 {sub.currency or '空'} 未在币种表中找到。",
                 suggestion="在设置中补充自定义币种，或把订阅改为已有币种。",
+                **common,
+            )
+        elif currency.is_custom and currency.user_id != sub.user_id:
+            _issue(
+                issues,
+                severity="warn",
+                scope="subscription",
+                code="currency_not_owned",
+                title="订阅币种属于其他用户",
+                detail=f"订阅「{sub.name}」引用了其他用户的自定义币种 {sub.currency}。",
+                suggestion="编辑订阅并选择系统货币或本人自定义货币。",
+                **common,
+            )
+        elif currency.is_custom and not custom_currency_has_rate(
+            db, sub.user_id, currency.code
+        ):
+            _issue(
+                issues,
+                severity="warn",
+                scope="subscription",
+                code="currency_rate_missing",
+                title="订阅币种缺少汇率",
+                detail=f"订阅「{sub.name}」使用的自定义币种 {sub.currency} 没有可用汇率。",
+                suggestion="先从订阅移除该币种，再在设置中补充手动汇率。",
                 **common,
             )
         if sub.category_id:
@@ -271,7 +347,24 @@ def run_data_diagnostics(db: Session, user_id: int | None = None) -> dict:
                     suggestion="编辑订阅重新选择本人套餐包，或移除套餐包归属。建议同时排查写入校验是否生效。",
                     **common,
                 )
-        if sub.is_active and not sub.is_paused and sub.billing_type == "recurring" and sub.next_renewal_date is None:
+        if sub.end_date and sub.start_date and sub.end_date < sub.start_date:
+            _issue(
+                issues,
+                severity="error",
+                scope="subscription",
+                code="end_date_before_start_date",
+                title="订阅结束日期早于开始日期",
+                detail=f"订阅「{sub.name}」的结束日期 {sub.end_date} 早于开始日期 {sub.start_date}。",
+                suggestion="编辑订阅并把结束日期调整为开始日期当天或之后。",
+                **common,
+            )
+        if (
+            sub.is_active
+            and not sub.is_paused
+            and sub.billing_type == "recurring"
+            and is_subscription_current(today, sub.end_date)
+            and sub.next_renewal_date is None
+        ):
             _issue(
                 issues,
                 severity="error",
@@ -304,14 +397,16 @@ def run_data_diagnostics(db: Session, user_id: int | None = None) -> dict:
                 suggestion="编辑订阅并重新保存，或把分类改为电信运营商。",
                 **common,
             )
-        if sub.billing_type == "one_time" and (sub.next_renewal_date is not None or sub.auto_renew):
+        if sub.billing_type == "one_time" and (
+            sub.next_renewal_date is not None or sub.end_date is not None or sub.auto_renew
+        ):
             _issue(
                 issues,
                 severity="warn",
                 scope="subscription",
                 code="one_time_has_recurring_fields",
                 title="一次性买断残留周期字段",
-                detail=f"订阅「{sub.name}」是一次性买断，但仍有下次续费日或自动续费标记。",
+                detail=f"订阅「{sub.name}」是一次性买断，但仍有下次续费日、结束日期或自动续费标记。",
                 suggestion="编辑订阅并保存一次，系统会按一次性买断规则清理周期字段。",
                 **common,
             )
@@ -360,7 +455,14 @@ def run_data_diagnostics(db: Session, user_id: int | None = None) -> dict:
     for item in issues:
         counts[item["severity"]] = counts.get(item["severity"], 0) + 1
 
-    active_recurring = sum(1 for s in subs if s.is_active and not s.is_paused and s.billing_type == "recurring")
+    active_recurring = sum(
+        1
+        for s in subs
+        if s.is_active
+        and not s.is_paused
+        and s.billing_type == "recurring"
+        and is_subscription_current(today, s.end_date)
+    )
     return {
         "summary": {
             "errors": counts.get("error", 0),
@@ -408,6 +510,7 @@ def repair_subscription_issue(db: Session, subscription_id: int, code: str) -> d
         apply_keepalive_scope(db, sub)
     elif code == "one_time_has_recurring_fields":
         sub.next_renewal_date = None
+        sub.end_date = None
         sub.auto_renew = False
     elif code == "invalid_remind_days":
         sub.remind_days_before = "7,1"
