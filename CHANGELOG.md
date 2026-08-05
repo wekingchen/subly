@@ -28,6 +28,7 @@
 - 内置服务库新增「智谱 GLM」（AI）与「火山引擎 / 豆包」（AI + VPS，因火山引擎同时提供豆包大模型与火山云服务器）。
 
 ### Fixed
+- 修复发布镜像被 `cryptography` 的可修复 High 漏洞（CVE-2026-69247 / CVE-2026-69249）阻断：将依赖从 `48.0.1` 升级到 `50.0.0`，满足 Trivy 双架构发布门禁。
 - 修复旧数据卷升级后 SQLite 启动报 `attempt to write a readonly database`：容器入口先修复 `/app/data` 中历史 root-owned 目录和文件的 ownership，再通过 `gosu` 以 UID/GID `10001` 启动 Uvicorn；CI 使用真实 root-owned bind mount 验证数据库可写、PID 1 已降权、浏览器 E2E 与双架构发布均正常。
 - 容器入口权限校验收紧：`chown` 改为按设备号过滤、不跨文件系统（避免修改嵌套挂载到其他卷的内容）；启动前校验 `/app/data` 整棵树的可写与目录可搜索权限，遍历失败不再被静默吞掉；非 root 运行且 UID 不为 `10001` 时直接拒绝启动，错误信息统一指向 `10001:10001`。CI 增加非 root UID 校验。
 - 修复发布镜像被 Starlette 高危 DoS 漏洞阻断：将 FastAPI 升级至 `0.133.1` 并显式固定已修复的 Starlette `1.3.1`，保留 Trivy 对可修复 High/Critical 项的发布硬门禁，不以忽略规则绕过；`pip-audit` 当前仅剩 ecdsa 无可用修复版本项。
@@ -50,7 +51,7 @@
 - 实时日志时间按容器 `TZ` / `settings.tz`（默认 `Asia/Shanghai`）显示：`/api/logs` 现在返回带 UTC 时区标记的 `created_at`，前端按系统时区格式化。
 
 ### Changed
-- Docker 与发布链路加固：前端镜像构建只使用 `npm ci`，新增 `.dockerignore`，运行时切换为固定 UID/GID `10001` 的非 root 用户；PR 只运行后端/前端测试、lint、构建、Compose 与非阻塞依赖审计，main/tag/手动发布才构建 amd64/arm64 归档、执行 Trivy 可修复 High/Critical 门禁与 Chromium E2E；双架构发布归档只构建一次，扫描通过后直接推送同一批产物并组装 manifest，避免二次构建漂移；同一 ref 的旧发布会被并发取消以防旧构建回写 `latest`，手动发布仅允许从 `main` 运行；`v*` tag 必须指向 `main` 历史且只写版本 tag，不再用旧提交回滚 `latest`；pip/npm 审计失败改为 warning，避免成功 job 携带误导性的 error annotation；`actions/upload-artifact` 升至 v7、`actions/download-artifact` 升至 v8，清除旧 Action 的 Node.js 20 弃用告警。为遵守远端只保留 `main` 的仓库约束，移除 Dependabot 自动 version-update PR 配置，pip/npm/GitHub Actions/Docker 基础镜像升级统一人工规划，依赖风险继续由 audit 日志与发布产物 Trivy 覆盖。同步将 `python-jose` 升至 `3.5.0`、`python-multipart` 升至 `0.0.31`、`cryptography` 升至 `48.0.1`、FastAPI 升至 `0.133.1` 并固定 Starlette `1.3.1`。
+- Docker 与发布链路加固：前端镜像构建只使用 `npm ci`，新增 `.dockerignore`，运行时切换为固定 UID/GID `10001` 的非 root 用户；PR 只运行后端/前端测试、lint、构建、Compose 与非阻塞依赖审计，main/tag/手动发布才构建 amd64/arm64 归档、执行 Trivy 可修复 High/Critical 门禁与 Chromium E2E；双架构发布归档只构建一次，扫描通过后直接推送同一批产物并组装 manifest，避免二次构建漂移；同一 ref 的旧发布会被并发取消以防旧构建回写 `latest`，手动发布仅允许从 `main` 运行；`v*` tag 必须指向 `main` 历史且只写版本 tag，不再用旧提交回滚 `latest`；pip/npm 审计失败改为 warning，避免成功 job 携带误导性的 error annotation；`actions/upload-artifact` 升至 v7、`actions/download-artifact` 升至 v8，清除旧 Action 的 Node.js 20 弃用告警。为遵守远端只保留 `main` 的仓库约束，移除 Dependabot 自动 version-update PR 配置，pip/npm/GitHub Actions/Docker 基础镜像升级统一人工规划，依赖风险继续由 audit 日志与发布产物 Trivy 覆盖。同步将 `python-jose` 升至 `3.5.0`、`python-multipart` 升至 `0.0.31`、`cryptography` 升至 `50.0.0`、FastAPI 升至 `0.133.1` 并固定 Starlette `1.3.1`。
 - 图标抓取流式读取加 wall-clock deadline（单次读超时的 3 倍，下限 3 秒）：httpx 的 read timeout 只限单次读空闲，慢速分块响应可长期占住抓取并发，现超总时长即中止并记 provider failure 触发冷却（避免后续 slug 反复重试同一慢 provider）。
 - 清理自有代码中已弃用的 `datetime.utcnow()`，改为 `datetime.now(timezone.utc)`（存 naive UTC 列时用 `.replace(tzinfo=None)` 保持一致），消除 DeprecationWarning；上游 jose / passlib 的弃用告警待其发版。
 - README、Docker Hub、NAS 与技术文档统一项目名表述：正式名称使用 `Subly`，中文定位调整为“你的自托管续费雷达”。
