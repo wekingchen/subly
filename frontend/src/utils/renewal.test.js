@@ -75,6 +75,10 @@ describe('radarBucket', () => {
     expect(radarBucket(recurring('2024-01-02', { show_in_calendar: false }), { now: NOW })).toBeNull()
   })
 
+  it('ignores paused subscriptions', () => {
+    expect(radarBucket(recurring('2024-01-02', { is_paused: true }), { now: NOW })).toBeNull()
+  })
+
   it('can include hidden calendar items explicitly', () => {
     expect(radarBucket(recurring('2024-01-02', { show_in_calendar: false }), { now: NOW, includeHidden: true })).toBe('d3')
   })

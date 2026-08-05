@@ -8,14 +8,14 @@ from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, delete, or_, select
 from sqlalchemy.orm import Session
 
 from app import activity
 from app.billing import compute_next_renewal
 from app.database import get_db
 from app.deps import get_admin_user, get_current_user
-from app.models import Bundle, Category, Currency, PaymentMethod, Subscription, User
+from app.models import Bundle, Category, Currency, PaymentMethod, RenewalHistory, Subscription, User
 from app.schemas import sanitize_url
 from app.services.scheduler import utcnow
 from app.security import hash_password
@@ -23,10 +23,10 @@ from app.subscription_rules import apply_keepalive_scope
 
 router = APIRouter(prefix="/api/backup", tags=["backup"])
 
-EXPORT_VERSION = 1
+EXPORT_VERSION = 2
 
 
-def _sub_dict(s: Subscription) -> dict:
+def _sub_dict(s: Subscription, history: list[RenewalHistory]) -> dict:
     return {
         "name": s.name,
         "plan": s.plan,
@@ -50,11 +50,24 @@ def _sub_dict(s: Subscription) -> dict:
         "end_date": s.end_date.isoformat() if s.end_date else None,
         "last_renewed_at": s.last_renewed_at.isoformat() if s.last_renewed_at else None,
         "is_active": s.is_active,
+        "is_paused": s.is_paused,
         "auto_renew": s.auto_renew,
         "show_in_calendar": s.show_in_calendar,
         "sort": s.sort,
         "family_members": s.family_members,
         "remind_days_before": s.remind_days_before,
+        # 续费历史快照：随订阅一起备份/恢复，灾难恢复后不丢失续费轨迹。
+        "renewal_history": [
+            {
+                "renewed_at": r.renewed_at.isoformat() if r.renewed_at else None,
+                "mode": r.mode,
+                "prev_renewal_date": r.prev_renewal_date.isoformat() if r.prev_renewal_date else None,
+                "next_renewal_date": r.next_renewal_date.isoformat() if r.next_renewal_date else None,
+                "amount": r.amount,
+                "currency": r.currency,
+            }
+            for r in history
+        ],
     }
 
 
@@ -67,6 +80,16 @@ def _collect_entities(db: Session, user: User) -> dict:
     恢复端按名称匹配即可正确还原到重新种子化后的系统分类上。
     """
     subs = db.scalars(select(Subscription).where(Subscription.user_id == user.id)).all()
+    # 一次性取本用户全部续费历史，按订阅分组，避免每条订阅单独查询。
+    all_history = db.scalars(
+        select(RenewalHistory)
+        .where(RenewalHistory.user_id == user.id)
+        .order_by(RenewalHistory.id)
+    ).all()
+    history_by_sub: dict[int, list[RenewalHistory]] = {}
+    for r in all_history:
+        history_by_sub.setdefault(r.subscription_id, []).append(r)
+
     used_cat_ids = {s.category_id for s in subs if s.category_id}
     used_pm_ids = {s.payment_method_id for s in subs if s.payment_method_id}
 
@@ -107,7 +130,7 @@ def _collect_entities(db: Session, user: User) -> dict:
         "currencies": [
             {"code": c.code, "name": c.name, "symbol": c.symbol} for c in currencies
         ],
-        "subscriptions": [_sub_dict(s) for s in subs],
+        "subscriptions": [_sub_dict(s, history_by_sub.get(s.id, [])) for s in subs],
     }
 
 
@@ -161,6 +184,11 @@ def _validate_backup_payload(data: dict) -> None:
             v = s.get(field)
             if v is not None and not isinstance(v, int):
                 raise ValueError(f"第 {i + 1} 条订阅 {field} 必须是整数：{v!r}")
+        # 布尔字段必须是真实 bool，避免字符串 "false" 等 truthy 值走成 500
+        for field in ("is_active", "is_paused", "is_keepalive", "auto_renew", "show_in_calendar"):
+            v = s.get(field)
+            if v is not None and not isinstance(v, bool):
+                raise ValueError(f"第 {i + 1} 条订阅 {field} 必须是布尔值：{v!r}")
         if "amount" in s and s["amount"] is not None:
             try:
                 float(s["amount"])
@@ -193,6 +221,15 @@ def _restore_entities(db: Session, user: User, data: dict, replace: bool) -> int
     _validate_backup_payload(data)
 
     if replace:
+        # 覆盖恢复：先清本用户的续费历史与订阅，避免 SQLite 无 AUTOINCREMENT 时
+        # 新订阅复用旧 ID 而继承错误历史，或留下孤儿历史行。
+        old_sub_ids = [
+            s.id for s in db.scalars(
+                select(Subscription).where(Subscription.user_id == user.id)
+            ).all()
+        ]
+        if old_sub_ids:
+            db.execute(delete(RenewalHistory).where(RenewalHistory.subscription_id.in_(old_sub_ids)))
         for s in db.scalars(
             select(Subscription).where(Subscription.user_id == user.id)
         ).all():
@@ -288,6 +325,8 @@ def _restore_entities(db: Session, user: User, data: dict, replace: bool) -> int
     db.flush()
 
     count = 0
+    # 旧备份下标 -> 新订阅对象，用于恢复嵌套的续费历史。
+    new_subs: list[Subscription] = []
     for s in subs_in:
         start = _parse_date(s.get("start_date")) or date.today()
         billing_type = s.get("billing_type", "recurring")
@@ -315,6 +354,7 @@ def _restore_entities(db: Session, user: User, data: dict, replace: bool) -> int
             end_date=_parse_date(s.get("end_date")),
             last_renewed_at=_parse_date(s.get("last_renewed_at")),
             is_active=s.get("is_active", True),
+            is_paused=(s.get("is_paused", False) or False),
             auto_renew=s.get("auto_renew", True),
             show_in_calendar=s.get("show_in_calendar", True),
             sort=s.get("sort", 0) or 0,
@@ -328,7 +368,35 @@ def _restore_entities(db: Session, user: User, data: dict, replace: bool) -> int
             sub.auto_renew = False
         apply_keepalive_scope(db, sub)
         db.add(sub)
+        db.flush()  # 拿到新 sub.id，供恢复历史关联
+        new_subs.append(sub)
         count += 1
+
+    # 恢复续费历史：按订阅在备份数组中的下标对应到新订阅；兼容不含历史的旧版备份。
+    for idx, s in enumerate(subs_in):
+        if idx >= len(new_subs):
+            break
+        hist_in = s.get("renewal_history")
+        if not isinstance(hist_in, list):
+            continue
+        target_sub = new_subs[idx]
+        for r in hist_in:
+            if not isinstance(r, dict):
+                continue
+            try:
+                amount = float(r.get("amount", 0) or 0)
+            except (TypeError, ValueError):
+                continue
+            db.add(RenewalHistory(
+                subscription_id=target_sub.id,
+                user_id=user.id,
+                renewed_at=_parse_date(r.get("renewed_at")) or date.today(),
+                mode=str(r.get("mode") or "today"),
+                prev_renewal_date=_parse_date(r.get("prev_renewal_date")),
+                next_renewal_date=_parse_date(r.get("next_renewal_date")),
+                amount=amount,
+                currency=str(r.get("currency") or target_sub.currency),
+            ))
 
     return count
 

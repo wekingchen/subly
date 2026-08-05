@@ -28,6 +28,7 @@ def insights(user: User = Depends(get_current_user), db: Session = Depends(get_d
         select(Subscription).where(
             Subscription.user_id == user.id,
             Subscription.is_active.is_(True),
+            Subscription.is_paused.is_(False),
             Subscription.billing_type == "recurring",
         )
     ).all()
@@ -56,6 +57,7 @@ def ranking(user: User = Depends(get_current_user), db: Session = Depends(get_db
         select(Subscription).where(
             Subscription.user_id == user.id,
             Subscription.is_active.is_(True),
+            Subscription.is_paused.is_(False),
             Subscription.billing_type == "recurring",
         )
     ).all()
@@ -74,7 +76,10 @@ def one_time(user: User = Depends(get_current_user), db: Session = Depends(get_d
     base = user.base_currency
     subs = db.scalars(
         select(Subscription).where(
-            Subscription.user_id == user.id, Subscription.billing_type == "one_time"
+            Subscription.user_id == user.id,
+            Subscription.is_active.is_(True),
+            Subscription.is_paused.is_(False),
+            Subscription.billing_type == "one_time",
         )
     ).all()
     out = []
@@ -97,6 +102,7 @@ def upcoming(
         select(Subscription).where(
             Subscription.user_id == user.id,
             Subscription.is_active.is_(True),
+            Subscription.is_paused.is_(False),
             Subscription.billing_type == "recurring",
             Subscription.next_renewal_date.is_not(None),
         )
@@ -121,6 +127,8 @@ def expired(user: User = Depends(get_current_user), db: Session = Depends(get_db
     subs = db.scalars(
         select(Subscription).where(
             Subscription.user_id == user.id,
+            Subscription.is_active.is_(True),
+            Subscription.is_paused.is_(False),
             Subscription.billing_type == "recurring",
             Subscription.next_renewal_date.is_not(None),
         )
@@ -178,7 +186,9 @@ def category_detail(user: User = Depends(get_current_user), db: Session = Depend
     base = user.base_currency
     subs = db.scalars(
         select(Subscription).where(
-            Subscription.user_id == user.id, Subscription.is_active.is_(True)
+            Subscription.user_id == user.id,
+            Subscription.is_active.is_(True),
+            Subscription.is_paused.is_(False),
         )
     ).all()
     cats = {c.id: c.name for c in db.scalars(select(Category)).all()}

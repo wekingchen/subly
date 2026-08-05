@@ -128,18 +128,24 @@
             <input id="sub-next-renewal" v-model="form.next_renewal_date" name="next_renewal_date" type="date" />
           </div>
         </div>
-        <div class="row" v-if="form.billing_type === 'recurring'">
-          <div style="flex:1">
-            <label for="sub-remind-days">{{ t('sub.remindDays') }}</label>
-            <input id="sub-remind-days" v-model="form.remind_days_before" name="remind_days_before" placeholder="7,1" />
-          </div>
+        <div class="row">
           <div style="flex:1">
             <label for="sub-active">{{ t('sub.active') }}</label>
             <select id="sub-active" v-model="form.is_active" name="is_active"><option :value="true">✓</option><option :value="false">✗</option></select>
           </div>
           <div style="flex:1">
+            <label for="sub-paused">{{ t('sub.pausedLabel') }}</label>
+            <select id="sub-paused" v-model="form.is_paused" name="is_paused"><option :value="false">✗</option><option :value="true">✓</option></select>
+          </div>
+          <div style="flex:1" v-if="form.billing_type === 'recurring'">
             <label for="sub-auto-renew">{{ t('sub.autoRenew') }}</label>
             <select id="sub-auto-renew" v-model="form.auto_renew" name="auto_renew"><option :value="true">✓</option><option :value="false">✗</option></select>
+          </div>
+        </div>
+        <div class="row" v-if="form.billing_type === 'recurring'">
+          <div style="flex:1">
+            <label for="sub-remind-days">{{ t('sub.remindDays') }}</label>
+            <input id="sub-remind-days" v-model="form.remind_days_before" name="remind_days_before" placeholder="7,1" />
           </div>
         </div>
       </div>

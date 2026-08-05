@@ -5,7 +5,7 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
 from app.database import Base
-from app.models import Bundle, Category, Currency, PaymentMethod, Subscription, User
+from app.models import Bundle, Category, Currency, PaymentMethod, RenewalHistory, Subscription, User
 from app.routers import backup
 
 
@@ -319,6 +319,151 @@ def test_restore_rejects_missing_subscriptions_before_deleting():
             backup._restore_entities(db, user, {"categories": []}, replace=True)
         names = {s.name for s in db.scalars(select(Subscription).where(Subscription.user_id == user.id)).all()}
         assert names == {"原有订阅"}
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_collect_entities_exports_renewal_history_nested_in_subscription():
+    """续费历史随订阅一起导出，嵌套在订阅 dict 下。"""
+    db, engine = make_db()
+    try:
+        user = add_user(db)
+        sub = Subscription(
+            user_id=user.id, name="循环订阅", amount=12.5, currency="USD",
+            billing_type="recurring", cycle="month", cycle_count=1,
+            start_date=date(2024, 1, 1), next_renewal_date=date(2024, 1, 31),
+        )
+        db.add(sub)
+        db.flush()
+        db.add_all([
+            RenewalHistory(subscription_id=sub.id, user_id=user.id, renewed_at=date(2024, 1, 31),
+                           mode="due", prev_renewal_date=date(2024, 1, 31), next_renewal_date=date(2024, 2, 29),
+                           amount=12.5, currency="USD"),
+            RenewalHistory(subscription_id=sub.id, user_id=user.id, renewed_at=date(2024, 2, 29),
+                           mode="due", prev_renewal_date=date(2024, 2, 29), next_renewal_date=date(2024, 3, 29),
+                           amount=15.0, currency="USD"),
+        ])
+        db.commit()
+
+        exported = backup._collect_entities(db, user)
+        hist = exported["subscriptions"][0]["renewal_history"]
+        assert len(hist) == 2
+        assert hist[0]["next_renewal_date"] == "2024-02-29"
+        assert hist[1]["amount"] == 15.0
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_restore_entities_restores_renewal_history_and_maps_to_new_sub():
+    """恢复时续费历史按订阅下标映射到新订阅，灾难恢复后不丢失轨迹。"""
+    db, engine = make_db()
+    try:
+        user = add_user(db)
+        data = {
+            "subscriptions": [
+                {
+                    "name": "循环订阅", "amount": 12.5, "currency": "USD",
+                    "billing_type": "recurring", "cycle": "month", "cycle_count": 1,
+                    "start_date": "2024-01-01", "next_renewal_date": "2024-03-29",
+                    "renewal_history": [
+                        {"renewed_at": "2024-01-31", "mode": "due",
+                         "prev_renewal_date": "2024-01-31", "next_renewal_date": "2024-02-29",
+                         "amount": 12.5, "currency": "USD"},
+                    ],
+                }
+            ],
+        }
+
+        backup._restore_entities(db, user, data, replace=False)
+        db.commit()
+
+        sub = db.scalars(select(Subscription).where(Subscription.user_id == user.id)).one()
+        rows = db.scalars(select(RenewalHistory).where(RenewalHistory.subscription_id == sub.id)).all()
+        assert len(rows) == 1
+        assert rows[0].mode == "due"
+        assert rows[0].amount == 12.5
+        assert rows[0].next_renewal_date == date(2024, 2, 29)
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_restore_entities_replace_clears_orphan_renewal_history():
+    """覆盖恢复：replace=True 时先清旧续费历史，避免新订阅复用旧 ID 继承错误历史。"""
+    db, engine = make_db()
+    try:
+        user = add_user(db)
+        old_sub = Subscription(
+            user_id=user.id, name="旧订阅", amount=10, currency="CNY",
+            billing_type="recurring", cycle="month", cycle_count=1,
+            start_date=date(2024, 1, 1), next_renewal_date=date(2024, 1, 31),
+        )
+        db.add(old_sub)
+        db.flush()
+        db.add(RenewalHistory(
+            subscription_id=old_sub.id, user_id=user.id, renewed_at=date(2024, 1, 31),
+            mode="due", prev_renewal_date=date(2024, 1, 31), next_renewal_date=date(2024, 2, 29),
+            amount=10, currency="CNY",
+        ))
+        db.commit()
+
+        # 覆盖导入一条新订阅（无历史）
+        backup._restore_entities(db, user, {
+            "subscriptions": [{"name": "新订阅", "amount": 20, "currency": "CNY",
+                               "billing_type": "recurring", "cycle": "month", "cycle_count": 1,
+                               "start_date": "2024-01-01", "next_renewal_date": "2024-02-01"}]
+        }, replace=True)
+        db.commit()
+
+        # 旧历史应被清除，新订阅不继承任何历史
+        new_sub = db.scalars(select(Subscription).where(Subscription.user_id == user.id)).one()
+        rows = db.scalars(select(RenewalHistory).where(RenewalHistory.subscription_id == new_sub.id)).all()
+        assert rows == []
+        # 全库无孤儿历史
+        assert db.scalars(select(RenewalHistory)).all() == []
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_backup_roundtrips_is_paused_field():
+    """is_paused 字段应随备份导出并正确恢复。"""
+    db, engine = make_db()
+    try:
+        user = add_user(db)
+        db.add(Subscription(
+            user_id=user.id, name="暂停订阅", amount=10, currency="CNY",
+            billing_type="recurring", cycle="month", cycle_count=1,
+            start_date=date(2024, 1, 1), next_renewal_date=date(2024, 2, 1),
+            is_paused=True,
+        ))
+        db.commit()
+
+        exported = backup._collect_entities(db, user)
+        assert exported["subscriptions"][0]["is_paused"] is True
+
+        # 恢复到新用户
+        other = add_user(db, "bob")
+        backup._restore_entities(db, other, exported, replace=False)
+        db.commit()
+        restored = db.scalars(select(Subscription).where(Subscription.user_id == other.id)).one()
+        assert restored.is_paused is True
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_backup_rejects_non_boolean_is_paused():
+    """畸形 is_paused（字符串）应在删旧数据前被校验拒绝，返回 ValueError 而非 500。"""
+    db, engine = make_db()
+    try:
+        user = add_user(db)
+        with pytest.raises(ValueError):
+            backup._restore_entities(db, user, {
+                "subscriptions": [{"name": "x", "is_paused": "false"}]
+            }, replace=True)
     finally:
         db.close()
         engine.dispose()

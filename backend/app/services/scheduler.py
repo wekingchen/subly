@@ -73,7 +73,8 @@ def _parse_days(raw: str) -> list[int]:
     out = []
     for part in (raw or "").split(","):
         part = part.strip()
-        if part.isdigit():
+        # 非负整数（提前/当天提醒）或负整数（过期后第 N 天提醒）。
+        if part.isdigit() or (part.startswith('-') and part[1:].isdigit()):
             out.append(int(part))
     return out
 
@@ -122,9 +123,10 @@ def _send_one(
         message = send_fn()
         log.message = message
         ok = True
+        when_hint = f"过期后第 {abs(n)} 天" if n < 0 else (f"当天" if n == 0 else f"提前 {n} 天")
         activity.log(
             f"{channel}.reminder",
-            f"已提醒「{sub.name}」（提前 {n} 天，{channel}）",
+            f"已提醒「{sub.name}」（{when_hint}，{channel}）",
             user=user,
         )
     except Exception as e:  # noqa: BLE001
@@ -163,6 +165,7 @@ def run_reminder_scan() -> dict:
         subs = db.scalars(
             select(Subscription).where(
                 Subscription.is_active.is_(True),
+                Subscription.is_paused.is_(False),
                 Subscription.billing_type == "recurring",
                 Subscription.next_renewal_date.is_not(None),
             )
@@ -194,9 +197,11 @@ def run_reminder_scan() -> dict:
                         )
                         return text
 
-                    ok, _ = _send_one(db, sub, user, n, today, "telegram", _do_telegram, seen)
-                    sent += 1 if ok else 0
-                    failed += 0 if ok else 1
+                    ok, status = _send_one(db, sub, user, n, today, "telegram", _do_telegram, seen)
+                    if ok:
+                        sent += 1
+                    elif status != "skip":
+                        failed += 1
                 if bark_ready:
                     title, body = _build_bark_text(db, sub, user, days_left)
                     icon_url = bark.resolve_push_icon_url(sub.icon, settings.app_public_url)
@@ -213,9 +218,11 @@ def run_reminder_scan() -> dict:
                         )
                         return f"{title}\n{body}"
 
-                    ok, _ = _send_one(db, sub, user, n, today, "bark", _do_bark, seen)
-                    sent += 1 if ok else 0
-                    failed += 0 if ok else 1
+                    ok, status = _send_one(db, sub, user, n, today, "bark", _do_bark, seen)
+                    if ok:
+                        sent += 1
+                    elif status != "skip":
+                        failed += 1
         db.commit()
     finally:
         db.close()
@@ -254,10 +261,17 @@ def _renewal_facts(db, sub: Subscription, user: User, days_left: int):
 
 
 def _build_telegram_text(db, sub: Subscription, user: User, days_left: int) -> str:
-    """构造一条信息完整、措辞友好的提醒（Telegram Markdown）。保号订阅切保号文案。"""
+    """构造一条信息完整、措辞友好的提醒（Telegram Markdown）。保号订阅切保号文案。
+    days_left>0 提前提醒，==0 当天提醒，<0 过期后第 N 天提醒（abs 取正）。"""
     f = _renewal_facts(db, sub, user, days_left)
     ka = f["is_keepalive"]
-    if days_left <= 0:
+    overdue = days_left < 0
+    if overdue:
+        n = abs(days_left)
+        when = f"⚠️ *已逾期 {n} 天*"
+        head = (f"🔔 *保号提醒*｜已逾期 {n} 天需保号" if ka
+                else f"🔔 *续费提醒*｜已逾期 {n} 天")
+    elif days_left == 0:
         when = "⚠️ *今天需保号*" if ka else "⚠️ *今天到期*"
         head = "🔔 *保号提醒*｜今天该保号啦" if ka else "🔔 *续费提醒*｜今天就到期啦"
     else:
@@ -284,11 +298,19 @@ def _build_telegram_text(db, sub: Subscription, user: User, days_left: int) -> s
 
     lines.append("")
     if ka:
-        lines.append("👉 记得发条短信保号，避免停机失号～" if days_left > 0
-                     else "👉 今天发一条短信就能保号，别拖到停机～")
+        if overdue:
+            lines.append("👉 已过保号日，尽快发条短信保号，避免停机失号～")
+        elif days_left == 0:
+            lines.append("👉 今天发一条短信就能保号，别拖到停机～")
+        else:
+            lines.append("👉 记得发条短信保号，避免停机失号～")
     else:
-        lines.append("👉 别忘了今天处理一下，保号 / 续费就万无一失～" if days_left <= 0
-                     else "👉 早点安排续费，省心又安心，避免到期失效～")
+        if overdue:
+            lines.append("👉 已过到期日，尽快续费或停用，避免持续计费～")
+        elif days_left == 0:
+            lines.append("👉 别忘了今天处理一下，保号 / 续费就万无一失～")
+        else:
+            lines.append("👉 早点安排续费，省心又安心，避免到期失效～")
     return "\n".join(lines)
 
 
@@ -314,10 +336,17 @@ def _cn_join(a: str, b: str) -> str:
 
 def _build_bark_text(db, sub: Subscription, user: User, days_left: int) -> tuple[str, str]:
     """构造 Bark 推送的 (标题, 正文)。保号订阅切保号文案。
+    days_left>0 提前提醒，==0 当天提醒，<0 过期后第 N 天提醒（abs 取正）。
     标题只留名称+天数；正文是一句完整的话，套餐/付款/备注/分类有才说。"""
     f = _renewal_facts(db, sub, user, days_left)
     ka = f["is_keepalive"]
-    if days_left <= 0:
+    overdue = days_left < 0
+    if overdue:
+        n = abs(days_left)
+        title = f"⚠️ {sub.name} 已逾期 {n} 天" if not ka else f"⚠️ {sub.name} 已逾期 {n} 天需保号"
+        verb = "需保号" if ka else "到期"
+        due_clause = f"已过{_cn_date(sub.next_renewal_date)}{verb} {n} 天"
+    elif days_left == 0:
         title = f"⚠️ {sub.name} 今天该保号" if ka else f"⚠️ {sub.name} 今天到期"
         due_clause = "今天就需保号" if ka else "今天就到期"
     else:
@@ -426,6 +455,9 @@ def simulate_reminder_scan(
         }
         if not sub.is_active:
             add({**base, "channel": "all", "status": "inactive", "reason": "订阅未启用，提醒扫描会跳过。"})
+            continue
+        if sub.is_paused:
+            add({**base, "channel": "all", "status": "inactive", "reason": "订阅已暂停，提醒扫描会跳过。"})
             continue
         if sub.billing_type != "recurring":
             add({**base, "channel": "all", "status": "not_recurring", "reason": "一次性买断订阅不参与提醒扫描。"})

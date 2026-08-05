@@ -43,7 +43,7 @@
         </div>
         <div class="lc-body">{{ l.message }}</div>
         <div class="lc-foot muted">
-          <span>{{ t('notify.daysBefore') }}: <b class="mono-data">{{ l.days_before }}</b></span>
+          <span>{{ t('notify.timing') }}: <b>{{ formatDaysBefore(l.days_before) }}</b></span>
         </div>
       </article>
     </div>
@@ -81,6 +81,11 @@ const latestTime = computed(() => {
 
 function fmt(s) { return s ? new Date(s).toLocaleString() : '' }
 function channelLabel(channel) { return channel === 'bark' ? 'Bark' : 'Telegram' }
+function formatDaysBefore(n) {
+  if (n < 0) return t('notify.daysAfter', { n: Math.abs(n) })
+  if (n === 0) return t('notify.daysToday')
+  return t('notify.daysBefore', { n })
+}
 function statusClass(log) { return log.status === 'sent' ? 'sent' : 'failed' }
 
 async function load() { logs.value = (await api.get('/api/notifications/logs')).data }

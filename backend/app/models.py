@@ -177,6 +177,7 @@ class Subscription(Base):
     last_renewed_at: Mapped[date | None] = mapped_column(Date, nullable=True)   # 最近付款/续费日
 
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    is_paused: Mapped[bool] = mapped_column(Boolean, default=False)  # 暂停：不计支出/不提醒/不进日历雷达，账本可见可恢复，与 is_active 正交
     auto_renew: Mapped[bool] = mapped_column(Boolean, default=True)
     show_in_calendar: Mapped[bool] = mapped_column(Boolean, default=True)   # 与日历互动
     sort: Mapped[int] = mapped_column(Integer, default=0)   # 同分类内的拖拽排序
@@ -227,3 +228,22 @@ class NotificationLog(Base):
     status: Mapped[str] = mapped_column(String(16))         # sent | failed
     message: Mapped[str | None] = mapped_column(Text, nullable=True)
     sent_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+class RenewalHistory(Base):
+    """续费历史：每次标记续费 append 一条，记录当时金额/日期快照，供详情页回看完整续费轨迹。"""
+
+    __tablename__ = "renewal_history"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    subscription_id: Mapped[int] = mapped_column(
+        ForeignKey("subscriptions.id", ondelete="CASCADE"), index=True
+    )
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    renewed_at: Mapped[date] = mapped_column(Date)            # 续费发生日（=新 last_renewed_at）
+    mode: Mapped[str] = mapped_column(String(16))             # today | due
+    prev_renewal_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    next_renewal_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    amount: Mapped[float] = mapped_column(Float)              # 续费时金额快照
+    currency: Mapped[str] = mapped_column(String(8))
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())

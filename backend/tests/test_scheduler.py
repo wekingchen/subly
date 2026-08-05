@@ -41,7 +41,7 @@ def add_subscription(db, user, **overrides):
         cycle_count=overrides.pop("cycle_count", 1),
         start_date=overrides.pop("start_date", date(2024, 1, 1)),
         next_renewal_date=overrides.pop("next_renewal_date", date(2024, 1, 8)),
-        remind_days_before="7,1",
+        remind_days_before=overrides.pop("remind_days_before", "7,1"),
         auto_renew=overrides.pop("auto_renew", False),
         **overrides,
     )
@@ -104,8 +104,11 @@ def test_run_reminder_scan_sends_subscription_icon_without_changing_click_url(mo
         engine.dispose()
 
 
-def test_parse_days_ignores_empty_and_non_numeric_values():
-    assert scheduler._parse_days("7, 1, bad, ,0,-1") == [7, 1, 0]
+def test_parse_days_keeps_negatives_and_ignores_non_numeric_values():
+    # 负数表示过期后第 N 天提醒，应保留；非数字仍丢弃。
+    assert scheduler._parse_days("7, 1, bad, ,0,-1,-7") == [7, 1, 0, -1, -7]
+    assert scheduler._parse_days("") == []
+    assert scheduler._parse_days("--,-,3.5") == []
 
 
 def test_send_one_records_success_failure_and_duplicate_skip(monkeypatch):
@@ -459,3 +462,122 @@ def test_run_reminder_scan_is_mutually_exclusive(monkeypatch):
 
     assert first.get("skipped") != "已有扫描在运行"  # 第一个正常（即使空）
     assert second_result["r"].get("skipped") == "已有扫描在运行"  # 第二个被拒
+
+
+def test_bark_text_uses_overdue_phrasing_when_days_left_negative(monkeypatch):
+    """过期后提醒：days_left<0 时文案切到'已逾期 N 天'，不再说'今天到期'。"""
+    db, engine = make_db()
+    try:
+        monkeypatch.setattr(scheduler.exchange, "convert",
+                            lambda db, amount, from_cur, to_cur: amount if from_cur == to_cur else 88.0)
+        user = add_user(db, base_currency="CNY")
+        sub = add_subscription(db, user, name="域名", amount=120.0, currency="CNY",
+                               plan=None, next_renewal_date=date(2024, 1, 9))
+
+        title, body = scheduler._build_bark_text(db, sub, user, -1)
+        assert "已逾期 1 天" in title
+        assert "已过1 月 9 日到期 1 天" in body
+
+        title7, body7 = scheduler._build_bark_text(db, sub, user, -7)
+        assert "已逾期 7 天" in title7
+
+        tg = scheduler._build_telegram_text(db, sub, user, -3)
+        assert "已逾期 3 天" in tg
+        assert "今天到期" not in tg
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_send_one_triggers_on_negative_days_before_for_overdue_sub(monkeypatch):
+    """过期订阅配 remind_days_before=-1，过期第 1 天扫描应触发并去重。"""
+    from datetime import timedelta
+    db, engine = make_db()
+    try:
+        monkeypatch.setattr(scheduler.activity, "log", lambda *args, **kwargs: None)
+        today = scheduler._local_today()
+        user = add_user(db, bark_enabled=True, bark_device_key="dk", bark_server="https://api.day.app")
+        # next_renewal_date 设为今天 - 1 天，days_left = -1
+        sub = add_subscription(db, user, name="过期订阅",
+                               next_renewal_date=today - timedelta(days=1),
+                               remind_days_before="-1")
+
+        ok, status = scheduler._send_one(db, sub, user, -1, today, "telegram", lambda: "overdue body")
+        assert (ok, status) == (True, "sent")
+        log = db.scalar(select(NotificationLog).where(NotificationLog.subscription_id == sub.id))
+        assert log.days_before == -1
+        assert log.status == "sent"
+
+        # 同日再扫，去重
+        ok2, status2 = scheduler._send_one(db, sub, user, -1, today, "telegram", lambda: "again")
+        assert (ok2, status2) == (False, "skip")
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_run_reminder_scan_does_not_count_skip_as_failed_on_rescan(monkeypatch):
+    """同日重扫：已发送的提醒被去重(skip)，不应计入 failed。"""
+    from datetime import timedelta
+    db, engine = make_db()
+    Session = sessionmaker(bind=engine)
+    try:
+        today = scheduler._local_today()
+        user = add_user(
+            db, bark_enabled=True, bark_device_key="dk", bark_server="https://api.day.app",
+        )
+        add_subscription(
+            db, user, name="过期订阅",
+            next_renewal_date=today - timedelta(days=1),
+            remind_days_before="-1",
+        )
+        db.commit()
+        db.close()
+
+        monkeypatch.setattr(scheduler.database, "SessionLocal", lambda: Session())
+        monkeypatch.setattr(scheduler, "_local_today", lambda: today)
+        monkeypatch.setattr(scheduler.activity, "log", lambda *args, **kwargs: None)
+        monkeypatch.setattr(scheduler.bark, "send_push", lambda *a, **kw: {})
+
+        first = scheduler.run_reminder_scan()
+        assert first == {"sent": 1, "failed": 0}
+        # 同日再扫：bark send_push 不应再被调用，去重命中，failed 仍为 0
+        second = scheduler.run_reminder_scan()
+        assert second == {"sent": 0, "failed": 0}
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_run_reminder_scan_skips_paused_subscriptions(monkeypatch):
+    """暂停订阅不应被提醒扫描触发，即使到期且配置了提醒天数。"""
+    from datetime import timedelta
+    db, engine = make_db()
+    Session = sessionmaker(bind=engine)
+    try:
+        today = scheduler._local_today()
+        user = add_user(
+            db, bark_enabled=True, bark_device_key="dk", bark_server="https://api.day.app",
+        )
+        # 暂停订阅：今天到期，配了 0 天提醒，但暂停应跳过
+        add_subscription(
+            db, user, name="暂停订阅",
+            next_renewal_date=today,
+            remind_days_before="0",
+            is_paused=True,
+        )
+        db.commit()
+        db.close()
+
+        monkeypatch.setattr(scheduler.database, "SessionLocal", lambda: Session())
+        monkeypatch.setattr(scheduler, "_local_today", lambda: today)
+        monkeypatch.setattr(scheduler.activity, "log", lambda *args, **kwargs: None)
+        sent_calls = []
+        monkeypatch.setattr(scheduler.bark, "send_push", lambda *a, **kw: sent_calls.append(1))
+
+        result = scheduler.run_reminder_scan()
+        assert result == {"sent": 0, "failed": 0}
+        assert sent_calls == []  # 暂停订阅未触发外发
+    finally:
+        db.close()
+        engine.dispose()

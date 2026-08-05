@@ -87,12 +87,13 @@ describe('expandRenewalsInRange', () => {
     expect(expandRenewalsInRange([baseSub()], '2026-07-01', 'bad')).toEqual([])
   })
 
-  it('filters hidden, inactive, one-time and date-less subscriptions', () => {
+  it('filters hidden, inactive, paused, one-time and date-less subscriptions', () => {
     const events = expandRenewalsInRange([
       baseSub({ id: 1, show_in_calendar: false }),
       baseSub({ id: 2, is_active: false }),
       baseSub({ id: 3, billing_type: 'one_time' }),
       baseSub({ id: 4, next_renewal_date: '' }),
+      baseSub({ id: 5, is_paused: true }),
       null
     ], '2026-07-01', '2026-07-31')
 

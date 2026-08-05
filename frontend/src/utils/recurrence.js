@@ -43,6 +43,7 @@ export function expandRenewalsInRange(subscriptions, rangeStart, rangeEnd) {
     if (!sub) continue
     if (sub.billing_type !== 'recurring') continue
     if (sub.is_active === false) continue
+    if (sub.is_paused === true) continue
     if (sub.show_in_calendar === false) continue
     const base = parseLocalDate(sub.next_renewal_date)
     if (!base) continue

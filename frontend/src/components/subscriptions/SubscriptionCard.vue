@@ -1,6 +1,6 @@
 <template>
   <div class="card sub-card signal-card"
-       :class="{ inactive: !subscription.is_active, expired: isExpired(subscription), soon: isSoon(subscription), 'drop-card': dragOver, expanded }"
+       :class="{ inactive: !subscription.is_active, paused: subscription.is_paused, expired: isExpired(subscription), soon: isSoon(subscription), 'drop-card': dragOver, expanded }"
        @click="onCardClick($event)"
        @dragover.prevent="emit('dragOver', { categoryKey, id: subscription.id, event: $event })"
        @drop.prevent="emit('drop', { categoryKey, id: subscription.id, event: $event })">
@@ -122,6 +122,7 @@ const cycleText = computed(() => {
 })
 const remarkText = computed(() => (props.subscription.remark || '').trim())
 const statusChip = computed(() => {
+  if (props.subscription.is_paused) return t('sub.pausedChip')
   const st = statusOf.value
   const ka = props.subscription.is_keepalive
   const days = Math.abs(daysLeft(props.subscription))
@@ -157,6 +158,8 @@ function onCardClick(e) {
   border-color: color-mix(in srgb, var(--primary) 40%, var(--border)); }
 .sub-card:hover .sc-ico { transform: scale(1.05) rotate(-2deg); }
 .sub-card.inactive { opacity: .55; }
+.sub-card.paused { opacity: .72; border-style: dashed; }
+.sub-card.paused .status-strip { background: var(--text-soft); opacity: .5; }
 .sub-card.expired { border-color: var(--danger); box-shadow: 0 0 0 1px var(--danger), var(--shadow); }
 .sub-card.soon { border-color: var(--warning); box-shadow: 0 0 0 1px var(--warning), var(--shadow); }
 .sub-card.drop-card { border-color: var(--primary); box-shadow: 0 0 0 2px var(--primary-soft); }

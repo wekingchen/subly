@@ -23,7 +23,11 @@ def info(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     your_active = db.scalar(
         select(func.count())
         .select_from(Subscription)
-        .where(Subscription.user_id == user.id, Subscription.is_active.is_(True))
+        .where(
+            Subscription.user_id == user.id,
+            Subscription.is_active.is_(True),
+            Subscription.is_paused.is_(False),
+        )
     )
     data = {
         "version": APP_VERSION,

@@ -34,7 +34,9 @@ def dashboard(user: User = Depends(get_current_user), db: Session = Depends(get_
     today = date.today()
     subs = db.scalars(
         select(Subscription).where(
-            Subscription.user_id == user.id, Subscription.is_active.is_(True)
+            Subscription.user_id == user.id,
+            Subscription.is_active.is_(True),
+            Subscription.is_paused.is_(False),
         )
     ).all()
 

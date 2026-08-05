@@ -11,6 +11,7 @@ from app.models import (
     Currency,
     NotificationLog,
     PaymentMethod,
+    RenewalHistory,
     Subscription,
     User,
 )
@@ -113,6 +114,7 @@ def delete_user(
 
     # 清理该用户的全部数据（保持外键完整）
     db.execute(delete(NotificationLog).where(NotificationLog.user_id == user_id))
+    db.execute(delete(RenewalHistory).where(RenewalHistory.user_id == user_id))
     db.execute(delete(Subscription).where(Subscription.user_id == user_id))
     db.execute(delete(Bundle).where(Bundle.user_id == user_id))
     db.execute(delete(Category).where(Category.user_id == user_id))

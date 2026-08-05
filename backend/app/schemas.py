@@ -260,6 +260,7 @@ class SubscriptionIn(BaseModel):
     next_renewal_date: date | None = None
     end_date: date | None = None
     is_active: bool = True
+    is_paused: bool = False
     auto_renew: bool = True
     show_in_calendar: bool = True
     family_members: list[str] | None = None
@@ -288,6 +289,7 @@ class SubscriptionUpdate(BaseModel):
     next_renewal_date: date | None = None
     end_date: date | None = None
     is_active: bool | None = None
+    is_paused: bool | None = None
     auto_renew: bool | None = None
     show_in_calendar: bool | None = None
     family_members: list[str] | None = None
@@ -331,6 +333,7 @@ class SubscriptionOut(BaseModel):
     end_date: date | None
     last_renewed_at: date | None = None
     is_active: bool
+    is_paused: bool
     auto_renew: bool
     show_in_calendar: bool
     sort: int = 0

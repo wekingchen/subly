@@ -20,6 +20,7 @@ _COLUMNS = [
     ("subscriptions", "ipv4", "VARCHAR(64)"),
     ("subscriptions", "ipv6", "VARCHAR(64)"),
     ("subscriptions", "is_keepalive", "BOOLEAN NOT NULL DEFAULT 0"),
+    ("subscriptions", "is_paused", "BOOLEAN NOT NULL DEFAULT 0"),
     ("users", "category_order", "JSON"),
     ("users", "email_verified", "BOOLEAN NOT NULL DEFAULT 1"),
     ("users", "is_approved", "BOOLEAN NOT NULL DEFAULT 1"),

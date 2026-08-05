@@ -77,6 +77,7 @@ def run_data_diagnostics(db: Session, user_id: int | None = None) -> dict:
             select(func.count()).select_from(Subscription).where(
                 Subscription.user_id == uid,
                 Subscription.is_active.is_(True),
+                Subscription.is_paused.is_(False),
             )
         ) or 0
         for uid in user_ids
@@ -256,7 +257,7 @@ def run_data_diagnostics(db: Session, user_id: int | None = None) -> dict:
                     suggestion="编辑订阅重新选择本人套餐包，或移除套餐包归属。建议同时排查写入校验是否生效。",
                     **common,
                 )
-        if sub.is_active and sub.billing_type == "recurring" and sub.next_renewal_date is None:
+        if sub.is_active and not sub.is_paused and sub.billing_type == "recurring" and sub.next_renewal_date is None:
             _issue(
                 issues,
                 severity="error",
@@ -345,7 +346,7 @@ def run_data_diagnostics(db: Session, user_id: int | None = None) -> dict:
     for item in issues:
         counts[item["severity"]] = counts.get(item["severity"], 0) + 1
 
-    active_recurring = sum(1 for s in subs if s.is_active and s.billing_type == "recurring")
+    active_recurring = sum(1 for s in subs if s.is_active and not s.is_paused and s.billing_type == "recurring")
     return {
         "summary": {
             "errors": counts.get("error", 0),

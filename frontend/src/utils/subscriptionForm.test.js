@@ -38,6 +38,7 @@ describe('createBlankSubscriptionForm', () => {
       remind_days_before: '7,1',
       auto_renew: true,
       is_active: true,
+      is_paused: false,
       show_in_calendar: true,
       family_members: []
     })

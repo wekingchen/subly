@@ -5,14 +5,14 @@ from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app import activity, icon_library
 from app.billing import add_cycle, compute_next_renewal
 from app.database import get_db
 from app.deps import get_current_user
-from app.models import Subscription, User
+from app.models import RenewalHistory, Subscription, User
 from app.schemas import SubscriptionIn, SubscriptionOut, SubscriptionUpdate, sanitize_url
 from app.security import verify_password
 from app.services import exchange
@@ -48,7 +48,14 @@ def list_subs(
 ):
     stmt = select(Subscription).where(Subscription.user_id == user.id)
     if active is not None:
-        stmt = stmt.where(Subscription.is_active.is_(active))
+        # active=true 表示「生效中」：is_active 且未暂停；active=false 表示已停用。
+        # 账本页不传 active，因此暂停订阅仍留在账本可见。
+        if active:
+            stmt = stmt.where(
+                Subscription.is_active.is_(True), Subscription.is_paused.is_(False)
+            )
+        else:
+            stmt = stmt.where(Subscription.is_active.is_(False))
     if billing_type:
         stmt = stmt.where(Subscription.billing_type == billing_type)
     stmt = stmt.order_by(
@@ -218,6 +225,7 @@ def renew_sub(
     if payload and payload.reset_start_date is True:
         mode = "today"  # 兼容旧前端
 
+    prev_due = sub.next_renewal_date
     if mode == "due":
         base = sub.next_renewal_date or today
         sub.next_renewal_date = add_cycle(base, sub.cycle, sub.cycle_count)
@@ -226,6 +234,17 @@ def renew_sub(
         sub.next_renewal_date = add_cycle(today, sub.cycle, sub.cycle_count)
 
     sub.last_renewed_at = today
+    # 续费历史与订阅更新放同一事务：记录当时的金额/日期快照，避免"续费成功但历史丢失"。
+    db.add(RenewalHistory(
+        subscription_id=sub.id,
+        user_id=user.id,
+        renewed_at=today,
+        mode=mode,
+        prev_renewal_date=prev_due,
+        next_renewal_date=sub.next_renewal_date,
+        amount=sub.amount,
+        currency=sub.currency,
+    ))
     db.commit()
     db.refresh(sub)
     if sub.is_keepalive:
@@ -234,6 +253,34 @@ def renew_sub(
         detail = f"续费「{sub.name}」（{mode}），下次到期 {sub.next_renewal_date}"
     activity.log("subscription.renew", detail, user=user)
     return _to_out(db, sub, user.base_currency)
+
+
+@router.get("/{sub_id}/renewals")
+def list_renewals(
+    sub_id: int,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """返回该订阅的续费历史，按续费日倒序。"""
+    sub = db.get(Subscription, sub_id)
+    if not sub or sub.user_id != user.id:
+        raise HTTPException(404, "订阅不存在")
+    rows = db.scalars(
+        select(RenewalHistory)
+        .where(RenewalHistory.subscription_id == sub_id)
+        .order_by(RenewalHistory.renewed_at.desc(), RenewalHistory.id.desc())
+    ).all()
+    return [
+        {
+            "renewed_at": r.renewed_at.isoformat() if r.renewed_at else None,
+            "mode": r.mode,
+            "prev_renewal_date": r.prev_renewal_date.isoformat() if r.prev_renewal_date else None,
+            "next_renewal_date": r.next_renewal_date.isoformat() if r.next_renewal_date else None,
+            "amount": r.amount,
+            "currency": r.currency,
+        }
+        for r in rows
+    ]
 
 
 class ReorderIn(BaseModel):
@@ -274,6 +321,8 @@ def delete_sub(
     if not sub or sub.user_id != user.id:
         raise HTTPException(404, "订阅不存在")
     name = sub.name
+    # SQLite 默认未开 PRAGMA foreign_keys，手动清理续费历史与通知日志，避免孤儿记录。
+    db.execute(delete(RenewalHistory).where(RenewalHistory.subscription_id == sub_id))
     db.delete(sub)
     db.commit()
     activity.log("subscription.delete", f"删除订阅「{name}」", user=user, level="warn")

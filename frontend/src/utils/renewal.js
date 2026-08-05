@@ -39,6 +39,7 @@ export function radarBucket(item, options = {}) {
   const field = options.field || 'next_renewal_date'
   if (!item || (item.billing_type && !isRecurring(item)) || !hasRenewalDate(item, field)) return null
   if (!options.includeHidden && item.show_in_calendar === false) return null
+  if (item.is_paused === true) return null  // 暂停订阅不进雷达
   const d = daysLeft(item, { ...options, field })
   const horizon = options.horizon ?? 30
   const firstWindow = options.firstWindow ?? 3

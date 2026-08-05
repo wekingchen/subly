@@ -4,12 +4,12 @@ from types import SimpleNamespace
 import pytest
 from fastapi import HTTPException
 from pydantic import ValidationError
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
 from app.database import Base
-from app.models import Bundle, Category, PaymentMethod, Subscription, User
-from app.routers import subscriptions
+from app.models import Bundle, Category, PaymentMethod, RenewalHistory, Subscription, User
+from app.routers import reports, subscriptions
 from app.schemas import SubscriptionIn, SubscriptionUpdate
 from app.security import hash_password
 
@@ -128,6 +128,152 @@ def test_renew_due_mode_advances_from_existing_due_date():
 
         assert out.next_renewal_date == date(2024, 2, 29)
         assert db.get(Subscription, sub.id).next_renewal_date == date(2024, 2, 29)
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_renew_appends_renewal_history_with_amount_and_date_snapshot():
+    """续费应在同事务写一条历史，记录当时的金额、币种与前后到期日快照。"""
+    db, engine = make_db()
+    try:
+        user = add_user(db)
+        sub = Subscription(
+            user_id=user.id,
+            name="循环订阅",
+            amount=12.5,
+            currency="USD",
+            billing_type="recurring",
+            cycle="month",
+            cycle_count=1,
+            start_date=date(2024, 1, 1),
+            next_renewal_date=date(2024, 1, 31),
+        )
+        db.add(sub)
+        db.commit()
+
+        subscriptions.renew_sub(sub.id, subscriptions.RenewIn(mode="due"), user, db)
+
+        rows = db.scalars(
+            select(RenewalHistory).where(RenewalHistory.subscription_id == sub.id)
+        ).all()
+        assert len(rows) == 1
+        r = rows[0]
+        assert r.mode == "due"
+        assert r.prev_renewal_date == date(2024, 1, 31)
+        assert r.next_renewal_date == date(2024, 2, 29)
+        assert r.amount == 12.5
+        assert r.currency == "USD"
+        assert r.renewed_at == date.today()
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_consecutive_renewals_accumulate_history_rows():
+    """连续续费应累加历史行，每条记录各自的前后到期日。"""
+    db, engine = make_db()
+    try:
+        user = add_user(db)
+        sub = Subscription(
+            user_id=user.id,
+            name="循环订阅",
+            amount=10,
+            currency="CNY",
+            billing_type="recurring",
+            cycle="month",
+            cycle_count=1,
+            start_date=date(2024, 1, 1),
+            next_renewal_date=date(2024, 1, 31),
+        )
+        db.add(sub)
+        db.commit()
+
+        subscriptions.renew_sub(sub.id, subscriptions.RenewIn(mode="due"), user, db)
+        subscriptions.renew_sub(sub.id, subscriptions.RenewIn(mode="due"), user, db)
+
+        rows = db.scalars(
+            select(RenewalHistory)
+            .where(RenewalHistory.subscription_id == sub.id)
+            .order_by(RenewalHistory.id)
+        ).all()
+        assert len(rows) == 2
+        assert rows[0].prev_renewal_date == date(2024, 1, 31)
+        assert rows[0].next_renewal_date == date(2024, 2, 29)
+        assert rows[1].prev_renewal_date == date(2024, 2, 29)
+        assert rows[1].next_renewal_date == date(2024, 3, 29)
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_list_renewals_returns_history_descending():
+    """GET /renewals 返回该订阅历史，按续费日倒序；仅本人可见。"""
+    db, engine = make_db()
+    try:
+        user = add_user(db)
+        other = add_user(db, username="bob")
+        sub = Subscription(
+            user_id=user.id,
+            name="循环订阅",
+            amount=10,
+            currency="CNY",
+            billing_type="recurring",
+            cycle="month",
+            cycle_count=1,
+            start_date=date(2024, 1, 1),
+            next_renewal_date=date(2024, 1, 31),
+        )
+        db.add(sub)
+        db.commit()
+        subscriptions.renew_sub(sub.id, subscriptions.RenewIn(mode="due"), user, db)
+        subscriptions.renew_sub(sub.id, subscriptions.RenewIn(mode="due"), user, db)
+
+        rows = subscriptions.list_renewals(sub.id, user, db)
+        assert len(rows) == 2
+        # 倒序：最近一次在前
+        assert rows[0]["next_renewal_date"] == "2024-03-29"
+        assert rows[1]["next_renewal_date"] == "2024-02-29"
+        assert rows[0]["amount"] == 10
+
+        # 他人不可见
+        with pytest.raises(HTTPException) as exc:
+            subscriptions.list_renewals(sub.id, other, db)
+        assert exc.value.status_code == 404
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_delete_subscription_clears_renewal_history():
+    """删除订阅应同步清理其续费历史，避免孤儿记录。"""
+    db, engine = make_db()
+    try:
+        user = add_user(db)
+        sub = Subscription(
+            user_id=user.id,
+            name="循环订阅",
+            amount=10,
+            currency="CNY",
+            billing_type="recurring",
+            cycle="month",
+            cycle_count=1,
+            start_date=date(2024, 1, 1),
+            next_renewal_date=date(2024, 1, 31),
+        )
+        db.add(sub)
+        db.commit()
+        subscriptions.renew_sub(sub.id, subscriptions.RenewIn(mode="due"), user, db)
+        assert db.scalars(select(RenewalHistory).where(RenewalHistory.subscription_id == sub.id)).all()
+
+        subscriptions.delete_sub(
+            sub.id, subscriptions.DeleteIn(password="correct-pass"), user, db
+        )
+
+        assert (
+            db.scalars(select(RenewalHistory).where(RenewalHistory.subscription_id == sub.id)).all()
+            == []
+        )
     finally:
         db.close()
         engine.dispose()
@@ -398,6 +544,109 @@ def test_update_sub_rejects_stale_cross_user_ref_even_when_ref_unchanged():
         with pytest.raises(HTTPException) as exc:
             subscriptions.update_sub(sub.id, SubscriptionUpdate(remark="只改备注"), user, db)
         assert exc.value.status_code == 400
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_list_subs_active_true_excludes_paused_and_inactive():
+    """active=true 表示「生效中」：排除暂停与停用；不传 active 时全部可见（账本）。"""
+    db, engine = make_db()
+    try:
+        user = add_user(db)
+        active = Subscription(user_id=user.id, name="生效", amount=1, currency="CNY",
+                              billing_type="recurring", cycle="month", cycle_count=1,
+                              start_date=date(2024, 1, 1), next_renewal_date=date(2024, 2, 1))
+        paused = Subscription(user_id=user.id, name="暂停", amount=1, currency="CNY",
+                              billing_type="recurring", cycle="month", cycle_count=1,
+                              start_date=date(2024, 1, 1), next_renewal_date=date(2024, 2, 1),
+                              is_paused=True)
+        inactive = Subscription(user_id=user.id, name="停用", amount=1, currency="CNY",
+                                billing_type="recurring", cycle="month", cycle_count=1,
+                                start_date=date(2024, 1, 1), next_renewal_date=date(2024, 2, 1),
+                                is_active=False)
+        db.add_all([active, paused, inactive])
+        db.commit()
+
+        active_names = [s.name for s in subscriptions.list_subs(active=True, user=user, db=db)]
+        assert active_names == ["生效"]  # 暂停与停用都排除
+
+        all_names = [s.name for s in subscriptions.list_subs(user=user, db=db)]
+        assert set(all_names) == {"生效", "暂停", "停用"}  # 账本不传 active，全部可见
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_update_sub_can_pause_and_resume():
+    """暂停/恢复通过 update 切 is_paused，不动 is_active/next_renewal_date。"""
+    db, engine = make_db()
+    try:
+        user = add_user(db)
+        sub = Subscription(user_id=user.id, name="暂停测试", amount=1, currency="CNY",
+                           billing_type="recurring", cycle="month", cycle_count=1,
+                           start_date=date(2024, 1, 1), next_renewal_date=date(2024, 2, 1))
+        db.add(sub)
+        db.commit()
+
+        subscriptions.update_sub(sub.id, SubscriptionUpdate(is_paused=True), user, db)
+        assert db.get(Subscription, sub.id).is_paused is True
+        assert db.get(Subscription, sub.id).is_active is True  # is_active 不受影响
+        assert db.get(Subscription, sub.id).next_renewal_date == date(2024, 2, 1)
+
+        subscriptions.update_sub(sub.id, SubscriptionUpdate(is_paused=False), user, db)
+        assert db.get(Subscription, sub.id).is_paused is False
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_reports_exclude_paused_subscriptions():
+    """暂停订阅应从支出洞察、排行、即将续费、已过期、一次性买断、分类明细中排除。"""
+    db, engine = make_db()
+    try:
+        user = add_user(db)
+        # 生效周期订阅
+        db.add(Subscription(user_id=user.id, name="生效周期", amount=10, currency="CNY",
+                            billing_type="recurring", cycle="month", cycle_count=1,
+                            start_date=date(2024, 1, 1), next_renewal_date=date(2024, 2, 1)))
+        # 暂停周期订阅（即将到期，但暂停不应出现在 upcoming/expired/insights）
+        db.add(Subscription(user_id=user.id, name="暂停周期", amount=20, currency="CNY",
+                            billing_type="recurring", cycle="month", cycle_count=1,
+                            start_date=date(2024, 1, 1), next_renewal_date=date(2024, 1, 5),
+                            is_paused=True))
+        # 暂停一次性买断
+        db.add(Subscription(user_id=user.id, name="暂停买断", amount=100, currency="CNY",
+                            billing_type="one_time", start_date=date(2024, 1, 1),
+                            is_paused=True))
+        # 停用订阅（已过期，验证 expired 不泄漏）
+        db.add(Subscription(user_id=user.id, name="停用过期", amount=5, currency="CNY",
+                            billing_type="recurring", cycle="month", cycle_count=1,
+                            start_date=date(2024, 1, 1), next_renewal_date=date(2023, 12, 1),
+                            is_active=False))
+        db.commit()
+
+        ins = reports.insights(user=user, db=db)
+        assert "暂停周期" not in str(ins["breakdown"])
+
+        ranking_names = [s.name for s in reports.ranking(user=user, db=db)]
+        assert "暂停周期" not in ranking_names
+        assert "生效周期" in ranking_names
+
+        upcoming_names = [s.name for s in reports.upcoming(days=60, user=user, db=db)]
+        assert "暂停周期" not in upcoming_names
+
+        expired_names = [s.name for s in reports.expired(user=user, db=db)]
+        assert "暂停周期" not in expired_names  # 暂停排除
+        assert "停用过期" not in expired_names   # 顺带修的 is_active 泄漏
+
+        one_time_names = [s.name for s in reports.one_time(user=user, db=db)]
+        assert "暂停买断" not in one_time_names  # 暂停买断排除
+
+        detail = reports.category_detail(user=user, db=db)
+        all_detail_names = [it["name"] for it in detail.get("items", [])]
+        assert "暂停周期" not in all_detail_names
+        assert "暂停买断" not in all_detail_names
     finally:
         db.close()
         engine.dispose()

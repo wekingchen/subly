@@ -8,7 +8,7 @@ export function createBlankSubscriptionForm({ now = new Date() } = {}) {
     is_keepalive: false,
     cycle: 'month', cycle_count: 1, start_date: toISODate(now),
     next_renewal_date: '', end_date: null, url: '', notes: '', remark: '', ipv4: '', ipv6: '',
-    remind_days_before: '7,1', auto_renew: true, is_active: true,
+    remind_days_before: '7,1', auto_renew: true, is_active: true, is_paused: false,
     show_in_calendar: true, family_members: []
   }
 }
