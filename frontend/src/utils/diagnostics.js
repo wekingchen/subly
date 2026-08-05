@@ -6,6 +6,7 @@ const STATUS_ORDER = { would_send: 0, already_sent: 1, channel_not_ready: 2, not
 const REMINDER_CODES = new Set([
   'telegram_config_incomplete',
   'bark_config_incomplete',
+  'webhook_config_incomplete',
   'subscription_missing_next_renewal',
   'invalid_remind_days',
   'keepalive_scope_invalid',
@@ -59,7 +60,9 @@ export function filterIssues(issues = [], filter = 'all') {
 export function channelLabel(channel) {
   if (channel === 'telegram') return 'Telegram'
   if (channel === 'bark') return 'Bark'
-  return '全部'
+  if (channel === 'webhook') return 'Webhook'
+  if (channel === 'all') return '全部'
+  return channel || '未知'
 }
 
 export function simulationStatusLabel(status) {
@@ -102,6 +105,7 @@ export function simulationSummary(items = []) {
     else out.skipped += 1
     if (item.channel === 'telegram') out.telegram += 1
     if (item.channel === 'bark') out.bark += 1
+    if (item.channel === 'webhook') out.webhook += 1
     return out
-  }, { total: 0, would_send: 0, skipped: 0, telegram: 0, bark: 0 })
+  }, { total: 0, would_send: 0, skipped: 0, telegram: 0, bark: 0, webhook: 0 })
 }

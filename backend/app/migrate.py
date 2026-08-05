@@ -22,6 +22,7 @@ _COLUMNS = [
     ("subscriptions", "is_keepalive", "BOOLEAN NOT NULL DEFAULT 0"),
     ("subscriptions", "is_paused", "BOOLEAN NOT NULL DEFAULT 0"),
     ("users", "category_order", "JSON"),
+    ("users", "monthly_budget", "FLOAT"),
     ("users", "email_verified", "BOOLEAN NOT NULL DEFAULT 1"),
     ("users", "is_approved", "BOOLEAN NOT NULL DEFAULT 1"),
     ("users", "email_code", "VARCHAR(16)"),
@@ -36,6 +37,9 @@ _COLUMNS = [
     ("users", "bark_sound", "VARCHAR(64)"),
     ("users", "bark_group", "VARCHAR(64)"),
     ("users", "bark_ttl", "INTEGER"),
+    ("users", "webhook_enabled", "BOOLEAN NOT NULL DEFAULT 0"),
+    ("users", "webhook_url", "VARCHAR(512)"),
+    ("users", "webhook_secret", "VARCHAR(255)"),
     ("icon_library_services", "category_keys", "JSON"),
 ]
 
@@ -122,7 +126,7 @@ def run_migrations(engine: Engine) -> None:
             print(f"[migrate] 跳过 subscriptions.is_keepalive 范围清理：{e}")
 
         # 清理 users 表中历史的危险出网配置：升级前写入的 telegram_api_base /
-        # telegram_proxy / bark_server 可能含 query / userinfo / 元数据地址等，
+        # telegram_proxy / bark_server / webhook_url 可能含 query / userinfo / 元数据地址等，
         # 现在校验已收紧，旧值不合法则置空并打告警，避免继续生效。
         try:
             if _table_exists(conn, "users"):
@@ -134,7 +138,7 @@ def run_migrations(engine: Engine) -> None:
 def _scrub_outbound_urls(conn) -> None:
     from app.schemas import validate_outbound_url
 
-    fields = ("telegram_api_base", "telegram_proxy", "bark_server")
+    fields = ("telegram_api_base", "telegram_proxy", "bark_server", "webhook_url")
     rows = conn.execute(
         text(f"SELECT id, {', '.join(fields)} FROM users")
     ).all()

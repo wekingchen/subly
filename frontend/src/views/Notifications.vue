@@ -4,7 +4,7 @@
       <div class="hero-copy">
         <div class="hero-kicker"><span class="signal-dot"></span> 发报记录</div>
         <h1>{{ t('notify.title') }}</h1>
-        <p class="muted">追踪 Telegram 与 Bark 的提醒发送结果，必要时立即触发一次续费扫描。</p>
+        <p class="muted">追踪 Telegram、Bark 与 Webhook 的提醒发送结果，必要时立即触发一次续费扫描。</p>
       </div>
       <div class="hero-actions">
         <button v-if="auth.user?.is_admin" class="btn" @click="runScan">{{ t('notify.runScan') }}</button>
@@ -80,7 +80,9 @@ const latestTime = computed(() => {
 })
 
 function fmt(s) { return s ? new Date(s).toLocaleString() : '' }
-function channelLabel(channel) { return channel === 'bark' ? 'Bark' : 'Telegram' }
+function channelLabel(channel) {
+  return { telegram: 'Telegram', bark: 'Bark', webhook: 'Webhook' }[channel] || channel
+}
 function formatDaysBefore(n) {
   if (n < 0) return t('notify.daysAfter', { n: Math.abs(n) })
   if (n === 0) return t('notify.daysToday')

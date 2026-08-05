@@ -38,6 +38,7 @@ class User(Base):
     locale: Mapped[str] = mapped_column(String(8), default="zh")        # 中文单语言，历史保留字段
     theme: Mapped[str] = mapped_column(String(32), default="light")
     base_currency: Mapped[str] = mapped_column(String(8), default="CNY")
+    monthly_budget: Mapped[float | None] = mapped_column(Float, nullable=True)   # 月度预算（基准货币），用于超支预警
     # 订阅管理页的分类显示顺序（分类 id 列表，按用户拖拽保存）
     category_order: Mapped[list | None] = mapped_column(JSON, nullable=True)
 
@@ -56,6 +57,11 @@ class User(Base):
     bark_sound: Mapped[str | None] = mapped_column(String(64), nullable=True)     # 自定义提示音，留空用默认
     bark_group: Mapped[str | None] = mapped_column(String(64), nullable=True)     # 推送分组，留空用 Subly
     bark_ttl: Mapped[int | None] = mapped_column(Integer, nullable=True)          # TTL（秒），留空用 Bark 默认
+
+    # Webhook 通知设置（向用户自建系统发送签名 JSON）
+    webhook_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    webhook_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    webhook_secret: Mapped[str | None] = mapped_column(String(255), nullable=True)  # HMAC-SHA256 签名密钥
 
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 

@@ -53,14 +53,26 @@ def test_simulate_reminder_scan_does_not_send_or_write_logs(monkeypatch):
         monkeypatch.setattr(scheduler.exchange, "convert", lambda db, amount, from_cur, to_cur: amount)
         monkeypatch.setattr(scheduler.telegram, "send_message", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("should not send")))
         monkeypatch.setattr(scheduler.bark, "send_push", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("should not send")))
-        user = add_user(db, telegram_enabled=True, telegram_bot_token="token", telegram_chat_id="chat", bark_enabled=True, bark_device_key="key")
+        monkeypatch.setattr(scheduler.webhook, "send_notification", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("should not send")))
+        user = add_user(
+            db,
+            telegram_enabled=True,
+            telegram_bot_token="token",
+            telegram_chat_id="chat",
+            bark_enabled=True,
+            bark_device_key="key",
+            webhook_enabled=True,
+            webhook_url="https://hooks.example.com/subly",
+            webhook_secret="test-signing-secret",
+        )
         add_subscription(db, user, name="到期服务", next_renewal_date=date(2024, 1, 8))
         db.commit()
 
         out = scheduler.simulate_reminder_scan(db, date(2024, 1, 1), include_skipped=False)
 
-        assert out["summary"]["would_send"] == 2
-        assert {item["channel"] for item in out["items"]} == {"telegram", "bark"}
+        assert out["summary"]["would_send"] == 3
+        assert out["summary"]["webhook"] == 1
+        assert {item["channel"] for item in out["items"]} == {"telegram", "bark", "webhook"}
         assert db.scalars(select(NotificationLog)).all() == []
     finally:
         db.close()
@@ -81,8 +93,9 @@ def test_simulate_reminder_scan_reports_not_ready_and_already_sent(monkeypatch):
 
         assert ("telegram", "already_sent") in statuses
         assert ("bark", "channel_not_ready") in statuses
+        assert ("webhook", "channel_not_ready") in statuses
         assert out["summary"]["already_sent"] == 1
-        assert out["summary"]["channel_not_ready"] == 1
+        assert out["summary"]["channel_not_ready"] == 2
     finally:
         db.close()
         engine.dispose()
@@ -100,6 +113,38 @@ def test_simulate_reminder_scan_keeps_keepalive_preview(monkeypatch):
 
         assert out["items"][0]["status"] == "would_send"
         assert "需保号" in out["items"][0]["preview"]
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_simulate_reminder_scan_builds_webhook_json_preview(monkeypatch):
+    db, engine = make_db()
+    try:
+        monkeypatch.setattr(scheduler.exchange, "convert", lambda db, amount, from_cur, to_cur: amount)
+        user = add_user(
+            db,
+            webhook_enabled=True,
+            webhook_url="https://hooks.example.com/subly",
+            webhook_secret="test-signing-secret",
+        )
+        sub = add_subscription(db, user, name="Webhook 服务", next_renewal_date=date(2024, 1, 8))
+        db.commit()
+
+        out = scheduler.simulate_reminder_scan(
+            db,
+            date(2024, 1, 1),
+            channel="webhook",
+            include_skipped=False,
+        )
+
+        assert out["summary"]["would_send"] == 1
+        assert out["summary"]["webhook"] == 1
+        item = out["items"][0]
+        assert item["channel"] == "webhook"
+        assert '"event": "subscription.reminder"' in item["preview"]
+        assert f'"subscription_id": {sub.id}' in item["preview"]
+        assert "test-signing-secret" not in item["preview"]
     finally:
         db.close()
         engine.dispose()

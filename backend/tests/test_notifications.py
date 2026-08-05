@@ -73,6 +73,79 @@ def test_bark_test_omits_url_when_app_public_url_blank(monkeypatch):
         engine.dispose()
 
 
+def test_webhook_test_uses_saved_configuration_and_safe_test_event(monkeypatch):
+    db, engine = make_db()
+    try:
+        user = add_user(db)
+        user.webhook_url = "https://hooks.example.com/subly"
+        user.webhook_secret = "test-signing-secret"
+        db.commit()
+        captured = {}
+        monkeypatch.setattr(
+            notifications.webhook,
+            "send_notification",
+            lambda url, secret, payload: captured.update(
+                {"url": url, "secret": secret, "payload": payload}
+            ) or payload,
+        )
+
+        assert notifications.webhook_test(user) == {"ok": True}
+        assert captured["url"] == "https://hooks.example.com/subly"
+        assert captured["secret"] == "test-signing-secret"
+        assert captured["payload"]["event"] == "webhook.test"
+        assert "test-signing-secret" not in str(captured["payload"])
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_webhook_test_requires_saved_url_and_secret():
+    db, engine = make_db()
+    try:
+        user = add_user(db)
+        with pytest.raises(Exception) as missing_url:
+            notifications.webhook_test(user)
+        assert missing_url.value.status_code == 400
+
+        user.webhook_url = "https://hooks.example.com/subly"
+        with pytest.raises(Exception) as missing_secret:
+            notifications.webhook_test(user)
+        assert missing_secret.value.status_code == 400
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_webhook_test_failure_does_not_leak_secret_or_url(monkeypatch):
+    db, engine = make_db()
+    try:
+        user = add_user(db)
+        user.webhook_url = "https://hooks.example.com/sensitive-path"
+        user.webhook_secret = "test-signing-secret"
+        db.commit()
+        logs = []
+        monkeypatch.setattr(
+            notifications.activity,
+            "log",
+            lambda *args, **kwargs: logs.append(args[1] if len(args) > 1 else ""),
+        )
+
+        def fail(*args, **kwargs):
+            raise RuntimeError("https://hooks.example.com/sensitive-path test-signing-secret")
+
+        monkeypatch.setattr(notifications.webhook, "send_notification", fail)
+
+        with pytest.raises(Exception) as exc:
+            notifications.webhook_test(user)
+        assert exc.value.status_code == 502
+        rendered = f"{exc.value.detail} {logs}"
+        assert "test-signing-secret" not in rendered
+        assert "sensitive-path" not in rendered
+    finally:
+        db.close()
+        engine.dispose()
+
+
 def _user(is_admin=False):
     return models.User(
         username="admin" if is_admin else "plain",

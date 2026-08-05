@@ -1,6 +1,8 @@
-"""定时任务：每日扫描即将到期的订阅，按用户开启的通道（Telegram / Bark）发送提醒。"""
+"""定时任务：每日扫描即将到期的订阅，按用户开启的通道发送提醒。"""
+import json
 import logging
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timezone
 
 try:
@@ -16,7 +18,7 @@ from sqlalchemy.orm import Session
 from app import activity, database
 from app.config import settings
 from app.models import Category, NotificationLog, PaymentMethod, Subscription, User
-from app.services import bark, exchange, telegram
+from app.services import bark, exchange, telegram, webhook
 
 _scheduler: BackgroundScheduler | None = None
 logger = logging.getLogger(__name__)
@@ -96,54 +98,77 @@ def _already_sent(db, sub_id: int, days_before: int, channel: str, on_day: date)
     return any(_as_local_date(r.sent_at) == on_day for r in rows)
 
 
-def _send_one(
-    db, sub: Subscription, user: User, n: int, today: date, channel: str, send_fn, seen: set | None = None
-) -> tuple[bool, str]:
-    """发送单条提醒并记录日志。send_fn() 内部自行抛异常表示失败。返回 (是否发送, 状态)。
-
-    seen 为本次扫描内已处理的 (订阅, 天数, 通道) 集合：生产 SessionLocal 为
-    autoflush=False，未提交的 log 不可见，靠 DB 查询无法在同一次扫描内去重，故用
-    内存集合兜底（不依赖 db.flush，避免外发期间长持 SQLite 写锁）。
-    """
-    key = (sub.id, n, channel)
+def _reserve_send(
+    db, sub_id: int, n: int, today: date, channel: str, seen: set | None = None
+) -> bool:
+    """在外发前完成同日去重，并在本次扫描内预占该通道。"""
+    key = (sub_id, n, channel)
     if seen is not None and key in seen:
-        return False, "skip"
-    if _already_sent(db, sub.id, n, channel, today):
+        return False
+    if _already_sent(db, sub_id, n, channel, today):
         if seen is not None:
             seen.add(key)
-        return False, "skip"
+        return False
+    if seen is not None:
+        seen.add(key)
+    return True
+
+
+def _execute_send(send_fn) -> tuple[bool, str]:
+    """仅执行外部调用，不接触 SQLAlchemy Session，便于安全并发。"""
+    try:
+        message = send_fn()
+        return True, message if isinstance(message, str) else str(message)
+    except Exception as e:  # noqa: BLE001
+        return False, exchange.safe_error_message(e)
+
+
+def _record_send_result(
+    db,
+    sub: Subscription,
+    user: User,
+    n: int,
+    channel: str,
+    ok: bool,
+    message: str,
+) -> tuple[bool, str]:
+    """在主线程写通知日志与活动日志，避免跨线程共享 Session。"""
+    status = "sent" if ok else "failed"
     log = NotificationLog(
         subscription_id=sub.id,
         user_id=user.id,
         days_before=n,
         channel=channel,
-        status="sent",
+        status=status,
+        message=message,
+        sent_at=utcnow(),
     )
-    try:
-        message = send_fn()
-        log.message = message
-        ok = True
-        when_hint = f"过期后第 {abs(n)} 天" if n < 0 else (f"当天" if n == 0 else f"提前 {n} 天")
+    if ok:
+        when_hint = f"过期后第 {abs(n)} 天" if n < 0 else ("当天" if n == 0 else f"提前 {n} 天")
         activity.log(
             f"{channel}.reminder",
             f"已提醒「{sub.name}」（{when_hint}，{channel}）",
             user=user,
         )
-    except Exception as e:  # noqa: BLE001
-        log.status = "failed"
-        log.message = exchange.safe_error_message(e)
-        ok = False
+    else:
         activity.log(
             f"{channel}.reminder",
-            f"提醒「{sub.name}」发送失败（{channel}）：{log.message}",
+            f"提醒「{sub.name}」发送失败（{channel}）：{message}",
             user=user,
             level="error",
         )
-    log.sent_at = utcnow()
     db.add(log)
-    if seen is not None:
-        seen.add(key)
-    return ok, log.status
+    return ok, status
+
+
+def _send_one(
+    db, sub: Subscription, user: User, n: int, today: date, channel: str, send_fn, seen: set | None = None
+) -> tuple[bool, str]:
+    """同步发送单通道并记录日志；生产扫描在此基础上并发执行多个外部调用。"""
+    if not _reserve_send(db, sub.id, n, today, channel, seen):
+        return False, "skip"
+    ok, message = _execute_send(send_fn)
+    return _record_send_result(db, sub, user, n, channel, ok, message)
 
 
 def run_reminder_scan() -> dict:
@@ -179,50 +204,79 @@ def run_reminder_scan() -> dict:
                 continue  # 禁用用户不参与提醒扫描
             tg_ready = user.telegram_enabled and user.telegram_bot_token and user.telegram_chat_id
             bark_ready = user.bark_enabled and user.bark_device_key
-            if not tg_ready and not bark_ready:
+            webhook_ready = user.webhook_enabled and user.webhook_url and user.webhook_secret and user.webhook_secret.strip()
+            if not tg_ready and not bark_ready and not webhook_ready:
                 continue
             days_left = (sub.next_renewal_date - today).days
             for n in _unique_days(sub.remind_days_before):
                 if days_left != n:
                     continue
-                if tg_ready:
+                jobs: list[tuple[str, object]] = []
+                if tg_ready and _reserve_send(db, sub.id, n, today, "telegram", seen):
                     text = _build_telegram_text(db, sub, user, days_left)
+                    chat_id = user.telegram_chat_id
+                    token = user.telegram_bot_token
+                    api_base = user.telegram_api_base
+                    proxy = user.telegram_proxy
 
                     def _do_telegram():
                         telegram.send_message(
-                            user.telegram_chat_id, text,
-                            token=user.telegram_bot_token,
-                            api_base=user.telegram_api_base,
-                            proxy=user.telegram_proxy,
+                            chat_id,
+                            text,
+                            token=token,
+                            api_base=api_base,
+                            proxy=proxy,
                         )
                         return text
 
-                    ok, status = _send_one(db, sub, user, n, today, "telegram", _do_telegram, seen)
-                    if ok:
-                        sent += 1
-                    elif status != "skip":
-                        failed += 1
-                if bark_ready:
+                    jobs.append(("telegram", _do_telegram))
+                if bark_ready and _reserve_send(db, sub.id, n, today, "bark", seen):
                     title, body = _build_bark_text(db, sub, user, days_left)
                     icon_url = bark.resolve_push_icon_url(sub.icon, settings.app_public_url)
+                    device_key = user.bark_device_key
+                    server = user.bark_server
+                    sound = user.bark_sound
+                    group = user.bark_group
+                    ttl = user.bark_ttl
+                    click_url = sub.url
 
                     def _do_bark():
                         bark.send_push(
-                            user.bark_device_key, title, body,
-                            server=user.bark_server,
-                            sound=user.bark_sound,
-                            group=user.bark_group,
-                            ttl=user.bark_ttl,
-                            url=sub.url,
+                            device_key,
+                            title,
+                            body,
+                            server=server,
+                            sound=sound,
+                            group=group,
+                            ttl=ttl,
+                            url=click_url,
                             icon=icon_url,
                         )
                         return f"{title}\n{body}"
 
-                    ok, status = _send_one(db, sub, user, n, today, "bark", _do_bark, seen)
-                    if ok:
-                        sent += 1
-                    elif status != "skip":
-                        failed += 1
+                    jobs.append(("bark", _do_bark))
+                if webhook_ready and _reserve_send(db, sub.id, n, today, "webhook", seen):
+                    payload = _build_webhook_payload(db, sub, user, days_left, n)
+                    webhook_url = user.webhook_url
+                    webhook_secret = user.webhook_secret
+
+                    def _do_webhook():
+                        webhook.send_notification(webhook_url, webhook_secret, payload)
+                        return f"{payload['title']}\n{payload['body']}"
+
+                    jobs.append(("webhook", _do_webhook))
+
+                if jobs:
+                    # 仅外部 HTTP 调用进入线程池；Session 写入仍在当前线程顺序完成。
+                    with ThreadPoolExecutor(max_workers=len(jobs), thread_name_prefix="reminder") as pool:
+                        futures = [(channel, pool.submit(_execute_send, send_fn)) for channel, send_fn in jobs]
+                        for channel, future in futures:
+                            ok, message = future.result()
+                            _, status = _record_send_result(db, sub, user, n, channel, ok, message)
+                            if ok:
+                                sent += 1
+                            elif status != "skip":
+                                failed += 1
         db.commit()
     finally:
         db.close()
@@ -370,12 +424,29 @@ def _build_bark_text(db, sub: Subscription, user: User, days_left: int) -> tuple
     return title, body
 
 
+def _build_webhook_payload(
+    db, sub: Subscription, user: User, days_left: int, days_before: int
+) -> dict:
+    """构造 Webhook 提醒事件；复用 Bark 的纯文本，确保各通道语义一致。"""
+    title, body = _build_bark_text(db, sub, user, days_left)
+    return webhook.build_payload(
+        sub.name,
+        title,
+        body,
+        subscription_id=sub.id,
+        days_before=days_before,
+        days_left=days_left,
+        next_renewal_date=sub.next_renewal_date,
+        amount=sub.amount,
+        currency=sub.currency,
+        is_keepalive=sub.is_keepalive,
+    )
+
+
 def _simulation_channels(channel: str) -> list[str]:
-    if channel == "telegram":
-        return ["telegram"]
-    if channel == "bark":
-        return ["bark"]
-    return ["telegram", "bark"]
+    if channel in {"telegram", "bark", "webhook"}:
+        return [channel]
+    return ["telegram", "bark", "webhook"]
 
 
 def _append_simulation_item(items: list[dict], limit: int, item: dict) -> None:
@@ -410,6 +481,7 @@ def simulate_reminder_scan(
         "skipped": 0,
         "telegram": 0,
         "bark": 0,
+        "webhook": 0,
         "already_sent": 0,
         "channel_not_ready": 0,
         "invalid": 0,
@@ -420,7 +492,7 @@ def simulate_reminder_scan(
     def add(item: dict) -> None:
         if item["status"] == "would_send":
             summary["would_send"] += 1
-            if item["channel"] in ("telegram", "bark"):
+            if item["channel"] in ("telegram", "bark", "webhook"):
                 summary[item["channel"]] += 1
         else:
             summary["skipped"] += 1
@@ -476,9 +548,12 @@ def simulate_reminder_scan(
             continue
         for days_before in due_days:
             for ch in channels:
-                tg_ready = user.telegram_enabled and user.telegram_bot_token and user.telegram_chat_id
-                bark_ready = user.bark_enabled and user.bark_device_key
-                ready = tg_ready if ch == "telegram" else bark_ready
+                ready_by_channel = {
+                    "telegram": user.telegram_enabled and user.telegram_bot_token and user.telegram_chat_id,
+                    "bark": user.bark_enabled and user.bark_device_key,
+                    "webhook": user.webhook_enabled and user.webhook_url and user.webhook_secret and user.webhook_secret.strip(),
+                }
+                ready = ready_by_channel[ch]
                 item = {**base, "days_left": days_left, "days_before": days_before, "channel": ch}
                 if not ready:
                     add({**item, "status": "channel_not_ready", "reason": f"{ch} 通道未启用或配置不完整。"})
@@ -489,9 +564,19 @@ def simulate_reminder_scan(
                 if ch == "telegram":
                     text = _build_telegram_text(db, sub, user, days_left)
                     add({**item, "status": "would_send", "reason": "模拟日期命中提醒规则，且通道配置完整。", "body": text, "preview": text})
-                else:
+                elif ch == "bark":
                     title, body = _build_bark_text(db, sub, user, days_left)
                     add({**item, "status": "would_send", "reason": "模拟日期命中提醒规则，且通道配置完整。", "title": title, "body": body, "preview": f"{title}\n{body}"})
+                else:
+                    payload = _build_webhook_payload(db, sub, user, days_left, days_before)
+                    add({
+                        **item,
+                        "status": "would_send",
+                        "reason": "模拟日期命中提醒规则，且通道配置完整。",
+                        "title": payload["title"],
+                        "body": payload["body"],
+                        "preview": json.dumps(payload, ensure_ascii=False, indent=2),
+                    })
 
     return {"summary": summary, "items": items}
 

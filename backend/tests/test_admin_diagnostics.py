@@ -53,7 +53,17 @@ def add_subscription(db, user, **overrides):
 def test_run_data_diagnostics_reports_core_data_issues():
     db, engine = make_db()
     try:
-        user = add_user(db, telegram_enabled=True, telegram_bot_token="", telegram_chat_id="", bark_enabled=True, bark_device_key="")
+        user = add_user(
+            db,
+            telegram_enabled=True,
+            telegram_bot_token="",
+            telegram_chat_id="",
+            bark_enabled=True,
+            bark_device_key="",
+            webhook_enabled=True,
+            webhook_url="",
+            webhook_secret="test-signing-secret",
+        )
         carrier = Category(name="电信运营商 / Carrier (SIM 保号)", is_system=True)
         db.add_all([carrier, Currency(code="CNY", name="人民币", symbol="¥")])
         db.flush()
@@ -69,6 +79,7 @@ def test_run_data_diagnostics_reports_core_data_issues():
 
         assert "telegram_config_incomplete" in codes
         assert "bark_config_incomplete" in codes
+        assert "webhook_config_incomplete" in codes
         assert "subscription_missing_next_renewal" in codes
         assert "invalid_remind_days" in codes
         assert "keepalive_scope_invalid" in codes
@@ -80,6 +91,7 @@ def test_run_data_diagnostics_reports_core_data_issues():
         assert "password_hash" not in rendered
         assert "telegram_bot_token" not in rendered
         assert "bark_device_key" not in rendered
+        assert "test-signing-secret" not in rendered
     finally:
         db.close()
         engine.dispose()
@@ -99,6 +111,29 @@ def test_admin_diagnostics_router_returns_selected_user_only():
 
         assert out["summary"]["users"] == 1
         assert out["summary"]["subscriptions"] == 1
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_reminder_simulation_router_accepts_webhook_channel(monkeypatch):
+    db, engine = make_db()
+    try:
+        admin = add_user(db, username="admin", email="admin@example.com", is_admin=True)
+        monkeypatch.setattr(
+            admin_diagnostics.scheduler,
+            "simulate_reminder_scan",
+            lambda *args, **kwargs: {"summary": {"webhook": 0}, "items": []},
+        )
+
+        out = admin_diagnostics.simulate_reminders(
+            ReminderSimulationIn(channel="webhook"),
+            admin=admin,
+            db=db,
+        )
+
+        assert out["ok"] is True
+        assert out["summary"]["webhook"] == 0
     finally:
         db.close()
         engine.dispose()

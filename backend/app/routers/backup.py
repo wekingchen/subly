@@ -401,6 +401,40 @@ def _restore_entities(db: Session, user: User, data: dict, replace: bool) -> int
     return count
 
 
+def _apply_user_preferences(
+    db: Session, user: User, meta: dict, *, label: str = ""
+) -> None:
+    """成对恢复基准货币与月预算，避免预算被按错误币种解释。"""
+    prefix = f"用户 {label} 的 " if label else ""
+    if "base_currency" in meta:
+        currency = meta.get("base_currency")
+        if not isinstance(currency, str) or not currency.strip() or len(currency.strip()) > 8:
+            raise ValueError(f"{prefix}base_currency 必须是 1-8 位字符串")
+        currency = currency.strip().upper()
+        available = db.scalar(
+            select(Currency).where(
+                Currency.code == currency,
+                or_(Currency.user_id.is_(None), Currency.user_id == user.id),
+            )
+        )
+        if not available:
+            raise ValueError(f"{prefix}base_currency 不存在或不属于该用户：{currency}")
+        user.base_currency = currency
+    if "monthly_budget" in meta:
+        budget = meta.get("monthly_budget")
+        if budget is not None:
+            if (
+                not isinstance(budget, (int, float))
+                or isinstance(budget, bool)
+                or budget != budget
+                or budget in (float("inf"), float("-inf"))
+            ):
+                raise ValueError(f"{prefix}monthly_budget 必须是有限数：{budget!r}")
+            if budget < 0:
+                raise ValueError(f"{prefix}monthly_budget 不能为负：{budget!r}")
+        user.monthly_budget = budget
+
+
 # --------------------------------------------------------------------------- #
 # 单用户：导出 / 导入自己的数据
 # --------------------------------------------------------------------------- #
@@ -414,6 +448,7 @@ def export_data(user: User = Depends(get_current_user), db: Session = Depends(ge
         "user": {
             "username": user.username,
             "base_currency": user.base_currency,
+            "monthly_budget": user.monthly_budget,
             "theme": user.theme,
         },
         **_collect_entities(db, user),
@@ -438,6 +473,9 @@ def import_data(
 
     try:
         count = _restore_entities(db, user, data, payload.replace)
+        meta = data.get("user") or {}
+        if isinstance(meta, dict):
+            _apply_user_preferences(db, user, meta)
     except (ValueError, TypeError, AttributeError) as e:
         db.rollback()
         raise HTTPException(400, f"备份校验失败：{e}")
@@ -461,6 +499,7 @@ def _user_meta(u: User) -> dict:
         "email_verified": u.email_verified,
         "theme": u.theme,
         "base_currency": u.base_currency,
+        "monthly_budget": u.monthly_budget,
         "category_order": u.category_order,
     }
 
@@ -534,7 +573,9 @@ def import_all(
                     is_approved=bool(meta.get("is_approved", True)),
                     email_verified=bool(meta.get("email_verified", True)),
                     theme=meta.get("theme", "light"),
-                    base_currency=meta.get("base_currency", "CNY"),
+                    # 偏好字段在恢复实体后统一校验并应用，避免原始畸形值先进入 flush。
+                    base_currency="CNY",
+                    monthly_budget=None,
                     category_order=meta.get("category_order"),
                 )
                 db.add(target)
@@ -543,6 +584,7 @@ def import_all(
                 created_users += 1
 
             total_subs += _restore_entities(db, target, ub, payload.replace)
+            _apply_user_preferences(db, target, meta, label=username)
     except (ValueError, TypeError, AttributeError) as e:
         db.rollback()
         raise HTTPException(400, f"备份校验失败：{e}")

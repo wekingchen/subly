@@ -29,13 +29,14 @@ docker run -d --name subly -p 8842:8000 \
 | 📱 **保号场景** | 针对电信运营商保号：续费后可从当前时间重新计算周期，也可按原到期日滚动 |
 | 🔔 **Telegram 提醒** | 续费日前自动推送，每个订阅可配置提醒天数（支持负数=过期后第 N 天补提醒，如 `7,1,-1,-7`）；支持 Bot Token、Chat ID、TG API 反代与 HTTP 代理 |
 | 🔔 **Bark 推送** | iOS 推送提醒，与 Telegram 可同时开启、各发各的；支持订阅图片图标、自建服务器、提示音、分组与可选 TTL |
-| 📊 **雷达总览 & 报表** | 月度 / 年度支出、支出洞察、排行、永久购买、即将续费、已过期、最近付款与分类明细；雷达总览页每条订阅可直接点击查看详情并标记续费 / 编辑 / 删除，无需切换账本 |
+| 🔗 **Webhook 通知** | 向自建自动化服务发送结构化 JSON，使用必填共享密钥对原始请求体生成 HMAC-SHA256 签名；可与 Telegram、Bark 同时启用并独立记录 |
+| 📊 **雷达总览 & 报表** | 月度 / 年度支出、支出洞察、排行、永久购买、即将续费、已过期、最近付款与分类明细，以及近 6 个月历史付款 + 未来预计的支出趋势柱状图；雷达总览页每条订阅可直接点击查看详情并标记续费 / 编辑 / 删除，无需切换账本；可设置月度预算，超支时雷达与报表预警 |
 | 🗓️ **续费日历** | 日历化查看续费日（桌面月历 + 移动端议程），可按订阅设置是否显示；每个续费事件可点击弹出详情并直接标记已续费/已保号、编辑或删除 |
 | 💱 **多货币** | 全球主流货币 + 自定义货币，汇率缓存与每日自动刷新，按用户基准货币统计 |
 | 🗂️ **分类与套餐包** | 系统预置分类、用户自定义分类、付款方式、套餐包 / 组合订阅管理 |
 | 🧭 **内置服务管理** | 100+ 常见服务，支持多分类 `category_keys`、服务 CRUD、软删除 / 恢复、图标预热 |
 | 🖼️ **图标系统** | Emoji、上传图片、URL 导入；内置服务 favicon 按需下载、缓存、远端 SVG 消毒与可见 fallback |
-| 📝 **通知与日志** | 通知中心记录 Telegram / Bark 发送结果；实时日志页按权限查看活动日志，慢请求写入 stdout |
+| 📝 **通知与日志** | 通知中心记录 Telegram / Bark / Webhook 发送结果；实时日志页按权限查看活动日志，慢请求写入 stdout |
 | 💾 **备份恢复** | 当前用户 JSON 备份 / 导入；管理员可整站备份 / 恢复全部成员数据 |
 | 🌈 **中文界面 / 多主题** | 中文单语言界面，保留 `vue-i18n` 集中文案，内置 5 套主题 |
 | 🗄️ **内置 SQLite** | 零配置，开箱即用，无需准备外部数据库；数据持久化在 `/app/data` |
@@ -208,9 +209,10 @@ GitHub Actions 对 PR 运行 Ruff、ESLint、后端测试、前端测试/构建�
 - **注册审核**：默认新用户注册后需要管理员审核；如果配置 SMTP，注册时还会要求邮箱验证码。
 - **Telegram 提醒**：找 @BotFather `/newbot` 拿 Bot Token → 设置 → Telegram 配置 → 填 Token、验证机器人、获取 Chat ID、发送测试；需要时可设置 API 反代与 HTTP 代理。
 - **Bark 推送**：iOS 上安装 [Bark](https://github.com/Finb/Bark) App，复制 Device Key → 设置 → Bark 配置 → 粘贴 Key、按需填写服务器、提示音、分组、TTL → 发送测试。
+- **Webhook 通知**：设置 → Webhook 通知 → 填写接收 URL 与双方共享的签名密钥 → 保存并发送测试。请求体为 UTF-8 JSON，签名头为 `X-Subly-Signature: sha256=<hex>`，其中 `<hex>` 是对原始请求体计算的 HMAC-SHA256。
 - **续费规则**：续费后可按当前时间重新计算下次到期（保号场景），也可按原到期日累加周期。
 - **服务管理**：管理员可维护内置服务列表、服务多分类、启停服务、恢复服务，并预热 favicon 缓存。
-- **备份**：设置 → 数据备份，导出 / 导入当前用户 JSON；管理员可整站备份与恢复全部成员数据。
+- **备份**：设置 → 数据备份，导出 / 导入当前用户 JSON；管理员可整站备份与恢复全部成员数据。为避免凭据扩散，JSON 不包含 Telegram Token、Bark Device Key、Webhook secret 等通知凭据，恢复后需重新配置通知通道。
 - **图标库**：内置服务图标会按需下载 favicon 并缓存到 `/app/data/icons/library`；远端 SVG 会消毒后缓存，失败时显示稳定颜色与首字母 fallback。
 - **日志排障**：网页「实时日志」可看活动记录；容器 stdout 日志可用 `docker logs` 或 `docker compose logs -f app` 查看。
 - **API 文档**：默认 Docker/NAS 部署访问 `http://<host>:8842/docs`；后端直跑或容器内端口为 `http://<host>:8000/docs`。
@@ -239,10 +241,11 @@ docker compose -f docker-compose.hub.yml up -d
 </details>
 
 <details>
-<summary><b>Telegram / Bark 收不到消息？</b></summary>
+<summary><b>Telegram / Bark / Webhook 收不到消息？</b></summary>
 
 - Telegram：确认 Bot Token 正确、已和机器人对过话拿到 Chat ID；中国大陆网络环境可能需要在设置里配置代理或 API 反代。
 - Bark：确认 Device Key 正确、iOS 上 Bark App 在线；自建 Bark 服务器需确认地址可从容器访问。TTL 只能填写非负整数秒数，留空表示使用 Bark 默认值。
+- Webhook：先在设置页执行测试发送；确认 URL 可从 Subly 容器访问、接收端返回 2xx，并使用相同共享密钥对收到的原始字节计算 HMAC-SHA256 后比对 `X-Subly-Signature`。
 </details>
 
 <details>

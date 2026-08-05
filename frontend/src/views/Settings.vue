@@ -17,7 +17,7 @@
         </div>
         <div class="metric-card">
           <span>通知通道</span>
-          <b class="mono-data">{{ enabledChannels }}/2</b>
+          <b class="mono-data">{{ enabledChannels }}/3</b>
         </div>
       </div>
     </section>
@@ -42,6 +42,13 @@
         <select v-model="baseCurrency" @change="changeCurrency">
           <option v-for="c in currencies" :key="c.code" :value="c.code">{{ c.code }} {{ c.symbol }}</option>
         </select>
+        <label>{{ t('settings.monthlyBudget') }} <span class="muted mono-data">({{ baseCurrency }})</span></label>
+        <div class="budget-row">
+          <input type="number" min="0" step="0.01" v-model="monthlyBudget" :placeholder="t('settings.budgetPh')" @change="saveBudget" />
+          <button class="btn ghost sm" @click="saveBudget">{{ t('settings.save') }}</button>
+        </div>
+        <p class="muted budget-hint">{{ t('settings.budgetHint') }}</p>
+        <p v-if="prefMsg" class="feedback" :class="prefOk ? 'ok' : 'err'">{{ prefMsg }}</p>
       </div>
 
       <!-- 账号与密码 -->
@@ -197,6 +204,35 @@
       <p v-if="bkMsg" class="feedback" :class="bkOk ? 'ok' : 'err'">{{ bkMsg }}</p>
     </div>
 
+    <!-- Webhook -->
+    <div class="card sect panel-card channel-card">
+      <div class="panel-head">
+        <div>
+          <div class="panel-title"><span class="panel-signal"></span>{{ t('settings.webhook') }}</div>
+          <p class="muted">{{ t('settings.webhookTip') }}</p>
+        </div>
+        <label class="switch">
+          <input type="checkbox" v-model="wh.enabled" @change="saveWebhook" />
+          <span>{{ t('settings.webhookEnabled') }}</span>
+        </label>
+      </div>
+      <div class="form-grid wide">
+        <div class="field span-2">
+          <label>{{ t('settings.webhookUrl') }}</label>
+          <input v-model="wh.url" type="url" :placeholder="t('settings.webhookUrlPh')" />
+        </div>
+        <div class="field span-2">
+          <label>{{ t('settings.webhookSecret') }}</label>
+          <input v-model="wh.secret" type="password" autocomplete="new-password" :placeholder="t('settings.webhookSecretPh')" />
+        </div>
+      </div>
+      <div class="actions-row wrap">
+        <button class="btn" @click="saveWebhook">{{ t('settings.save') }}</button>
+        <button class="btn ghost" @click="testWebhook">{{ t('settings.testSend') }}</button>
+      </div>
+      <p v-if="whMsg" class="feedback" :class="whOk ? 'ok' : 'err'">{{ whMsg }}</p>
+    </div>
+
     <div class="grid two">
       <!-- 数据备份与恢复 -->
       <div class="card sect panel-card data-card">
@@ -279,6 +315,9 @@ const themes = [
 
 const theme = ref(auth.user?.theme || 'light')
 const baseCurrency = ref(auth.user?.base_currency || 'CNY')
+const monthlyBudget = ref(auth.user?.monthly_budget ?? null)
+const prefMsg = ref('')
+const prefOk = ref(true)
 const tg = reactive({
   enabled: auth.user?.telegram_enabled || false,
   bot_token: auth.user?.telegram_bot_token || '',
@@ -297,6 +336,13 @@ const bk = reactive({
 })
 const bkMsg = ref('')
 const bkOk = ref(false)
+const wh = reactive({
+  enabled: auth.user?.webhook_enabled || false,
+  url: auth.user?.webhook_url || '',
+  secret: auth.user?.webhook_secret || ''
+})
+const whMsg = ref('')
+const whOk = ref(false)
 const currencies = ref([])
 const rateMsg = ref('')
 const rateOk = ref(false)
@@ -322,7 +368,9 @@ const currentThemeLabel = computed(() => {
   const item = themes.find((x) => x.v === theme.value)
   return item ? t('settings.theme' + item.k) : theme.value
 })
-const enabledChannels = computed(() => Number(Boolean(tg.enabled)) + Number(Boolean(bk.enabled)))
+const enabledChannels = computed(() => (
+  Number(Boolean(tg.enabled)) + Number(Boolean(bk.enabled)) + Number(Boolean(wh.enabled))
+))
 
 async function exportData() {
   backupMsg.value = ''
@@ -429,8 +477,29 @@ async function changePwd() {
 
 async function changeTheme() { await auth.updateMe({ theme: theme.value }) }
 async function changeCurrency() {
-  await auth.updateMe({ base_currency: baseCurrency.value })
+  const hadBudget = monthlyBudget.value !== null && monthlyBudget.value !== ''
+  // 币种与预算必须同一请求更新，避免第一次成功、第二次失败后旧预算被按新币种解释。
+  await auth.updateMe({
+    base_currency: baseCurrency.value,
+    ...(hadBudget ? { monthly_budget: null } : {})
+  })
+  if (hadBudget) {
+    monthlyBudget.value = null
+    prefOk.value = true
+    prefMsg.value = t('settings.budgetClearedOnCurrencyChange')
+  }
   loadRates()
+}
+async function saveBudget() {
+  const v = monthlyBudget.value
+  try {
+    await auth.updateMe({ monthly_budget: (v === '' || v === null) ? null : Number(v) })
+    prefOk.value = true
+    prefMsg.value = t('settings.saved')
+  } catch (e) {
+    prefOk.value = false
+    prefMsg.value = e.response?.data?.detail || 'Error'
+  }
 }
 
 function fmtTime(s) { return formatDateTimeInZone(s, sys.value?.timezone || 'Asia/Shanghai') }
@@ -497,6 +566,30 @@ async function testBark() {
     await api.post('/api/notifications/bark/test', { device_key: bk.device_key, server: bk.server || null, ttl })
     bkOk.value = true; bkMsg.value = t('settings.testOk')
   } catch (e) { bkOk.value = false; bkMsg.value = e.response?.data?.detail || 'Error' }
+}
+
+async function saveWebhook() {
+  try {
+    await auth.updateMe({
+      webhook_enabled: wh.enabled,
+      webhook_url: wh.url || null,
+      webhook_secret: wh.secret || null
+    })
+    whOk.value = true; whMsg.value = t('settings.saved')
+    return true
+  } catch (e) {
+    whOk.value = false; whMsg.value = e.response?.data?.detail || 'Error'
+    return false
+  }
+}
+
+async function testWebhook() {
+  const saved = await saveWebhook()
+  if (!saved) return
+  try {
+    await api.post('/api/notifications/webhook/test')
+    whOk.value = true; whMsg.value = t('settings.testOk')
+  } catch (e) { whOk.value = false; whMsg.value = e.response?.data?.detail || 'Error' }
 }
 
 async function refreshRates() {
@@ -582,6 +675,9 @@ hr { border: none; border-top: 1px solid var(--border); margin: 16px 0; }
 .err { color: var(--danger); word-break: break-all; }
 .actions-row { display: flex; align-items: center; gap: 10px; margin-top: 12px; }
 .actions-row.wrap { flex-wrap: wrap; }
+.budget-row { display: flex; align-items: center; gap: 8px; }
+.budget-row input { flex: 1 1 0; min-width: 0; }
+.budget-hint { font-size: 12px; margin: 4px 0 0; }
 .switch { display: inline-flex; align-items: center; gap: 7px; min-height: 38px; font-size: 13px; color: var(--text-soft); cursor: pointer; width: auto; margin: 0; }
 .switch input { width: auto; }
 .replace-switch { margin-top: 12px; align-items: flex-start; }

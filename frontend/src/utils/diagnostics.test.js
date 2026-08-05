@@ -18,6 +18,7 @@ describe('diagnostics issue helpers', () => {
     { severity: 'info', scope: 'system', code: 'currency_missing' },
     { severity: 'error', scope: 'subscription', code: 'negative_amount' },
     { severity: 'warn', scope: 'notification', code: 'telegram_config_incomplete' },
+    { severity: 'warn', scope: 'notification', code: 'webhook_config_incomplete' },
     { severity: 'warn', scope: 'subscription', code: 'invalid_remind_days' },
     { severity: 'info', scope: 'user', code: 'disabled_user_has_active_subscriptions' }
   ]
@@ -27,6 +28,7 @@ describe('diagnostics issue helpers', () => {
       'negative_amount',
       'invalid_remind_days',
       'telegram_config_incomplete',
+      'webhook_config_incomplete',
       'currency_missing',
       'disabled_user_has_active_subscriptions'
     ])
@@ -35,11 +37,12 @@ describe('diagnostics issue helpers', () => {
   it('filters issues by severity and explicit reminder codes', () => {
     expect(filterIssues(issues, 'error').map((x) => x.code)).toEqual(['negative_amount'])
     // 提醒筛选只纳入显式列出的提醒类 code，不受 scope 误导：
-    // telegram_config_incomplete / invalid_remind_days 属于提醒相关；
+    // 三类通道配置缺口 / invalid_remind_days 属于提醒相关；
     // disabled_user_has_active_subscriptions（scope=user）不再被误纳入。
     expect(filterIssues(issues, 'reminder').map((x) => x.code)).toEqual([
       'invalid_remind_days',
-      'telegram_config_incomplete'
+      'telegram_config_incomplete',
+      'webhook_config_incomplete'
     ])
   })
 
@@ -57,13 +60,16 @@ describe('reminder simulation helpers', () => {
   const items = [
     { status: 'not_due', channel: 'bark', next_renewal_date: '2026-08-01', subscription_name: 'B' },
     { status: 'would_send', channel: 'telegram', next_renewal_date: '2026-07-01', subscription_name: 'A' },
-    { status: 'already_sent', channel: 'bark', next_renewal_date: '2026-07-02', subscription_name: 'C' }
+    { status: 'already_sent', channel: 'bark', next_renewal_date: '2026-07-02', subscription_name: 'C' },
+    { status: 'would_send', channel: 'webhook', next_renewal_date: '2026-07-03', subscription_name: 'D' }
   ]
 
   it('labels channels and statuses', () => {
     expect(channelLabel('telegram')).toBe('Telegram')
     expect(channelLabel('bark')).toBe('Bark')
+    expect(channelLabel('webhook')).toBe('Webhook')
     expect(channelLabel('all')).toBe('全部')
+    expect(channelLabel('email')).toBe('email')
     expect(simulationStatusLabel('would_send')).toBe('将发送')
     expect(simulationStatusLabel('channel_not_ready')).toBe('通道未就绪')
     expect(simulationStatusClass('would_send')).toBe('ok')
@@ -71,11 +77,11 @@ describe('reminder simulation helpers', () => {
   })
 
   it('sorts simulation items by actionable status first', () => {
-    expect(sortSimulationItems(items).map((x) => x.status)).toEqual(['would_send', 'already_sent', 'not_due'])
+    expect(sortSimulationItems(items).map((x) => x.status)).toEqual(['would_send', 'would_send', 'already_sent', 'not_due'])
   })
 
   it('builds summary from returned items', () => {
-    expect(simulationSummary(items)).toEqual({ total: 3, would_send: 1, skipped: 2, telegram: 1, bark: 2 })
+    expect(simulationSummary(items)).toEqual({ total: 4, would_send: 2, skipped: 2, telegram: 1, bark: 2, webhook: 1 })
   })
 })
 

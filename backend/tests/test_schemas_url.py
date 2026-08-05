@@ -72,6 +72,9 @@ def test_validate_outbound_url_blocks_metadata_and_dangerous():
         "http://169.254.170.2/",
         "http://0.0.0.0/",
         "https://[::]/",
+        "http://[::ffff:169.254.169.254]/latest/meta-data/",
+        "http://[::ffff:a9fe:a9fe]/latest/meta-data/",
+        "http://[::ffff:0.0.0.0]/",
     ]:
         with pytest.raises(ValueError):
             validate_outbound_url(bad)

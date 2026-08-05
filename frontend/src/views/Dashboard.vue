@@ -23,9 +23,13 @@
 
       <!-- KPI -->
       <div class="grid stats">
-        <div class="card stat s1">
+        <div class="card stat s1" :class="{ 'budget-over': budgetOver }">
           <div class="badge" v-html="icon('wallet')"></div>
-          <div><div class="muted">{{ t('dashboard.monthSpend') }}</div><div class="big mono-data">{{ fmt(data.month_spend) }}</div></div>
+          <div>
+            <div class="muted">{{ t('dashboard.monthSpend') }}</div>
+            <div class="big mono-data">{{ fmt(data.month_spend) }}</div>
+            <div v-if="budgetOver" class="budget-warn">{{ t('reports.budgetOver', { n: fmt(data.month_spend - budget) }) }}</div>
+          </div>
         </div>
         <div class="card stat s2">
           <div class="badge" v-html="icon('trending')"></div>
@@ -314,6 +318,8 @@ function color(i) { return PALETTE[i % PALETTE.length] }
 
 const cur = computed(() => auth.user?.base_currency || 'CNY')
 function fmt(v) { return formatMoney(v, cur.value) }
+const budget = computed(() => auth.user?.monthly_budget ?? null)
+const budgetOver = computed(() => budget.value !== null && (data.value.month_spend || 0) > budget.value)
 function dueClass(s) {
   const d = daysLeft(s)
   if (d === null) return ''
@@ -477,6 +483,8 @@ onMounted(async () => {
 .stat.s3 .badge { background: #fff1e6; color: #f59e0b; }
 .stat.s4 .badge { background: #fee2e2; color: #ef4444; }
 .stat.s4.alert { border-color: var(--danger); }
+.stat.budget-over { border-color: var(--danger); box-shadow: 0 0 0 1px var(--danger); }
+.budget-warn { font-size: 12px; color: var(--danger); font-weight: 600; margin-top: 2px; }
 .stat .big { font-size: 24px; font-weight: 700; margin-top: 2px; letter-spacing: -.02em; }
 
 .main { grid-template-columns: 1.2fr 1fr; margin-bottom: 16px; }

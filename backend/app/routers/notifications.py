@@ -10,7 +10,7 @@ from app.database import get_db
 from app.deps import get_admin_user, get_current_user
 from app.models import NotificationLog, User
 from app.schemas import BarkTestIn, TelegramTestIn
-from app.services import bark, scheduler, telegram
+from app.services import bark, scheduler, telegram, webhook
 
 router = APIRouter(prefix="/api/notifications", tags=["notifications"])
 logger = logging.getLogger(__name__)
@@ -104,6 +104,30 @@ def bark_test(
         activity.log("bark.test", "测试推送发送失败，请检查 Device Key / 服务器地址 / 网络", user=user, level="error")
         raise HTTPException(502, "Bark 发送失败，请检查 Device Key / 服务器地址 / 网络")
     activity.log("bark.test", "发送了 Bark 测试推送", user=user)
+    return {"ok": True}
+
+
+@router.post("/webhook/test")
+def webhook_test(user: User = Depends(get_current_user)):
+    """向当前用户已保存的 Webhook 发送测试事件；URL 与密钥不可由请求覆盖。"""
+    if not user.webhook_url:
+        raise HTTPException(400, "请先填写 Webhook URL")
+    if not user.webhook_secret or not user.webhook_secret.strip():
+        raise HTTPException(400, "请先填写 Webhook 签名密钥")
+    payload = {
+        "event": "webhook.test",
+        "version": 1,
+        "title": "Subly Webhook 连接测试",
+        "body": "连接成功",
+        "is_keepalive": False,
+    }
+    try:
+        webhook.send_notification(user.webhook_url, user.webhook_secret, payload)
+    except Exception as e:  # noqa: BLE001 - 不回显底层细节，仅写脱敏日志
+        logger.warning("event=webhook_test_failed user_id=%s error_type=%s", user.id, type(e).__name__)
+        activity.log("webhook.test", "测试事件发送失败，请检查 URL / 签名密钥 / 网络", user=user, level="error")
+        raise HTTPException(502, "Webhook 发送失败，请检查 URL / 签名密钥 / 网络")
+    activity.log("webhook.test", "发送了 Webhook 测试事件", user=user)
     return {"ok": True}
 
 

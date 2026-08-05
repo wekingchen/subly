@@ -108,6 +108,20 @@ def run_data_diagnostics(db: Session, user_id: int | None = None) -> dict:
                 user_id=user.id,
                 username=user.username,
             )
+        if user.webhook_enabled and (
+            not user.webhook_url or not user.webhook_secret or not user.webhook_secret.strip()
+        ):
+            _issue(
+                issues,
+                severity="warn",
+                scope="user",
+                code="webhook_config_incomplete",
+                title="Webhook 通知配置不完整",
+                detail=f"用户 {user.username} 已启用 Webhook，但 URL 或签名密钥缺失。",
+                suggestion="在系统设置中补齐 Webhook URL 与签名密钥，或关闭 Webhook 通知。",
+                user_id=user.id,
+                username=user.username,
+            )
         if not user.is_active and active_sub_counts.get(user.id, 0) > 0:
             _issue(
                 issues,
@@ -339,7 +353,7 @@ def run_data_diagnostics(db: Session, user_id: int | None = None) -> dict:
             code="recent_notification_failures",
             title="近 30 天存在失败通知",
             detail=f"近 30 天共有 {failed_30d} 条通知发送失败。",
-            suggestion="到通知中心查看失败原因，并检查 Telegram/Bark 配置。",
+            suggestion="到通知中心查看失败原因，并检查 Telegram、Bark 或 Webhook 配置。",
         )
 
     counts = {"error": 0, "warn": 0, "info": 0}

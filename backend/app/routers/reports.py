@@ -1,12 +1,12 @@
 from datetime import date, timedelta
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.deps import get_current_user
-from app.models import Category, Subscription, User
+from app.models import Category, RenewalHistory, Subscription, User
 from app.schemas import SubscriptionOut
 from app.services import exchange
 
@@ -227,3 +227,60 @@ def category_detail(user: User = Depends(get_current_user), db: Session = Depend
         "recurring_monthly_total": round(sum(r["monthly"] for r in recurring), 2),
         "one_time_total": round(sum(o["total"] for o in one_time), 2),
     }
+
+
+@router.get("/payment-history")
+def payment_history(
+    months: int = Query(default=6, ge=1, le=24),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """按月聚合历史真实付款金额（基准货币），用于趋势图的历史部分。
+
+    数据源：
+    - RenewalHistory：每次标记续费的金额快照（renewed_at 所在年月）。
+    - 一次性买断的 start_date：购买当月的支出。
+    返回最近 N 个月（含当月）的 [{month:"YYYY-MM", amount}]，按月份升序。
+    """
+    base = user.base_currency
+    today = date.today()
+    # 用连续月份索引计算起始年月，避免 // 12 在十二月错位。
+    total_idx = today.year * 12 + (today.month - 1)
+    start_idx = total_idx - (months - 1)
+    start_year, start_month = divmod(start_idx, 12)
+    start_month += 1
+    start = date(start_year, start_month, 1)
+
+    rows = db.scalars(
+        select(RenewalHistory).where(
+            RenewalHistory.user_id == user.id,
+            RenewalHistory.renewed_at >= start,
+        )
+    ).all()
+    # 一次性买断的 start_date 也计入历史付款
+    one_time_subs = db.scalars(
+        select(Subscription).where(
+            Subscription.user_id == user.id,
+            Subscription.billing_type == "one_time",
+            Subscription.start_date >= start,
+        )
+    ).all()
+
+    by_month: dict[str, float] = {}
+    for r in rows:
+        key = r.renewed_at.strftime("%Y-%m")
+        by_month[key] = by_month.get(key, 0.0) + exchange.convert(db, r.amount, r.currency, base)
+    for s in one_time_subs:
+        if s.start_date:
+            key = s.start_date.strftime("%Y-%m")
+            by_month[key] = by_month.get(key, 0.0) + exchange.convert(db, s.amount, s.currency, base)
+
+    # 填充连续月份（无数据补 0），用连续索引避免跨年递增错误
+    out = []
+    idx = start_idx
+    for _ in range(months):
+        y, m = divmod(idx, 12)
+        key = f"{y:04d}-{m + 1:02d}"
+        out.append({"month": key, "amount": round(by_month.get(key, 0.0), 2)})
+        idx += 1
+    return {"base_currency": base, "history": out}

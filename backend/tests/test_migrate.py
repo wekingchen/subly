@@ -45,29 +45,35 @@ def test_migrate_scrubs_dangerous_outbound_urls():
                     id INTEGER PRIMARY KEY,
                     telegram_api_base VARCHAR(255),
                     telegram_proxy VARCHAR(255),
-                    bark_server VARCHAR(255)
+                    bark_server VARCHAR(255),
+                    webhook_url VARCHAR(512)
                 )
             """))
             conn.execute(text("""
-                INSERT INTO users (id, telegram_api_base, telegram_proxy, bark_server) VALUES
-                (1, 'http://127.0.0.1:8000/api/health?', 'http://127.0.0.1:7890', 'https://bark.example.com'),
-                (2, 'http://169.254.169.254/', NULL, 'javascript:alert(1)')
+                INSERT INTO users (id, telegram_api_base, telegram_proxy, bark_server, webhook_url) VALUES
+                (1, 'http://127.0.0.1:8000/api/health?', 'http://127.0.0.1:7890', 'https://bark.example.com', 'https://hooks.example.com/subly'),
+                (2, 'http://169.254.169.254/', NULL, 'javascript:alert(1)', 'https://user:pass@hooks.example.com/subly'),
+                (3, NULL, NULL, NULL, 'http://[::ffff:169.254.169.254]/latest/meta-data')
             """))
 
         migrate.run_migrations(engine)
 
         with engine.begin() as conn:
             rows = conn.execute(text(
-                "SELECT id, telegram_api_base, telegram_proxy, bark_server FROM users ORDER BY id"
+                "SELECT id, telegram_api_base, telegram_proxy, bark_server, webhook_url FROM users ORDER BY id"
             )).mappings().all()
-        r1, r2 = rows
+        r1, r2, r3 = rows
         # 用户1：query 绕过的 api_base 被清空；合法的本地代理和公网 bark 保留
         assert r1["telegram_api_base"] is None
         assert r1["telegram_proxy"] == "http://127.0.0.1:7890"
         assert r1["bark_server"] == "https://bark.example.com"
-        # 用户2：元数据地址和危险协议都被清空
+        assert r1["webhook_url"] == "https://hooks.example.com/subly"
+        # 用户2：元数据地址、危险协议和带 userinfo 的 Webhook 都被清空
         assert r2["telegram_api_base"] is None
         assert r2["bark_server"] is None
+        assert r2["webhook_url"] is None
+        # IPv4-mapped IPv6 也必须按映射后的链路本地 IPv4 清理
+        assert r3["webhook_url"] is None
     finally:
         engine.dispose()
 

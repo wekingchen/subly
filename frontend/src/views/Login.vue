@@ -15,7 +15,7 @@
       </div>
       <div class="rp-signals">
         <div><b class="mono-data">30天</b><span>{{ t('auth.radarScan') }}</span></div>
-        <div><b class="mono-data">TG+Bark</b><span>{{ t('auth.radarAlerts') }}</span></div>
+        <div><b class="mono-data">3 通道</b><span>{{ t('auth.radarAlerts') }}</span></div>
         <div><b class="mono-data">SQLite</b><span>{{ t('auth.radarLedger') }}</span></div>
       </div>
     </section>

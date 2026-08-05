@@ -104,6 +104,160 @@ def test_run_reminder_scan_sends_subscription_icon_without_changing_click_url(mo
         engine.dispose()
 
 
+def test_run_reminder_scan_sends_webhook_and_records_safe_text_log(monkeypatch):
+    db, engine = make_db()
+    Session = sessionmaker(bind=engine)
+    try:
+        user = add_user(
+            db,
+            webhook_enabled=True,
+            webhook_url="https://hooks.example.com/subly",
+            webhook_secret="test-signing-secret",
+        )
+        sub = add_subscription(db, user)
+        sub_id = sub.id
+        db.commit()
+        db.close()
+
+        captured = {}
+        monkeypatch.setattr(scheduler.database, "SessionLocal", lambda: Session())
+        monkeypatch.setattr(scheduler, "_local_today", lambda: date(2024, 1, 1))
+        monkeypatch.setattr(scheduler.exchange, "convert", lambda db, amount, from_cur, to_cur: amount)
+        monkeypatch.setattr(scheduler.activity, "log", lambda *args, **kwargs: None)
+        monkeypatch.setattr(
+            scheduler.webhook,
+            "send_notification",
+            lambda url, secret, payload: captured.update(
+                {"url": url, "secret": secret, "payload": payload}
+            ) or payload,
+        )
+
+        result = scheduler.run_reminder_scan()
+
+        assert result == {"sent": 1, "failed": 0}
+        assert captured["url"] == "https://hooks.example.com/subly"
+        assert captured["secret"] == "test-signing-secret"
+        assert captured["payload"]["event"] == "subscription.reminder"
+        assert captured["payload"]["subscription_id"] == sub_id
+        assert "secret" not in captured["payload"]
+
+        check_db = Session()
+        try:
+            log = check_db.scalar(
+                select(NotificationLog).where(NotificationLog.subscription_id == sub_id)
+            )
+            assert log.channel == "webhook"
+            assert log.status == "sent"
+            assert isinstance(log.message, str)
+            assert "test-signing-secret" not in log.message
+        finally:
+            check_db.close()
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_run_reminder_scan_isolates_webhook_failure_from_other_channels(monkeypatch):
+    db, engine = make_db()
+    Session = sessionmaker(bind=engine)
+    try:
+        user = add_user(
+            db,
+            telegram_enabled=True,
+            telegram_bot_token="test-bot-token",
+            telegram_chat_id="123",
+            bark_enabled=True,
+            bark_device_key="test-device-key",
+            webhook_enabled=True,
+            webhook_url="https://hooks.example.com/subly",
+            webhook_secret="test-signing-secret",
+        )
+        sub = add_subscription(db, user)
+        sub_id = sub.id
+        db.commit()
+        db.close()
+
+        calls = []
+        monkeypatch.setattr(scheduler.database, "SessionLocal", lambda: Session())
+        monkeypatch.setattr(scheduler, "_local_today", lambda: date(2024, 1, 1))
+        monkeypatch.setattr(scheduler.exchange, "convert", lambda db, amount, from_cur, to_cur: amount)
+        monkeypatch.setattr(scheduler.activity, "log", lambda *args, **kwargs: None)
+        monkeypatch.setattr(scheduler.telegram, "send_message", lambda *args, **kwargs: calls.append("telegram"))
+        monkeypatch.setattr(scheduler.bark, "send_push", lambda *args, **kwargs: calls.append("bark") or {})
+
+        def fail_webhook(*args, **kwargs):
+            calls.append("webhook")
+            raise RuntimeError("https://hooks.example.com/secret-path")
+
+        monkeypatch.setattr(scheduler.webhook, "send_notification", fail_webhook)
+
+        result = scheduler.run_reminder_scan()
+
+        assert result == {"sent": 2, "failed": 1}
+        assert sorted(calls) == ["bark", "telegram", "webhook"]
+        check_db = Session()
+        try:
+            logs = check_db.scalars(
+                select(NotificationLog)
+                .where(NotificationLog.subscription_id == sub_id)
+                .order_by(NotificationLog.channel)
+            ).all()
+            assert {(log.channel, log.status) for log in logs} == {
+                ("telegram", "sent"),
+                ("bark", "sent"),
+                ("webhook", "failed"),
+            }
+            webhook_log = next(log for log in logs if log.channel == "webhook")
+            assert webhook_log.message == "RuntimeError"
+            assert "secret-path" not in webhook_log.message
+        finally:
+            check_db.close()
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_run_reminder_scan_executes_ready_channels_concurrently(monkeypatch):
+    from threading import Barrier
+
+    db, engine = make_db()
+    Session = sessionmaker(bind=engine)
+    try:
+        user = add_user(
+            db,
+            telegram_enabled=True,
+            telegram_bot_token="test-bot-token",
+            telegram_chat_id="123",
+            bark_enabled=True,
+            bark_device_key="test-device-key",
+            webhook_enabled=True,
+            webhook_url="https://hooks.example.com/subly",
+            webhook_secret="test-signing-secret",
+        )
+        add_subscription(db, user)
+        db.commit()
+        db.close()
+
+        barrier = Barrier(3)
+
+        def rendezvous(*args, **kwargs):
+            barrier.wait(timeout=2)
+            return {}
+
+        monkeypatch.setattr(scheduler.database, "SessionLocal", lambda: Session())
+        monkeypatch.setattr(scheduler, "_local_today", lambda: date(2024, 1, 1))
+        monkeypatch.setattr(scheduler.exchange, "convert", lambda db, amount, from_cur, to_cur: amount)
+        monkeypatch.setattr(scheduler.activity, "log", lambda *args, **kwargs: None)
+        monkeypatch.setattr(scheduler.telegram, "send_message", rendezvous)
+        monkeypatch.setattr(scheduler.bark, "send_push", rendezvous)
+        monkeypatch.setattr(scheduler.webhook, "send_notification", rendezvous)
+
+        assert scheduler.run_reminder_scan() == {"sent": 3, "failed": 0}
+    finally:
+        db.close()
+        engine.dispose()
+
+
 def test_parse_days_keeps_negatives_and_ignores_non_numeric_values():
     # 负数表示过期后第 N 天提醒，应保留；非数字仍丢弃。
     assert scheduler._parse_days("7, 1, bad, ,0,-1,-7") == [7, 1, 0, -1, -7]
@@ -551,7 +705,6 @@ def test_run_reminder_scan_does_not_count_skip_as_failed_on_rescan(monkeypatch):
 
 def test_run_reminder_scan_skips_paused_subscriptions(monkeypatch):
     """暂停订阅不应被提醒扫描触发，即使到期且配置了提醒天数。"""
-    from datetime import timedelta
     db, engine = make_db()
     Session = sessionmaker(bind=engine)
     try:

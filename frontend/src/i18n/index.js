@@ -24,7 +24,7 @@ const zh = {
     verifyTitle: '邮箱验证', verifyTip: '验证码已发送至 {email}，请查收并填写（10 分钟内有效）',
     radarKicker: '实时续费雷达', radarTitle: '续费雷达控制台',
     radarSubtitle: '把订阅、域名、VPS 和提醒通道放进自己的自托管雷达站。',
-    radarScan: '30 天续费扫描', radarAlerts: 'Telegram + Bark 双通道', radarLedger: 'SQLite 本地账本',
+    radarScan: '30 天续费扫描', radarAlerts: 'Telegram + Bark + Webhook 多通道', radarLedger: 'SQLite 本地账本',
     code: '验证码', codePh: '6 位数字', verifyBtn: '验证邮箱', backToLogin: '返回登录',
     pendingTitle: '等待审核', pendingMsg: '注册成功，正在等待管理员审核通过后即可登录。',
     registerOk: '注册成功，请登录'
@@ -99,12 +99,14 @@ const zh = {
     ranking: '支出排行', oneTime: '永久购买', upcoming: '即将续费', expired: '已过期',
     category: '分类', monthly: '月支出', percent: '占比', total: '月支出合计', empty: '暂无数据',
     monthlyTotal: '每月合计', yearlyTotal: '每年合计', byCategory: '分类支出占比', spendTrend: '支出概览',
+    budget: '月度预算', budgetUsed: '已用 {n}%', budgetOver: '超支 {n}',
+    trend: '支出趋势', trendHistory: '历史付款', trendFuture: '未来预计', trendEmpty: '暂无趋势数据',
     recurringSubs: '循环订阅', permanentBuy: '永久购买', count: '数量', countUnit: '项', amount: '金额', date: '日期', type: '类型',
     permanentTotal: '永久购买总额', recurringMonthly: '循环订阅月支出', noData: '暂无可视化数据',
     finRadar: '财务雷达', reportSubtitle: '支出结构、续费风险与近期付款信号', riskRadar: '续费压力', riskTotal: '风险信号'
   },
   settings: {
-    title: '设置', theme: '主题', baseCurrency: '基准货币', telegram: 'Telegram 通知',
+    title: '设置', theme: '主题', baseCurrency: '基准货币', monthlyBudget: '月度预算', budgetPh: '不设预算上限', budgetHint: '用于雷达与报表的超支预警，按月化续费成本对比。', budgetClearedOnCurrencyChange: '已切换基准货币，月度预算已清空，请按新币种重新设置。', telegram: 'Telegram 通知',
     tgEnabled: '启用 Telegram 通知', botToken: 'Bot Token', adminId: 'Admin ID',
     apiBase: 'TG API 反代（可选）', proxy: 'HTTP 代理（可选）',
     chatId: 'Chat ID', checkBot: '验证机器人', testSend: '发送测试',
@@ -115,6 +117,9 @@ const zh = {
     barkServer: '服务器地址（可选）', barkSound: '提示音（可选）', barkGroup: '分组（可选）', barkTtl: 'TTL（秒，可选）',
     barkTtlPh: '留空使用默认', barkTtlInvalid: 'TTL 必须是非负整数',
     barkTip: '在 iOS 上安装 Bark App，打开后复制你的 Device Key 填到下面即可（支持自建服务器）。',
+    webhook: 'Webhook 通知', webhookEnabled: '启用 Webhook 通知', webhookUrl: '接收地址', webhookSecret: '签名密钥',
+    webhookTip: '向你的自动化服务发送 HMAC-SHA256 签名 JSON；签名位于 X-Subly-Signature 请求头。',
+    webhookUrlPh: 'https://example.com/subly-webhook', webhookSecretPh: '填写接收方共享的签名密钥',
     rateTable: '常用货币汇率', rateTip: '1 单位货币兑换为 {base} 的当日金额', updatedAt: '更新于', noRates: '暂无汇率数据，请点击「刷新汇率」'
   },
   backup: {
@@ -137,7 +142,7 @@ const zh = {
     run: '运行诊断', running: '诊断中…', simulate: '模拟提醒', simulating: '模拟中…', errors: '错误', warnings: '警告', infos: '建议', wouldSend: '将发送', skipped: '跳过', scanned: '扫描', reminders: '提醒', all: '全部',
     runningHint: '正在扫描数据，请稍候…', simulatingHint: '正在模拟提醒，请稍候…', lastRun: '上次运行：{time}',
     issueTitle: '诊断结果', issueTip: '优先处理错误，再处理警告；建议项用于发现潜在维护风险。', noIssues: '当前没有匹配的诊断项',
-    simTitle: '提醒 dry-run', dryRunTip: '按指定日期模拟提醒扫描，只预览 Telegram / Bark 文案，不触发真实外发。',
+    simTitle: '提醒 dry-run', dryRunTip: '按指定日期模拟提醒扫描，预览 Telegram、Bark 与 Webhook 内容，不触发真实外发。',
     asOfDate: '模拟日期', userId: '用户 ID（可选）', subscriptionId: '订阅 ID（可选）', channel: '通道', allChannels: '全部通道', limit: '返回上限', includeSkipped: '显示跳过原因', runSimulation: '运行提醒模拟', noSimulation: '暂无模拟结果',
     repair: '一键修复', repairing: '修复中…', repairOk: '已修复，正在刷新…'
   },

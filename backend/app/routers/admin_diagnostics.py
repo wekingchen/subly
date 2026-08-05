@@ -36,8 +36,8 @@ def simulate_reminders(
     admin: User = Depends(get_admin_user),
     db: Session = Depends(get_db),
 ):
-    if payload.channel not in {"all", "telegram", "bark"}:
-        raise HTTPException(400, "通道必须是 all、telegram 或 bark")
+    if payload.channel not in {"all", "telegram", "bark", "webhook"}:
+        raise HTTPException(400, "通道必须是 all、telegram、bark 或 webhook")
     if payload.user_id is not None and not db.get(User, payload.user_id):
         raise HTTPException(404, "用户不存在")
     as_of = payload.as_of_date or date.today()

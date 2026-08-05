@@ -53,6 +53,11 @@ def _is_blocked_host(host: str) -> bool:
         ip = ip_address(host)
     except (ValueError, AddressValueError):
         return False  # 域名不在本地拦截范围（DNS 解析时机不可控，这里只挡字面 IP）
+    # IPv4-mapped IPv6（如 ::ffff:169.254.169.254）按其映射 IPv4 判定，
+    # 否则可绕过链路本地/元数据地址禁令。
+    mapped = getattr(ip, "ipv4_mapped", None)
+    if mapped is not None:
+        ip = mapped
     return ip.is_link_local or ip.is_unspecified
 
 
@@ -72,6 +77,9 @@ def is_internal_host(host: str) -> bool:
         ip = ip_address(host)
     except (ValueError, AddressValueError):
         return False
+    mapped = getattr(ip, "ipv4_mapped", None)
+    if mapped is not None:
+        ip = mapped
     return (
         ip.is_private
         or ip.is_loopback
@@ -150,6 +158,7 @@ class UserOut(BaseModel):
     is_active: bool
     theme: str
     base_currency: str
+    monthly_budget: float | None = None
     category_order: list[int] | None = None
     telegram_enabled: bool
     telegram_bot_token: str | None
@@ -163,11 +172,15 @@ class UserOut(BaseModel):
     bark_sound: str | None
     bark_group: str | None
     bark_ttl: int | None
+    webhook_enabled: bool
+    webhook_url: str | None
+    webhook_secret: str | None
 
 
 class UserUpdate(BaseModel):
     theme: str | None = None
     base_currency: str | None = None
+    monthly_budget: float | None = Field(default=None, ge=0, allow_inf_nan=False)
     category_order: list[int] | None = None
     telegram_enabled: bool | None = None
     telegram_bot_token: str | None = None
@@ -181,6 +194,16 @@ class UserUpdate(BaseModel):
     bark_sound: str | None = None
     bark_group: str | None = None
     bark_ttl: int | None = Field(default=None, ge=0)
+    webhook_enabled: bool | None = None
+    webhook_url: str | None = None
+    webhook_secret: str | None = None
+
+    @field_validator("webhook_secret")
+    @classmethod
+    def normalize_empty_webhook_secret(cls, value):
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
 
 
 # ---------- Category ----------
@@ -476,6 +499,7 @@ class ReminderSimulationSummary(BaseModel):
     skipped: int = 0
     telegram: int = 0
     bark: int = 0
+    webhook: int = 0
     already_sent: int = 0
     channel_not_ready: int = 0
     invalid: int = 0

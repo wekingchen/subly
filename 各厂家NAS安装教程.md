@@ -201,10 +201,11 @@ NAS 图形界面：重新拉取 `latest`，再重建容器（保持 `/app/data` 
 **Q：不想开放注册怎么办？**
 - 当前文档只建议把部署入口放在可信网络或反向代理后，并保留 `REQUIRE_ADMIN_APPROVAL=true`。这样即使有人注册，也必须管理员审核后才能使用。
 
-**Q：Telegram / Bark 收不到提醒？**
+**Q：Telegram / Bark / Webhook 收不到提醒？**
 - Telegram：确认 Bot Token 正确、已和机器人对话过拿到 Chat ID；国内访问需要在设置里配 HTTP 代理或 Telegram API 反代。
 - Bark：确认 Device Key 正确、iOS 上 Bark App 在线；自建 Bark 服务器要确认容器能访问到那个地址。TTL 只能填写非负整数秒数，留空表示使用 Bark 默认值。
-- 两者可以同时开启，互不影响，建议先在「设置」页点「发送测试」确认通道本身是通的。
+- Webhook：确认接收 URL 可从容器访问、接收端返回 2xx，并使用相同共享密钥验证 `X-Subly-Signature` 中的 HMAC-SHA256 签名。
+- 三个通道可以同时开启，互不影响，建议先在「设置」页点「发送测试」确认通道本身是通的。
 - 若自动提醒没有触发，检查订阅是否为启用状态、到期日与提前提醒天数是否匹配，以及 `REMINDER_SCAN_TIME` 与 `TZ` 是否符合预期。
 
 **Q：图标库没有真实图标或加载很慢？**

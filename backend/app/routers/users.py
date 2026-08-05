@@ -13,7 +13,7 @@ from app.security import hash_password, verify_password
 router = APIRouter(prefix="/api/me", tags=["me"])
 
 # 后端会据此地址出网，需校验协议与高危地址，防 SSRF。
-_OUTBOUND_URL_FIELDS = ("telegram_api_base", "telegram_proxy", "bark_server")
+_OUTBOUND_URL_FIELDS = ("telegram_api_base", "telegram_proxy", "bark_server", "webhook_url")
 
 
 class AccountUpdate(BaseModel):
@@ -33,6 +33,14 @@ def update_me(
     db: Session = Depends(get_db),
 ):
     data = payload.model_dump(exclude_unset=True)
+    # 月预算以基准货币计价；切换币种时若调用方未显式给出新预算，原子清空旧预算，
+    # 避免旧数字被按新币种解释。调用方也可在同一请求里提交新的 monthly_budget。
+    if (
+        "base_currency" in data
+        and data["base_currency"] != user.base_currency
+        and "monthly_budget" not in data
+    ):
+        data["monthly_budget"] = None
     for field in _OUTBOUND_URL_FIELDS:
         if field in data:
             try:

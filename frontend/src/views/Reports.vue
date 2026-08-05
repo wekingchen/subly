@@ -51,6 +51,27 @@
         </div>
       </div>
 
+      <div class="card budget-card" v-if="budget !== null">
+        <div class="budget-head">
+          <span class="panel-title"><span class="panel-signal"></span>{{ t('reports.budget') }}</span>
+          <span class="mono-data" :class="{ over: budgetOver }">
+            {{ money(monthlyTotal) }} / {{ money(budget) }}
+          </span>
+        </div>
+        <div class="budget-track">
+          <div class="budget-fill" :class="{ over: budgetOver }" :style="{ width: budgetPct + '%' }"></div>
+        </div>
+        <p class="muted budget-status">
+          {{ budgetOver ? t('reports.budgetOver', { n: money(monthlyTotal - budget) })
+                        : t('reports.budgetUsed', { n: budgetPct }) }}
+        </p>
+      </div>
+
+      <div class="card trend-card">
+        <h3 class="panel-title"><span class="panel-signal"></span>{{ t('reports.trend') }}</h3>
+        <TrendChart :history="paymentHistory" :future="futureTrend" :base-currency="cur" :current-month="currentMonth" />
+      </div>
+
       <div class="grid two">
         <div class="card chart-card">
           <h3 class="panel-title"><span class="panel-signal"></span>{{ t('reports.byCategory') }}</h3>
@@ -311,11 +332,13 @@ import api from '../api'
 import RadarBars from '../components/RadarBars.vue'
 import ServiceIcon from '../components/ServiceIcon.vue'
 import SignalDot from '../components/SignalDot.vue'
+import TrendChart from '../components/TrendChart.vue'
 import { useBreakpoint } from '../composables/useBreakpoint'
 import { useAuth } from '../stores/auth'
-import { daysLeft } from '../utils/date'
+import { daysLeft, toISODate } from '../utils/date'
 import { emojiOf } from '../utils/icon'
 import { amountOf, formatMoney } from '../utils/money'
+import { expandRenewalsInRange } from '../utils/recurrence'
 import { renewalStatus } from '../utils/renewal'
 
 const { t } = useI18n()
@@ -326,6 +349,28 @@ const active = ref('overview')
 const cur = computed(() => auth.user?.base_currency || 'CNY')
 
 const insights = ref({ breakdown: [] })
+const paymentHistory = ref([])
+const activeSubs = ref([])
+const currentMonth = (() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}` })()
+// 未来支出投影：基于已加载生效订阅，按周期展开到未来 6 个月（含当月），按月聚合基准金额。
+// 用 ISO 日期字符串作边界（parseLocalDate 按本地零点），避免带当前时刻导致漏掉今天；
+// 报表包含 show_in_calendar=false 的订阅（与报表支出统计口径一致），传 includeHidden。
+const futureTrend = computed(() => {
+  if (!activeSubs.value.length) return []
+  const now = new Date()
+  const startISO = toISODate(now)
+  // 6 个月窗口的末尾：当月起算第 5 个月末（含当月共 6 个自然月）
+  const end = new Date(now.getFullYear(), now.getMonth() + 6, 0)  // 第6个月首日的前一天=第5个月末
+  const endISO = toISODate(end)
+  const events = expandRenewalsInRange(activeSubs.value, startISO, endISO, { includeHidden: true })
+  const byMonth = {}
+  for (const ev of events) {
+    const m = (ev.occurrence_date || '').slice(0, 7)
+    if (!m) continue
+    byMonth[m] = (byMonth[m] || 0) + amountOf(ev)
+  }
+  return Object.entries(byMonth).map(([month, amount]) => ({ month, amount: Math.round(amount * 100) / 100 }))
+})
 const detail = ref({ recurring: [], one_time: [] })
 const ranking = ref([])
 const oneTime = ref([])
@@ -368,6 +413,15 @@ const donutStyle = computed(() => {
 const maxMonthly = computed(() => Math.max(1, ...(insights.value.breakdown || []).map((b) => b.monthly)))
 function barW(b) { return Math.round((b.monthly / maxMonthly.value) * 100) }
 const recurringCount = computed(() => (detail.value.recurring || []).reduce((a, r) => a + r.count, 0))
+// 月度预算：基于月化 run-rate（insights.monthly_total）对比用户预算
+const budget = computed(() => auth.user?.monthly_budget ?? null)
+const monthlyTotal = computed(() => insights.value.monthly_total || 0)
+const budgetOver = computed(() => budget.value !== null && monthlyTotal.value > budget.value)
+const budgetPct = computed(() => {
+  if (budget.value === null) return 0
+  if (budget.value === 0) return monthlyTotal.value > 0 ? 100 : 0
+  return Math.min(100, Math.round((monthlyTotal.value / budget.value) * 100))
+})
 const reportStatus = computed(() => {
   if (expired.value.length) return 'overdue'
   if (upcoming.value.some((s) => {
@@ -398,16 +452,21 @@ const riskRadarBars = computed(() => {
 const riskTotal = computed(() => expired.value.length + upcoming.value.length)
 
 async function loadOverview() {
-  const [ins, det, u, e] = await Promise.all([
+  const results = await Promise.allSettled([
     api.get('/api/reports/insights'),
     api.get('/api/reports/category-detail'),
     api.get('/api/reports/upcoming'),
-    api.get('/api/reports/expired')
+    api.get('/api/reports/expired'),
+    api.get('/api/reports/payment-history', { params: { months: 6 } }),
+    api.get('/api/subscriptions', { params: { active: true } })
   ])
-  insights.value = ins.data
-  detail.value = det.data
-  upcoming.value = u.data
-  expired.value = e.data
+  const [ins, det, u, e, hist, subs] = results.map((r) => (r.status === 'fulfilled' ? r.value : null))
+  if (ins) insights.value = ins.data
+  if (det) detail.value = det.data
+  if (u) upcoming.value = u.data
+  if (e) expired.value = e.data
+  if (hist) paymentHistory.value = hist.data.history || []
+  if (subs) activeSubs.value = subs.data || []
 }
 async function loadInsights() {
   const [r, o, u, e] = await Promise.all([
@@ -491,6 +550,14 @@ h1 { margin: 0; }
 
 /* KPI */
 .kpis { grid-template-columns: repeat(4, 1fr); margin-bottom: 16px; }
+.budget-card { margin-bottom: 16px; }
+.budget-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+.budget-track { height: 12px; border-radius: 20px; overflow: hidden; background: color-mix(in srgb, var(--border) 52%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--border) 55%, transparent); }
+.budget-fill { height: 100%; border-radius: 20px; background: var(--primary); transition: width .4s ease; }
+.budget-fill.over { background: var(--danger); }
+.budget-head .over { color: var(--danger); font-weight: 700; }
+.budget-status { font-size: 12px; margin: 6px 0 0; }
 .kpi { position: relative; overflow: hidden; border-color: color-mix(in srgb, var(--signal-cyan) 18%, var(--border)); }
 .kpi-l { font-size: 13px; color: var(--text-soft); }
 .kpi-v { font-size: 23px; font-weight: 800; margin-top: 6px; letter-spacing: -.03em; }

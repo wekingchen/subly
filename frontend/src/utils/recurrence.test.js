@@ -100,6 +100,15 @@ describe('expandRenewalsInRange', () => {
     expect(events).toHaveLength(0)
   })
 
+  it('includes hidden subscriptions when includeHidden option is set', () => {
+    const events = expandRenewalsInRange(
+      [baseSub({ id: 1, show_in_calendar: false })],
+      '2026-07-01', '2026-07-31',
+      { includeHidden: true }
+    )
+    expect(events).toHaveLength(1)  // 报表趋势图需包含关闭日历显示的订阅
+  })
+
   it('groups events by occurrence date', () => {
     const events = expandRenewalsInRange([
       baseSub({ id: 1, next_renewal_date: '2026-07-05' }),

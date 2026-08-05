@@ -31,7 +31,7 @@ function jumpCloseToRangeStart(cursor, sub, startTime) {
  * - 输出对象把 next_renewal_date 替换为 occurrence 日期，方便复用 renewalStatus / amountOf 等。
  * - 不修改订阅本身、不写库。
  */
-export function expandRenewalsInRange(subscriptions, rangeStart, rangeEnd) {
+export function expandRenewalsInRange(subscriptions, rangeStart, rangeEnd, options = {}) {
   const start = parseLocalDate(rangeStart)
   const end = parseLocalDate(rangeEnd)
   if (!start || !end) return []
@@ -44,7 +44,8 @@ export function expandRenewalsInRange(subscriptions, rangeStart, rangeEnd) {
     if (sub.billing_type !== 'recurring') continue
     if (sub.is_active === false) continue
     if (sub.is_paused === true) continue
-    if (sub.show_in_calendar === false) continue
+    // 日历视图排除"不显示在日历"的订阅；报表趋势图等需包含，传 includeHidden:true。
+    if (!options.includeHidden && sub.show_in_calendar === false) continue
     const base = parseLocalDate(sub.next_renewal_date)
     if (!base) continue
     const endLimit = parseLocalDate(sub.end_date)

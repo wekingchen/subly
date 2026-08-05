@@ -84,6 +84,7 @@
             <option value="all">{{ t('diagnostics.allChannels') }}</option>
             <option value="telegram">Telegram</option>
             <option value="bark">Bark</option>
+            <option value="webhook">Webhook</option>
           </select>
         </label>
         <label>{{ t('diagnostics.limit') }}<input v-model.number="simForm.limit" type="number" min="1" max="1000" :disabled="simLoading" /></label>
@@ -102,6 +103,7 @@
         <span>{{ t('diagnostics.skipped') }} <b class="mono-data">{{ simulation.summary?.skipped || 0 }}</b></span>
         <span>Telegram <b class="mono-data">{{ simulation.summary?.telegram || 0 }}</b></span>
         <span>Bark <b class="mono-data">{{ simulation.summary?.bark || 0 }}</b></span>
+        <span>Webhook <b class="mono-data">{{ simulation.summary?.webhook || 0 }}</b></span>
       </div>
 
       <p v-if="simErr" class="err" role="alert">{{ simErr }}</p>

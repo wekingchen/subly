@@ -28,6 +28,57 @@ def add_user(db, username="alice"):
     return user
 
 
+def test_apply_user_preferences_restores_budget_with_its_currency():
+    db, engine = make_db()
+    try:
+        user = add_user(db)
+        user.monthly_budget = 500
+        db.add(Currency(code="USD", name="美元", symbol="$", is_custom=False))
+        db.flush()
+
+        backup._apply_user_preferences(
+            db,
+            user,
+            {"base_currency": "usd", "monthly_budget": 120},
+        )
+
+        assert user.base_currency == "USD"
+        assert user.monthly_budget == 120
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_apply_user_preferences_rejects_invalid_currency_before_commit():
+    db, engine = make_db()
+    try:
+        user = add_user(db)
+        with pytest.raises(ValueError, match="base_currency"):
+            backup._apply_user_preferences(
+                db,
+                user,
+                {"base_currency": "", "monthly_budget": 120},
+            )
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_apply_user_preferences_rejects_unknown_currency():
+    db, engine = make_db()
+    try:
+        user = add_user(db)
+        with pytest.raises(ValueError, match="不存在或不属于"):
+            backup._apply_user_preferences(
+                db,
+                user,
+                {"base_currency": "NOTREAL", "monthly_budget": 120},
+            )
+    finally:
+        db.close()
+        engine.dispose()
+
+
 def test_parse_date_accepts_iso_and_ignores_invalid_values():
     assert backup._parse_date("2024-01-02") == date(2024, 1, 2)
     assert backup._parse_date("bad") is None
@@ -492,6 +543,36 @@ def test_restore_rejects_non_string_family_members():
         user = add_user(db)
         with pytest.raises(ValueError):
             backup._restore_entities(db, user, {"subscriptions": [{"name": "x", "family_members": [1, 2]}]}, replace=False)
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_import_all_rejects_invalid_budget_before_flushing_new_user():
+    db, engine = make_db()
+    try:
+        admin = add_user(db, username="admin")
+        admin.is_admin = True
+        db.commit()
+
+        with pytest.raises(Exception) as exc:
+            backup.import_all(
+                backup.ImportAllIn(data={
+                    "users": [{
+                        "user": {
+                            "username": "restored-user",
+                            "email": "restored@example.com",
+                            "monthly_budget": "not-a-number",
+                        },
+                        "subscriptions": [],
+                    }]
+                }),
+                admin=admin,
+                db=db,
+            )
+
+        assert getattr(exc.value, "status_code", None) == 400
+        assert "monthly_budget" in getattr(exc.value, "detail", "")
     finally:
         db.close()
         engine.dispose()
