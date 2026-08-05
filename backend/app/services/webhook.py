@@ -62,10 +62,17 @@ def build_payload(
     return payload
 
 
-def send_notification(url: str, secret: str, payload: dict) -> dict:
+def send_notification(
+    url: str,
+    secret: str,
+    payload: dict,
+    *,
+    delivery_id: str | None = None,
+) -> dict:
     """向 url POST 签名 JSON。失败抛异常。返回 payload（供调用方记日志摘要）。
 
-    secret 不进 payload、不进任何返回值。
+    secret 不进 payload、不进任何返回值。Outbox 投递会附带稳定 Delivery ID，
+    接收方可据此实现幂等；测试事件等非 Outbox 调用可不传。
     """
     if not url:
         raise RuntimeError("未配置 Webhook URL")
@@ -76,6 +83,8 @@ def send_notification(url: str, secret: str, payload: dict) -> dict:
         "Content-Type": "application/json",
         "X-Subly-Signature": sign(secret, body),
     }
+    if delivery_id:
+        headers["X-Subly-Delivery-ID"] = delivery_id
     with _client() as c:
         # 接收方响应体不参与业务；流式只检查状态码，避免错误配置返回超大 body 占用内存。
         with c.stream("POST", url, content=body, headers=headers) as resp:

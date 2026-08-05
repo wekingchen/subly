@@ -8,7 +8,17 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
 from app.database import Base
-from app.models import Bundle, Category, Currency, PaymentMethod, RenewalHistory, Subscription, User
+from app.models import (
+    Bundle,
+    Category,
+    Currency,
+    NotificationLog,
+    NotificationOutbox,
+    PaymentMethod,
+    RenewalHistory,
+    Subscription,
+    User,
+)
 from app.routers import reports, subscriptions
 from app.schemas import SubscriptionIn, SubscriptionUpdate
 from app.security import hash_password
@@ -303,8 +313,8 @@ def test_list_renewals_returns_history_descending():
         engine.dispose()
 
 
-def test_delete_subscription_clears_renewal_history():
-    """删除订阅应同步清理其续费历史，避免孤儿记录。"""
+def test_delete_subscription_clears_notification_and_renewal_records():
+    """删除订阅应清理 Outbox、尝试日志与续费历史，避免 ID 复用污染。"""
     db, engine = make_db()
     try:
         user = add_user(db)
@@ -322,16 +332,45 @@ def test_delete_subscription_clears_renewal_history():
         db.add(sub)
         db.commit()
         subscriptions.renew_sub(sub.id, subscriptions.RenewIn(mode="due"), user, db)
+        outbox = NotificationOutbox(
+            subscription_id=sub.id,
+            user_id=user.id,
+            business_date=date(2024, 1, 24),
+            days_before=7,
+            channel="bark",
+            status="dead",
+            subscription_name=sub.name,
+            renewal_date=date(2024, 1, 31),
+            payload={"title": "提醒", "body": "正文"},
+        )
+        db.add(outbox)
+        db.flush()
+        db.add(NotificationLog(
+            subscription_id=sub.id,
+            user_id=user.id,
+            outbox_id=outbox.id,
+            attempt_no=1,
+            days_before=7,
+            channel="bark",
+            status="failed",
+            message="HTTP 400",
+        ))
+        db.commit()
         assert db.scalars(select(RenewalHistory).where(RenewalHistory.subscription_id == sub.id)).all()
 
         subscriptions.delete_sub(
             sub.id, subscriptions.DeleteIn(password="correct-pass"), user, db
         )
 
-        assert (
-            db.scalars(select(RenewalHistory).where(RenewalHistory.subscription_id == sub.id)).all()
-            == []
-        )
+        assert db.scalars(
+            select(RenewalHistory).where(RenewalHistory.subscription_id == sub.id)
+        ).all() == []
+        assert db.scalars(
+            select(NotificationLog).where(NotificationLog.subscription_id == sub.id)
+        ).all() == []
+        assert db.scalars(
+            select(NotificationOutbox).where(NotificationOutbox.subscription_id == sub.id)
+        ).all() == []
     finally:
         db.close()
         engine.dispose()

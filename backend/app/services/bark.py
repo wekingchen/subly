@@ -14,6 +14,14 @@ _MAX_ICON_URL_LENGTH = 2048
 _MAX_PATH_DECODE_ROUNDS = 8
 
 
+class BarkResponseError(RuntimeError):
+    """Bark 在 HTTP 200 响应体中返回的结构化失败。"""
+
+    def __init__(self, code: int | None):
+        super().__init__("Bark 推送失败")
+        self.code = code
+
+
 def _client() -> httpx.Client:
     return httpx.Client(timeout=15)
 
@@ -127,5 +135,6 @@ def send_push(
         data = resp.json()
         # Bark 返回 200 状态码也可能在 body 里带 code != 200 表示失败（如 key 错误）
         if isinstance(data, dict) and data.get("code") not in (200, None):
-            raise RuntimeError(data.get("message") or "Bark 推送失败")
+            code = data.get("code")
+            raise BarkResponseError(code if isinstance(code, int) else None)
         return data

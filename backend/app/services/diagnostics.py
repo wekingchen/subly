@@ -1,10 +1,19 @@
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.billing import compute_next_renewal, is_subscription_current
-from app.models import Bundle, Category, Currency, NotificationLog, PaymentMethod, Subscription, User
+from app.models import (
+    Bundle,
+    Category,
+    Currency,
+    NotificationLog,
+    NotificationOutbox,
+    PaymentMethod,
+    Subscription,
+    User,
+)
 from app.services.scheduler import _as_local_date, _local_today, _parse_days
 from app.subscription_rules import (
     apply_keepalive_scope,
@@ -62,14 +71,17 @@ def run_data_diagnostics(db: Session, user_id: int | None = None) -> dict:
     user_stmt = select(User)
     sub_stmt = select(Subscription)
     log_stmt = select(NotificationLog)
+    outbox_stmt = select(NotificationOutbox)
     if user_id is not None:
         user_stmt = user_stmt.where(User.id == user_id)
         sub_stmt = sub_stmt.where(Subscription.user_id == user_id)
         log_stmt = log_stmt.where(NotificationLog.user_id == user_id)
+        outbox_stmt = outbox_stmt.where(NotificationOutbox.user_id == user_id)
 
     users = db.scalars(user_stmt.order_by(User.id)).all()
     subs = db.scalars(sub_stmt.order_by(Subscription.id)).all()
     logs = db.scalars(log_stmt.order_by(NotificationLog.id)).all()
+    outbox_rows = db.scalars(outbox_stmt.order_by(NotificationOutbox.id)).all()
     user_ids = {u.id for u in users}
     all_user_ids = set(db.scalars(select(User.id)).all())
     currencies_by_code = {
@@ -451,6 +463,62 @@ def run_data_diagnostics(db: Session, user_id: int | None = None) -> dict:
             suggestion="到通知中心查看失败原因，并检查 Telegram、Bark 或 Webhook 配置。",
         )
 
+    dead_count = sum(1 for row in outbox_rows if row.status == "dead")
+    retry_count = sum(1 for row in outbox_rows if row.status == "retry_wait")
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    expired_leases = sum(
+        1
+        for row in outbox_rows
+        if row.status == "sending"
+        and row.lease_expires_at is not None
+        and row.lease_expires_at <= now
+    )
+    orphan_outbox = sum(
+        1
+        for row in outbox_rows
+        if row.user_id not in all_user_ids or row.subscription_id not in sub_ids
+    )
+    if dead_count:
+        _issue(
+            issues,
+            severity="warn",
+            scope="notification",
+            code="notification_dead_letters",
+            title="通知 dead-letter 待处理",
+            detail=f"共有 {dead_count} 条通知已停止自动重试。",
+            suggestion="到通知中心检查安全错误摘要，修复配置后手动重新发送。",
+        )
+    if retry_count:
+        _issue(
+            issues,
+            severity="info",
+            scope="notification",
+            code="notification_retry_backlog",
+            title="通知正在等待重试",
+            detail=f"共有 {retry_count} 条通知处于自动重试等待状态。",
+            suggestion="系统会按退避策略自动重试；持续积压时检查网络与通道服务。",
+        )
+    if expired_leases:
+        _issue(
+            issues,
+            severity="warn",
+            scope="notification",
+            code="notification_lease_timeout",
+            title="通知投递租约已超时",
+            detail=f"共有 {expired_leases} 条 sending 任务租约已过期。",
+            suggestion="Dispatcher 会自动重新认领；若持续存在，请检查后台调度器。",
+        )
+    if orphan_outbox:
+        _issue(
+            issues,
+            severity="error",
+            scope="notification",
+            code="notification_outbox_orphan",
+            title="通知 Outbox 存在孤儿记录",
+            detail=f"共有 {orphan_outbox} 条任务引用不存在的用户或订阅。",
+            suggestion="备份数据库后清理孤儿任务，并检查删除或恢复流程。",
+        )
+
     counts = {"error": 0, "warn": 0, "info": 0}
     for item in issues:
         counts[item["severity"]] = counts.get(item["severity"], 0) + 1
@@ -472,6 +540,10 @@ def run_data_diagnostics(db: Session, user_id: int | None = None) -> dict:
             "subscriptions": len(subs),
             "active_recurring": active_recurring,
             "notification_failures_30d": failed_30d,
+            "notification_dead_letters": dead_count,
+            "notification_retry_backlog": retry_count,
+            "notification_expired_leases": expired_leases,
+            "notification_outbox_orphans": orphan_outbox,
         },
         "issues": issues,
     }

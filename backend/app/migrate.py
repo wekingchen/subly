@@ -6,6 +6,7 @@ SQLAlchemy 的 create_all 只会创建缺失的「表」，不会给已存在的
 """
 import json
 import logging
+import secrets
 
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
@@ -43,6 +44,11 @@ _COLUMNS = [
     ("exchange_rates", "is_manual", "BOOLEAN NOT NULL DEFAULT 0"),
     ("exchange_rates", "user_id", "INTEGER"),
     ("icon_library_services", "category_keys", "JSON"),
+    ("notification_outbox", "delivery_id", "VARCHAR(32)"),
+    ("notification_outbox", "retry_cycle", "INTEGER NOT NULL DEFAULT 0"),
+    ("notification_log", "outbox_id", "INTEGER"),
+    ("notification_log", "attempt_no", "INTEGER"),
+    ("notification_log", "retry_cycle", "INTEGER"),
 ]
 
 
@@ -80,6 +86,52 @@ def run_migrations(engine: Engine) -> None:
                 )
                 raise RuntimeError(f"数据库结构迁移失败：无法添加 {table}.{column}") from exc
             logger.info("event=migration_column_added table=%s column=%s", table, column)
+
+        if (
+            _table_exists(conn, "notification_outbox")
+            and _column_exists(conn, "notification_outbox", "delivery_id")
+        ):
+            try:
+                missing_ids = conn.execute(text(
+                    "SELECT id FROM notification_outbox "
+                    "WHERE delivery_id IS NULL OR TRIM(delivery_id) = ''"
+                )).scalars().all()
+                for row_id in missing_ids:
+                    conn.execute(
+                        text(
+                            "UPDATE notification_outbox SET delivery_id = :delivery_id "
+                            "WHERE id = :id"
+                        ),
+                        {"delivery_id": secrets.token_hex(16), "id": row_id},
+                    )
+                conn.execute(text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS ix_notification_outbox_delivery_id "
+                    "ON notification_outbox (delivery_id)"
+                ))
+            except Exception as exc:  # noqa: BLE001
+                logger.exception(
+                    "event=migration_outbox_delivery_id_failed error_type=%s",
+                    type(exc).__name__,
+                )
+                raise RuntimeError(
+                    "数据库结构迁移失败：无法补齐 notification_outbox.delivery_id"
+                ) from exc
+
+        if _table_exists(conn, "notification_log"):
+            try:
+                conn.execute(text(
+                    "CREATE INDEX IF NOT EXISTS ix_notification_log_outbox_id "
+                    "ON notification_log (outbox_id)"
+                ))
+            except Exception as exc:  # noqa: BLE001
+                logger.exception(
+                    "event=migration_add_index_failed index=ix_notification_log_outbox_id "
+                    "error_type=%s",
+                    type(exc).__name__,
+                )
+                raise RuntimeError(
+                    "数据库结构迁移失败：无法创建 notification_log.outbox_id 索引"
+                ) from exc
 
         try:
             if _table_exists(conn, "icon_library_services") and _column_exists(conn, "icon_library_services", "category_keys"):

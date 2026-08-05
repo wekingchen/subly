@@ -2,8 +2,7 @@
 import json
 import logging
 import threading
-from concurrent.futures import ThreadPoolExecutor
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 try:
     from zoneinfo import ZoneInfo
@@ -12,14 +11,22 @@ except ImportError:  # pragma: no cover - 仅缺 tzdata 的环境兜底
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.interval import IntervalTrigger
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app import activity, database
 from app.billing import is_renewal_within_end_date, is_subscription_current
 from app.config import settings
-from app.models import Category, NotificationLog, PaymentMethod, Subscription, User
-from app.services import bark, exchange, telegram, webhook
+from app.models import (
+    Category,
+    NotificationLog,
+    NotificationOutbox,
+    PaymentMethod,
+    Subscription,
+    User,
+)
+from app.services import bark, exchange, notification_outbox, telegram, webhook  # noqa: F401
 
 _scheduler: BackgroundScheduler | None = None
 logger = logging.getLogger(__name__)
@@ -172,121 +179,141 @@ def _send_one(
     return _record_send_result(db, sub, user, n, channel, ok, message)
 
 
-def run_reminder_scan() -> dict:
-    """核心扫描逻辑（可被定时器或手动触发调用）。
+def _ready_channels(user: User) -> dict[str, bool]:
+    return {
+        "telegram": bool(
+            user.telegram_enabled and user.telegram_bot_token and user.telegram_chat_id
+        ),
+        "bark": bool(user.bark_enabled and user.bark_device_key),
+        "webhook": bool(
+            user.webhook_enabled
+            and user.webhook_url
+            and user.webhook_secret
+            and user.webhook_secret.strip()
+        ),
+    }
 
-    用非阻塞锁串行化：若已有扫描在跑，直接返回 skipped，避免并发实例因未提交日志
-    互相不可见而重复外发通知。
-    """
+
+def plan_reminder_candidates(
+    db: Session,
+    as_of: date,
+    *,
+    user_id: int | None = None,
+    subscription_id: int | None = None,
+    channel: str = "all",
+) -> dict:
+    """确定性规划到期提醒；生产扫描与 dry-run 共用，不写库、不联网。"""
+    stmt = select(Subscription).order_by(Subscription.id)
+    if user_id is not None:
+        stmt = stmt.where(Subscription.user_id == user_id)
+    if subscription_id is not None:
+        stmt = stmt.where(Subscription.id == subscription_id)
+    subs = db.scalars(stmt).all()
+    selected_channels = _simulation_channels(channel)
+    candidates: list[dict] = []
+    legacy_sent = 0
+    due_subscription_ids: set[int] = set()
+
+    for sub in subs:
+        user = db.get(User, sub.user_id)
+        if (
+            not user
+            or not user.is_active
+            or not sub.is_active
+            or sub.is_paused
+            or sub.billing_type != "recurring"
+            or not sub.next_renewal_date
+            or not is_subscription_current(as_of, sub.end_date)
+            or not is_renewal_within_end_date(sub.next_renewal_date, sub.end_date)
+        ):
+            continue
+        days_left = (sub.next_renewal_date - as_of).days
+        due_days = [n for n in _unique_days(sub.remind_days_before) if n == days_left]
+        if not due_days:
+            continue
+        readiness = _ready_channels(user)
+        for days_before in due_days:
+            for selected_channel in selected_channels:
+                if not readiness[selected_channel]:
+                    continue
+                due_subscription_ids.add(sub.id)
+                if _already_sent(db, sub.id, days_before, selected_channel, as_of):
+                    legacy_sent += 1
+                    continue
+                if selected_channel == "telegram":
+                    payload = {"text": _build_telegram_text(db, sub, user, days_left)}
+                elif selected_channel == "bark":
+                    title, body = _build_bark_text(db, sub, user, days_left)
+                    payload = {
+                        "title": title,
+                        "body": body,
+                        "url": sub.url,
+                        "icon": bark.resolve_push_icon_url(
+                            sub.icon, settings.app_public_url
+                        ),
+                    }
+                else:
+                    payload = {
+                        "event": _build_webhook_payload(
+                            db, sub, user, days_left, days_before
+                        )
+                    }
+                candidates.append({
+                    "subscription_id": sub.id,
+                    "user_id": user.id,
+                    "business_date": as_of,
+                    "days_before": days_before,
+                    "channel": selected_channel,
+                    "subscription_name": sub.name,
+                    "renewal_date": sub.next_renewal_date,
+                    "payload": payload,
+                })
+    return {
+        "scanned": len(subs),
+        "candidates": candidates,
+        "legacy_sent": legacy_sent,
+        "due_subscription_ids": due_subscription_ids,
+    }
+
+
+def run_reminder_scan() -> dict:
+    """扫描到期提醒并原子写入 Outbox；不执行任何外部 HTTP。"""
     if not _scan_lock.acquire(blocking=False):
         logger.info("event=reminder_scan_skipped reason=already_running")
-        return {"sent": 0, "failed": 0, "skipped": "已有扫描在运行"}
-    today = _local_today()
-    sent, failed = 0, 0
+        return {
+            "scanned": 0,
+            "enqueued": 0,
+            "existing": 0,
+            "skipped": "已有扫描在运行",
+        }
     if database.SessionLocal is None:
         _scan_lock.release()
-        return {"sent": 0, "failed": 0, "skipped": "数据库未配置"}
+        return {
+            "scanned": 0,
+            "enqueued": 0,
+            "existing": 0,
+            "skipped": "数据库未配置",
+        }
+    today = _local_today()
     db = database.SessionLocal()
     try:
-        subs = db.scalars(
-            select(Subscription).where(
-                Subscription.is_active.is_(True),
-                Subscription.is_paused.is_(False),
-                Subscription.billing_type == "recurring",
-                Subscription.next_renewal_date.is_not(None),
-            )
-        ).all()
-        seen: set[tuple[int, int, str]] = set()  # 同一次扫描内 (订阅, 天数, 通道) 去重
-        for sub in subs:
-            user = db.get(User, sub.user_id)
-            if not user:
-                continue
-            if not user.is_active:
-                continue  # 禁用用户不参与提醒扫描
-            if not is_subscription_current(today, sub.end_date):
-                continue
-            if not is_renewal_within_end_date(sub.next_renewal_date, sub.end_date):
-                continue
-            tg_ready = user.telegram_enabled and user.telegram_bot_token and user.telegram_chat_id
-            bark_ready = user.bark_enabled and user.bark_device_key
-            webhook_ready = user.webhook_enabled and user.webhook_url and user.webhook_secret and user.webhook_secret.strip()
-            if not tg_ready and not bark_ready and not webhook_ready:
-                continue
-            days_left = (sub.next_renewal_date - today).days
-            for n in _unique_days(sub.remind_days_before):
-                if days_left != n:
-                    continue
-                jobs: list[tuple[str, object]] = []
-                if tg_ready and _reserve_send(db, sub.id, n, today, "telegram", seen):
-                    text = _build_telegram_text(db, sub, user, days_left)
-                    chat_id = user.telegram_chat_id
-                    token = user.telegram_bot_token
-                    api_base = user.telegram_api_base
-                    proxy = user.telegram_proxy
-
-                    def _do_telegram():
-                        telegram.send_message(
-                            chat_id,
-                            text,
-                            token=token,
-                            api_base=api_base,
-                            proxy=proxy,
-                        )
-                        return text
-
-                    jobs.append(("telegram", _do_telegram))
-                if bark_ready and _reserve_send(db, sub.id, n, today, "bark", seen):
-                    title, body = _build_bark_text(db, sub, user, days_left)
-                    icon_url = bark.resolve_push_icon_url(sub.icon, settings.app_public_url)
-                    device_key = user.bark_device_key
-                    server = user.bark_server
-                    sound = user.bark_sound
-                    group = user.bark_group
-                    ttl = user.bark_ttl
-                    click_url = sub.url
-
-                    def _do_bark():
-                        bark.send_push(
-                            device_key,
-                            title,
-                            body,
-                            server=server,
-                            sound=sound,
-                            group=group,
-                            ttl=ttl,
-                            url=click_url,
-                            icon=icon_url,
-                        )
-                        return f"{title}\n{body}"
-
-                    jobs.append(("bark", _do_bark))
-                if webhook_ready and _reserve_send(db, sub.id, n, today, "webhook", seen):
-                    payload = _build_webhook_payload(db, sub, user, days_left, n)
-                    webhook_url = user.webhook_url
-                    webhook_secret = user.webhook_secret
-
-                    def _do_webhook():
-                        webhook.send_notification(webhook_url, webhook_secret, payload)
-                        return f"{payload['title']}\n{payload['body']}"
-
-                    jobs.append(("webhook", _do_webhook))
-
-                if jobs:
-                    # 仅外部 HTTP 调用进入线程池；Session 写入仍在当前线程顺序完成。
-                    with ThreadPoolExecutor(max_workers=len(jobs), thread_name_prefix="reminder") as pool:
-                        futures = [(channel, pool.submit(_execute_send, send_fn)) for channel, send_fn in jobs]
-                        for channel, future in futures:
-                            ok, message = future.result()
-                            _, status = _record_send_result(db, sub, user, n, channel, ok, message)
-                            if ok:
-                                sent += 1
-                            elif status != "skip":
-                                failed += 1
+        planned = plan_reminder_candidates(db, today)
+        enqueued = notification_outbox.enqueue_candidates(db, planned["candidates"])
+        notification_outbox.mark_scan_completed(db, today)
         db.commit()
+        candidate_count = len(planned["candidates"])
+        return {
+            "scanned": planned["scanned"],
+            "enqueued": enqueued,
+            "existing": planned["legacy_sent"] + candidate_count - enqueued,
+            "skipped": planned["scanned"] - len(planned["due_subscription_ids"]),
+        }
+    except Exception:
+        db.rollback()
+        raise
     finally:
         db.close()
         _scan_lock.release()
-    return {"sent": sent, "failed": failed}
 
 
 _CYCLE_CN = {"day": "天", "week": "周", "month": "月", "year": "年"}
@@ -486,6 +513,21 @@ def simulate_reminder_scan(
         stmt = stmt.where(Subscription.id == subscription_id)
     subs = db.scalars(stmt).all()
     channels = _simulation_channels(channel)
+    planned = plan_reminder_candidates(
+        db,
+        as_of,
+        user_id=user_id,
+        subscription_id=subscription_id,
+        channel=channel,
+    )
+    planned_by_key = {
+        (
+            item["subscription_id"],
+            item["days_before"],
+            item["channel"],
+        ): item
+        for item in planned["candidates"]
+    }
     summary = {
         "scanned": len(subs),
         "would_send": 0,
@@ -494,6 +536,8 @@ def simulate_reminder_scan(
         "bark": 0,
         "webhook": 0,
         "already_sent": 0,
+        "already_queued": 0,
+        "dead_letter": 0,
         "channel_not_ready": 0,
         "invalid": 0,
         "returned": 0,
@@ -509,6 +553,10 @@ def simulate_reminder_scan(
             summary["skipped"] += 1
             if item["status"] == "already_sent":
                 summary["already_sent"] += 1
+            if item["status"] == "already_queued":
+                summary["already_queued"] += 1
+            if item["status"] == "dead_letter":
+                summary["dead_letter"] += 1
             if item["status"] == "channel_not_ready":
                 summary["channel_not_ready"] += 1
             if item["status"] in ("invalid_reminder_days", "missing_next_renewal", "inactive", "not_recurring"):
@@ -564,37 +612,99 @@ def simulate_reminder_scan(
             continue
         for days_before in due_days:
             for ch in channels:
-                ready_by_channel = {
-                    "telegram": user.telegram_enabled and user.telegram_bot_token and user.telegram_chat_id,
-                    "bark": user.bark_enabled and user.bark_device_key,
-                    "webhook": user.webhook_enabled and user.webhook_url and user.webhook_secret and user.webhook_secret.strip(),
-                }
-                ready = ready_by_channel[ch]
+                ready = _ready_channels(user)[ch]
                 item = {**base, "days_left": days_left, "days_before": days_before, "channel": ch}
                 if not ready:
                     add({**item, "status": "channel_not_ready", "reason": f"{ch} 通道未启用或配置不完整。"})
                     continue
+                queued = db.scalar(
+                    select(NotificationOutbox).where(
+                        NotificationOutbox.subscription_id == sub.id,
+                        NotificationOutbox.business_date == as_of,
+                        NotificationOutbox.days_before == days_before,
+                        NotificationOutbox.channel == ch,
+                    )
+                )
+                if queued:
+                    status = "dead_letter" if queued.status == "dead" else (
+                        "already_sent" if queued.status == "sent" else "already_queued"
+                    )
+                    reason = {
+                        "dead_letter": "同一业务提醒已进入 dead-letter，可在通知中心手动重发。",
+                        "already_sent": "同一业务提醒已由 Outbox 成功投递。",
+                        "already_queued": "同一业务提醒已经入队。",
+                    }[status]
+                    add({**item, "status": status, "reason": reason})
+                    continue
                 if _already_sent(db, sub.id, days_before, ch, as_of):
                     add({**item, "status": "already_sent", "reason": "同一天同通道已有成功提醒记录。"})
                     continue
+                planned_item = planned_by_key.get((sub.id, days_before, ch))
+                if not planned_item:
+                    continue
+                payload = planned_item["payload"]
                 if ch == "telegram":
-                    text = _build_telegram_text(db, sub, user, days_left)
+                    text = payload["text"]
                     add({**item, "status": "would_send", "reason": "模拟日期命中提醒规则，且通道配置完整。", "body": text, "preview": text})
                 elif ch == "bark":
-                    title, body = _build_bark_text(db, sub, user, days_left)
+                    title, body = payload["title"], payload["body"]
                     add({**item, "status": "would_send", "reason": "模拟日期命中提醒规则，且通道配置完整。", "title": title, "body": body, "preview": f"{title}\n{body}"})
                 else:
-                    payload = _build_webhook_payload(db, sub, user, days_left, days_before)
+                    event = payload["event"]
                     add({
                         **item,
                         "status": "would_send",
                         "reason": "模拟日期命中提醒规则，且通道配置完整。",
-                        "title": payload["title"],
-                        "body": payload["body"],
-                        "preview": json.dumps(payload, ensure_ascii=False, indent=2),
+                        "title": event["title"],
+                        "body": event["body"],
+                        "preview": json.dumps(event, ensure_ascii=False, indent=2),
                     })
 
     return {"summary": summary, "items": items}
+
+
+def _scheduled_reminder_job() -> None:
+    run_reminder_scan()
+    notification_outbox.dispatch_due()
+
+
+def _notification_maintenance_job() -> None:
+    """每分钟确保当天扫描完成；补扫失败也不阻断已有任务投递。"""
+    today = _local_today()
+    if notification_outbox.pending_startup_scan(today):
+        try:
+            run_reminder_scan()
+        except Exception as exc:  # noqa: BLE001 - checkpoint 保持未完成，下分钟继续补扫
+            logger.exception(
+                "event=notification_catchup_scan_failed error_type=%s",
+                type(exc).__name__,
+            )
+    notification_outbox.dispatch_due()
+
+
+def _startup_notification_job() -> None:
+    _notification_maintenance_job()
+
+
+def rescan_after_restore() -> dict:
+    """恢复提交后重建当天候选；失败或锁冲突时安排一次后台重试。"""
+    try:
+        result = run_reminder_scan()
+    except Exception as exc:  # noqa: BLE001 - 恢复已提交，改为响亮记录并后台补偿
+        logger.exception(
+            "event=restore_notification_rescan_failed error_type=%s",
+            type(exc).__name__,
+        )
+        result = {"skipped": "恢复后扫描失败，已安排重试"}
+    if result.get("skipped") and _scheduler is not None:
+        _scheduler.add_job(
+            _notification_maintenance_job,
+            "date",
+            run_date=datetime.now(_local_zone()) + timedelta(seconds=2),
+            id="restore_notification_rescan",
+            replace_existing=True,
+        )
+    return result
 
 
 def start_scheduler() -> None:
@@ -615,16 +725,31 @@ def start_scheduler() -> None:
     tz = _local_zone()
     _scheduler = BackgroundScheduler(timezone=tz)
     _scheduler.add_job(
-        run_reminder_scan,
+        _scheduled_reminder_job,
         CronTrigger(hour=hour, minute=minute, timezone=tz),
         id="daily_reminder_scan",
         replace_existing=True,
+    )
+    _scheduler.add_job(
+        _notification_maintenance_job,
+        IntervalTrigger(minutes=1, timezone=tz),
+        id="notification_outbox_dispatch",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
     )
     # 每天凌晨 4 点刷新汇率
     _scheduler.add_job(
         _refresh_rates_job,
         CronTrigger(hour=4, minute=0, timezone=tz),
         id="daily_rate_refresh",
+        replace_existing=True,
+    )
+    _scheduler.add_job(
+        _startup_notification_job,
+        "date",
+        run_date=datetime.now(tz) + timedelta(seconds=1),
+        id="startup_notification_catchup",
         replace_existing=True,
     )
     _scheduler.start()

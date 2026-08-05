@@ -10,8 +10,11 @@ from app.models import (
     Category,
     Currency,
     ExchangeRate,
+    NotificationLog,
+    NotificationOutbox,
     PaymentMethod,
     RenewalHistory,
+    SchedulerState,
     Subscription,
     User,
 )
@@ -456,8 +459,8 @@ def test_restore_entities_restores_renewal_history_and_maps_to_new_sub():
         engine.dispose()
 
 
-def test_restore_entities_replace_clears_orphan_renewal_history():
-    """覆盖恢复：replace=True 时先清旧续费历史，避免新订阅复用旧 ID 继承错误历史。"""
+def test_restore_entities_replace_clears_old_notification_and_renewal_records():
+    """覆盖恢复先清旧审计/队列，避免新订阅复用旧 ID 继承错误状态。"""
     db, engine = make_db()
     try:
         user = add_user(db)
@@ -468,10 +471,37 @@ def test_restore_entities_replace_clears_orphan_renewal_history():
         )
         db.add(old_sub)
         db.flush()
+        db.add(SchedulerState(
+            key="reminder_scan",
+            last_completed_business_date=date(2024, 1, 24),
+        ))
         db.add(RenewalHistory(
             subscription_id=old_sub.id, user_id=user.id, renewed_at=date(2024, 1, 31),
             mode="due", prev_renewal_date=date(2024, 1, 31), next_renewal_date=date(2024, 2, 29),
             amount=10, currency="CNY",
+        ))
+        outbox = NotificationOutbox(
+            subscription_id=old_sub.id,
+            user_id=user.id,
+            business_date=date(2024, 1, 24),
+            days_before=7,
+            channel="webhook",
+            status="dead",
+            subscription_name=old_sub.name,
+            renewal_date=date(2024, 1, 31),
+            payload={"event": {"title": "提醒", "body": "正文"}},
+        )
+        db.add(outbox)
+        db.flush()
+        db.add(NotificationLog(
+            subscription_id=old_sub.id,
+            user_id=user.id,
+            outbox_id=outbox.id,
+            attempt_no=1,
+            days_before=7,
+            channel="webhook",
+            status="failed",
+            message="HTTP 400",
         ))
         db.commit()
 
@@ -487,8 +517,36 @@ def test_restore_entities_replace_clears_orphan_renewal_history():
         new_sub = db.scalars(select(Subscription).where(Subscription.user_id == user.id)).one()
         rows = db.scalars(select(RenewalHistory).where(RenewalHistory.subscription_id == new_sub.id)).all()
         assert rows == []
-        # 全库无孤儿历史
+        # 全库无旧通知/队列/历史残留
         assert db.scalars(select(RenewalHistory)).all() == []
+        assert db.scalars(select(NotificationLog)).all() == []
+        assert db.scalars(select(NotificationOutbox)).all() == []
+        assert db.get(SchedulerState, "reminder_scan").last_completed_business_date is None
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_replace_import_triggers_same_day_rescan_after_commit(monkeypatch):
+    db, engine = make_db()
+    try:
+        user = add_user(db)
+        calls = []
+        monkeypatch.setattr(
+            backup.scheduler,
+            "rescan_after_restore",
+            lambda: calls.append("scan") or {"enqueued": 0},
+        )
+        monkeypatch.setattr(backup.activity, "log", lambda *args, **kwargs: None)
+
+        result = backup.import_data(
+            backup.ImportIn(data={"subscriptions": []}, replace=True),
+            user=user,
+            db=db,
+        )
+
+        assert result == {"ok": True, "imported": 0}
+        assert calls == ["scan"]
     finally:
         db.close()
         engine.dispose()

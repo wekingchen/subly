@@ -234,6 +234,73 @@ def test_schema_migration_failure_is_fatal_and_stops_later_columns(monkeypatch):
         engine.dispose()
 
 
+def test_outbox_migration_backfills_unique_delivery_ids():
+    engine = create_engine("sqlite:///:memory:")
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("""
+                CREATE TABLE notification_outbox (
+                    id INTEGER PRIMARY KEY,
+                    subscription_id INTEGER NOT NULL
+                )
+            """))
+            conn.execute(text(
+                "INSERT INTO notification_outbox (id, subscription_id) VALUES (1, 10), (2, 20)"
+            ))
+
+        migrate.run_migrations(engine)
+        migrate.run_migrations(engine)
+
+        with engine.begin() as conn:
+            rows = conn.execute(text(
+                "SELECT delivery_id, retry_cycle FROM notification_outbox ORDER BY id"
+            )).all()
+            values = [row[0] for row in rows]
+            indexes = {row[1] for row in conn.execute(text(
+                "PRAGMA index_list('notification_outbox')"
+            ))}
+        assert len(values) == 2
+        assert all(len(value) == 32 for value in values)
+        assert len(set(values)) == 2
+        assert [row[1] for row in rows] == [0, 0]
+        assert "ix_notification_outbox_delivery_id" in indexes
+    finally:
+        engine.dispose()
+
+
+def test_notification_log_migration_adds_outbox_audit_columns_and_index():
+    engine = create_engine("sqlite:///:memory:")
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("""
+                CREATE TABLE notification_log (
+                    id INTEGER PRIMARY KEY,
+                    subscription_id INTEGER NOT NULL,
+                    user_id INTEGER NOT NULL,
+                    days_before INTEGER NOT NULL,
+                    channel VARCHAR(16) NOT NULL,
+                    status VARCHAR(16) NOT NULL,
+                    message TEXT,
+                    sent_at DATETIME
+                )
+            """))
+
+        migrate.run_migrations(engine)
+        migrate.run_migrations(engine)
+
+        with engine.begin() as conn:
+            columns = {row[1] for row in conn.execute(text(
+                "PRAGMA table_info('notification_log')"
+            ))}
+            indexes = {row[1] for row in conn.execute(text(
+                "PRAGMA index_list('notification_log')"
+            ))}
+        assert {"outbox_id", "attempt_no", "retry_cycle"}.issubset(columns)
+        assert "ix_notification_log_outbox_id" in indexes
+    finally:
+        engine.dispose()
+
+
 def test_schema_migration_skips_missing_table_and_existing_column(monkeypatch):
     engine = create_engine("sqlite:///:memory:")
     monkeypatch.setattr(

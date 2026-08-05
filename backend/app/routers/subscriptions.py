@@ -12,7 +12,7 @@ from app import activity, icon_library
 from app.billing import add_cycle, compute_next_renewal, is_subscription_current
 from app.database import get_db
 from app.deps import get_current_user
-from app.models import RenewalHistory, Subscription, User
+from app.models import NotificationLog, NotificationOutbox, RenewalHistory, Subscription, User
 from app.schemas import SubscriptionIn, SubscriptionOut, SubscriptionUpdate, sanitize_url
 from app.security import verify_password
 from app.services import exchange
@@ -346,7 +346,9 @@ def delete_sub(
     if not sub or sub.user_id != user.id:
         raise HTTPException(404, "订阅不存在")
     name = sub.name
-    # SQLite 默认未开 PRAGMA foreign_keys，手动清理续费历史与通知日志，避免孤儿记录。
+    # SQLite 默认未开 PRAGMA foreign_keys，显式清理关联审计与队列，避免 ID 复用污染。
+    db.execute(delete(NotificationLog).where(NotificationLog.subscription_id == sub_id))
+    db.execute(delete(NotificationOutbox).where(NotificationOutbox.subscription_id == sub_id))
     db.execute(delete(RenewalHistory).where(RenewalHistory.subscription_id == sub_id))
     db.delete(sub)
     db.commit()

@@ -22,13 +22,15 @@ from app.models import (
     Category,
     Currency,
     ExchangeRate,
+    NotificationLog,
+    NotificationOutbox,
     PaymentMethod,
     RenewalHistory,
     Subscription,
     User,
 )
 from app.schemas import normalize_currency_code, sanitize_url
-from app.services import exchange
+from app.services import exchange, notification_outbox, scheduler
 from app.services.scheduler import utcnow
 from app.security import hash_password
 from app.subscription_rules import (
@@ -414,6 +416,7 @@ def _restore_entities(db: Session, user: User, data: dict, replace: bool) -> int
     _validate_restore_currency_refs(db, user, data, replace=replace)
 
     if replace:
+        notification_outbox.invalidate_scan_checkpoint(db)
         # 覆盖恢复：先清本用户的续费历史与订阅，避免 SQLite 无 AUTOINCREMENT 时
         # 新订阅复用旧 ID 而继承错误历史，或留下孤儿历史行。
         old_sub_ids = [
@@ -422,6 +425,8 @@ def _restore_entities(db: Session, user: User, data: dict, replace: bool) -> int
             ).all()
         ]
         if old_sub_ids:
+            db.execute(delete(NotificationLog).where(NotificationLog.subscription_id.in_(old_sub_ids)))
+            db.execute(delete(NotificationOutbox).where(NotificationOutbox.subscription_id.in_(old_sub_ids)))
             db.execute(delete(RenewalHistory).where(RenewalHistory.subscription_id.in_(old_sub_ids)))
         for s in db.scalars(
             select(Subscription).where(Subscription.user_id == user.id)
@@ -693,6 +698,8 @@ def import_data(
         db.rollback()
         raise HTTPException(400, f"备份校验失败：{e}")
     db.commit()
+    if payload.replace:
+        scheduler.rescan_after_restore()
     activity.log("backup.import", f"导入恢复了 {count} 个订阅", user=user)
     return {"ok": True, "imported": count}
 
@@ -803,6 +810,8 @@ def import_all(
         raise HTTPException(400, f"备份校验失败：{e}")
 
     db.commit()
+    if payload.replace:
+        scheduler.rescan_after_restore()
     activity.log(
         "backup.import_all",
         f"管理员恢复整站备份：新建 {created_users} 个用户，共导入 {total_subs} 个订阅",

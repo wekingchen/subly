@@ -3,7 +3,18 @@ import { createI18n } from 'vue-i18n'
 const zh = {
   app: { tagline: '订阅 / 续费 / 保号，一个都不漏' },
   nav: { dashboard: '雷达总览', subscriptions: '订阅账本', calendar: '续费日历', reports: '支出报表', notifications: '通知中心', logs: '实时日志', settings: '系统设置', iconLibrary: '服务管理', diagnostics: '数据诊断', users: '用户管理', groupWorkspace: '雷达工作台', groupSystem: '通知与系统', groupAdmin: '管理员', logout: '退出', logoutFail: '退出失败，请检查网络后重试', menu: '导航菜单', brandTag: '续费雷达' },
-  notify: { title: '通知中心', runScan: '立即扫描提醒', empty: '暂无通知记录', sent: '已发送', failed: '失败', timing: '提醒时机', daysBefore: '提前 {n} 天', daysToday: '到期当天', daysAfter: '过期后第 {n} 天' },
+  notify: {
+    title: '通知投递中心', kicker: '可靠投递队列',
+    subtitle: '查看每条提醒从入队到送达的状态；临时故障会自动退避重试，停止重试后可手动恢复。',
+    runScan: '扫描并入队', scanning: '正在扫描…', scanDone: '扫描完成：新增 {enqueued} 条，已有 {existing} 条。',
+    empty: '暂无投递记录', emptyDesc: '命中提醒日期后，任务会先进入可靠队列，再由后台独立投递。',
+    total: '全部', attempts: '尝试次数', attemptHistory: '尝试记录', noAttempts: '尚未发生真实外发尝试',
+    retry: '重新发送', retrying: '正在重新入队…', retryQueued: '已重新加入待发送队列。',
+    nextRetry: '下次重试', lastError: '安全错误', createdAt: '入队时间', renewalDate: '续费日期',
+    sent: '已发送', failed: '失败', pending: '待发送', sending: '投递中', retryWait: '等待重试', dead: '已停止重试', canceled: '已取消',
+    timing: '提醒时机', daysBefore: '提前 {n} 天', daysToday: '到期当天', daysAfter: '过期后第 {n} 天',
+    filterLabel: '按投递状态筛选', loadMore: '加载更多', loadingMore: '正在加载…', loadFailed: '投递记录加载失败，请稍后重试。', scanFailed: '扫描失败，请稍后重试。'
+  },
   rtlog: { title: '实时日志', live: '实时', paused: '已暂停', empty: '暂无日志', auto: '自动刷新' },
   account: { title: '账号与密码', username: '用户名', email: '邮箱', saveAccount: '保存账号', changePwd: '修改密码', oldPwd: '原密码', newPwd: '新密码', pwdOk: '密码已修改', accountOk: '账号已更新' },
   sys: { title: '系统信息', version: '版本', dbStatus: '数据库', configured: '已连接', serverTime: '服务器时间', timezone: '时区', scanTime: '提醒扫描时间', yourSubs: '我的订阅', totalUsers: '用户总数', totalSubs: '订阅总数' },

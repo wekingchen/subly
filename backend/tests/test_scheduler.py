@@ -85,18 +85,21 @@ def test_run_reminder_scan_sends_subscription_icon_without_changing_click_url(mo
 
         result = scheduler.run_reminder_scan()
 
-        assert result == {"sent": 1, "failed": 0}
-        assert captured["url"] == "https://billing.example.com/account"
-        assert captured["icon"] == "https://subly.example.com/static/icons/subscription.png"
-        assert captured["ttl"] == 0
+        assert result == {"scanned": 1, "enqueued": 1, "existing": 0, "skipped": 0}
+        assert captured == {}
 
         check_db = Session()
         try:
-            log = check_db.scalar(
-                select(NotificationLog).where(NotificationLog.subscription_id == sub_id)
+            from app.models import NotificationOutbox
+
+            row = check_db.scalar(
+                select(NotificationOutbox).where(NotificationOutbox.subscription_id == sub_id)
             )
-            assert log.status == "sent"
-            assert log.channel == "bark"
+            assert row.status == "pending"
+            assert row.channel == "bark"
+            assert row.payload["url"] == "https://billing.example.com/account"
+            assert row.payload["icon"] == "https://subly.example.com/static/icons/subscription.png"
+            assert check_db.scalars(select(NotificationLog)).all() == []
         finally:
             check_db.close()
     finally:
@@ -134,22 +137,24 @@ def test_run_reminder_scan_sends_webhook_and_records_safe_text_log(monkeypatch):
 
         result = scheduler.run_reminder_scan()
 
-        assert result == {"sent": 1, "failed": 0}
-        assert captured["url"] == "https://hooks.example.com/subly"
-        assert captured["secret"] == "test-signing-secret"
-        assert captured["payload"]["event"] == "subscription.reminder"
-        assert captured["payload"]["subscription_id"] == sub_id
-        assert "secret" not in captured["payload"]
+        assert result == {"scanned": 1, "enqueued": 1, "existing": 0, "skipped": 0}
+        assert captured == {}
 
         check_db = Session()
         try:
-            log = check_db.scalar(
-                select(NotificationLog).where(NotificationLog.subscription_id == sub_id)
+            from app.models import NotificationOutbox
+
+            row = check_db.scalar(
+                select(NotificationOutbox).where(NotificationOutbox.subscription_id == sub_id)
             )
-            assert log.channel == "webhook"
-            assert log.status == "sent"
-            assert isinstance(log.message, str)
-            assert "test-signing-secret" not in log.message
+            assert row.channel == "webhook"
+            assert row.status == "pending"
+            assert row.payload["event"]["event"] == "subscription.reminder"
+            assert row.payload["event"]["subscription_id"] == sub_id
+            rendered = str(row.payload)
+            assert "test-signing-secret" not in rendered
+            assert "https://hooks.example.com/subly" not in rendered
+            assert check_db.scalars(select(NotificationLog)).all() == []
         finally:
             check_db.close()
     finally:
@@ -193,23 +198,23 @@ def test_run_reminder_scan_isolates_webhook_failure_from_other_channels(monkeypa
 
         result = scheduler.run_reminder_scan()
 
-        assert result == {"sent": 2, "failed": 1}
-        assert sorted(calls) == ["bark", "telegram", "webhook"]
+        assert result == {"scanned": 1, "enqueued": 3, "existing": 0, "skipped": 0}
+        assert calls == []
         check_db = Session()
         try:
-            logs = check_db.scalars(
-                select(NotificationLog)
-                .where(NotificationLog.subscription_id == sub_id)
-                .order_by(NotificationLog.channel)
+            from app.models import NotificationOutbox
+
+            rows = check_db.scalars(
+                select(NotificationOutbox)
+                .where(NotificationOutbox.subscription_id == sub_id)
+                .order_by(NotificationOutbox.channel)
             ).all()
-            assert {(log.channel, log.status) for log in logs} == {
-                ("telegram", "sent"),
-                ("bark", "sent"),
-                ("webhook", "failed"),
+            assert {(row.channel, row.status) for row in rows} == {
+                ("telegram", "pending"),
+                ("bark", "pending"),
+                ("webhook", "pending"),
             }
-            webhook_log = next(log for log in logs if log.channel == "webhook")
-            assert webhook_log.message == "RuntimeError"
-            assert "secret-path" not in webhook_log.message
+            assert check_db.scalars(select(NotificationLog)).all() == []
         finally:
             check_db.close()
     finally:
@@ -252,7 +257,12 @@ def test_run_reminder_scan_executes_ready_channels_concurrently(monkeypatch):
         monkeypatch.setattr(scheduler.bark, "send_push", rendezvous)
         monkeypatch.setattr(scheduler.webhook, "send_notification", rendezvous)
 
-        assert scheduler.run_reminder_scan() == {"sent": 3, "failed": 0}
+        assert scheduler.run_reminder_scan() == {
+            "scanned": 1,
+            "enqueued": 3,
+            "existing": 0,
+            "skipped": 0,
+        }
     finally:
         db.close()
         engine.dispose()
@@ -560,6 +570,55 @@ def test_local_zone_falls_back_to_utc_on_bad_tz_without_crashing(monkeypatch):
     assert isinstance(scheduler._local_today(), date)
 
 
+def test_notification_maintenance_retries_incomplete_daily_scan(monkeypatch):
+    calls = {"scan": 0, "dispatch": 0}
+    monkeypatch.setattr(
+        scheduler.notification_outbox,
+        "pending_startup_scan",
+        lambda today: True,
+    )
+    monkeypatch.setattr(
+        scheduler,
+        "run_reminder_scan",
+        lambda: calls.update({"scan": calls["scan"] + 1}) or {
+            "skipped": "已有扫描在运行"
+        },
+    )
+    monkeypatch.setattr(
+        scheduler.notification_outbox,
+        "dispatch_due",
+        lambda: calls.update({"dispatch": calls["dispatch"] + 1}),
+    )
+
+    scheduler._notification_maintenance_job()
+    scheduler._notification_maintenance_job()
+
+    assert calls == {"scan": 2, "dispatch": 2}
+
+
+def test_notification_maintenance_dispatches_when_catchup_scan_raises(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        scheduler.notification_outbox,
+        "pending_startup_scan",
+        lambda today: True,
+    )
+    monkeypatch.setattr(
+        scheduler,
+        "run_reminder_scan",
+        lambda: (_ for _ in ()).throw(RuntimeError("bad historical row")),
+    )
+    monkeypatch.setattr(
+        scheduler.notification_outbox,
+        "dispatch_due",
+        lambda: calls.append("dispatch"),
+    )
+
+    scheduler._notification_maintenance_job()
+
+    assert calls == ["dispatch"]
+
+
 def test_start_scheduler_survives_bad_tz(monkeypatch):
     """回归：settings.tz 非法时 start_scheduler 不应在 BackgroundScheduler 构造期崩溃。
 
@@ -598,6 +657,7 @@ def test_run_reminder_scan_is_mutually_exclusive(monkeypatch):
             release.wait(2)    # 阻塞，制造并发窗口
             return _Scalars()
         def get(self, *a, **k): return None
+        def execute(self, *a, **k): return None
         def commit(self): pass
         def close(self): pass
 
@@ -694,10 +754,10 @@ def test_run_reminder_scan_does_not_count_skip_as_failed_on_rescan(monkeypatch):
         monkeypatch.setattr(scheduler.bark, "send_push", lambda *a, **kw: {})
 
         first = scheduler.run_reminder_scan()
-        assert first == {"sent": 1, "failed": 0}
-        # 同日再扫：bark send_push 不应再被调用，去重命中，failed 仍为 0
+        assert first == {"scanned": 1, "enqueued": 1, "existing": 0, "skipped": 0}
+        # 同日再扫由 Outbox 唯一键去重，不会再创建任务。
         second = scheduler.run_reminder_scan()
-        assert second == {"sent": 0, "failed": 0}
+        assert second == {"scanned": 1, "enqueued": 0, "existing": 1, "skipped": 0}
     finally:
         db.close()
         engine.dispose()
@@ -729,8 +789,8 @@ def test_run_reminder_scan_skips_paused_subscriptions(monkeypatch):
         monkeypatch.setattr(scheduler.bark, "send_push", lambda *a, **kw: sent_calls.append(1))
 
         result = scheduler.run_reminder_scan()
-        assert result == {"sent": 0, "failed": 0}
-        assert sent_calls == []  # 暂停订阅未触发外发
+        assert result == {"scanned": 1, "enqueued": 0, "existing": 0, "skipped": 1}
+        assert sent_calls == []  # 暂停订阅未入队、未触发外发
     finally:
         db.close()
         engine.dispose()
@@ -784,8 +844,13 @@ def test_run_reminder_scan_respects_inclusive_end_date(monkeypatch):
             lambda *args, **kwargs: calls.append(kwargs) or {},
         )
 
-        assert scheduler.run_reminder_scan() == {"sent": 1, "failed": 0}
-        assert len(calls) == 1
+        assert scheduler.run_reminder_scan() == {
+            "scanned": 3,
+            "enqueued": 1,
+            "existing": 0,
+            "skipped": 2,
+        }
+        assert calls == []
     finally:
         db.close()
         engine.dispose()

@@ -37,7 +37,7 @@ docker run -d --name subly -p 8842:8000 \
 | 🗂️ **分类与套餐包** | 设置页可管理用户自定义分类与付款方式，系统预置项只读；删除使用中的自定义项会安全解除订阅引用；支持套餐包 / 组合订阅管理 |
 | 🧭 **内置服务管理** | 100+ 常见服务，支持多分类 `category_keys`、服务 CRUD、软删除 / 恢复、图标预热 |
 | 🖼️ **图标系统** | Emoji、上传图片、URL 导入；内置服务 favicon 按需下载、缓存、远端 SVG 消毒与可见 fallback |
-| 📝 **通知与日志** | 通知中心记录 Telegram / Bark / Webhook 发送结果；实时日志页按权限查看活动日志，慢请求写入 stdout |
+| 📝 **可靠通知与日志** | 提醒先写入 Outbox 再独立投递，瞬时故障自动退避重试，失败耗尽进入 dead-letter；通知中心展示六种状态、尝试历史与手动重发；实时日志页按权限查看活动日志 |
 | 💾 **备份恢复** | 当前用户 JSON 备份 / 导入；管理员可整站备份 / 恢复全部成员数据 |
 | 🌈 **中文界面 / 多主题** | 中文单语言界面，保留 `vue-i18n` 集中文案，内置 5 套主题 |
 | 🗄️ **内置 SQLite** | 零配置，开箱即用，无需准备外部数据库；数据持久化在 `/app/data` |
@@ -104,7 +104,7 @@ docker compose up -d --build
 | `FORWARDED_ALLOW_IPS` | | Uvicorn 信任的反向代理 IP/CIDR；默认源码 compose 因 app 仅内网暴露而设为 `*`，直接公网暴露时必须收紧 |
 | `TZ` | | 时区，如 `Asia/Shanghai` |
 | `DB_PATH` | | SQLite 数据库文件路径，默认 `data/subly.db`，容器内一般不需要改 |
-| `REMINDER_SCAN_TIME` | | 每天扫描到期订阅、发送提醒的时间，如 `09:00` |
+| `REMINDER_SCAN_TIME` | | 每天扫描到期订阅并写入可靠投递队列的时间，如 `09:00` |
 | `REQUIRE_ADMIN_APPROVAL` | | 新用户注册是否需要管理员审核，默认 `true` |
 | `APP_PUBLIC_URL` | | 对外可访问地址（如 `https://subly.example.com`）；用于生成公网日历服务可订阅的私有 iCal URL、Bark 测试推送跳转，以及把上传/内置订阅图标转换为设备可访问的绝对 URL；真实提醒点击地址仍取订阅 `url` |
 | `TELEGRAM_BOT_TOKEN` | | 仅声明保留，当前不参与发送；Telegram Bot Token、Chat ID、代理、API 反代均在网页「设置」里按用户配置 |
@@ -210,10 +210,11 @@ GitHub Actions 对 PR 运行 Ruff、ESLint、后端测试、前端测试/构建�
 - **注册审核**：默认新用户注册后需要管理员审核；如果配置 SMTP，注册时还会要求邮箱验证码。
 - **Telegram 提醒**：找 @BotFather `/newbot` 拿 Bot Token → 设置 → Telegram 配置 → 填 Token、验证机器人、获取 Chat ID、发送测试；需要时可设置 API 反代与 HTTP 代理。
 - **Bark 推送**：iOS 上安装 [Bark](https://github.com/Finb/Bark) App，复制 Device Key → 设置 → Bark 配置 → 粘贴 Key、按需填写服务器、提示音、分组、TTL → 发送测试。
-- **Webhook 通知**：设置 → Webhook 通知 → 填写接收 URL 与双方共享的签名密钥 → 保存并发送测试。请求体为 UTF-8 JSON，签名头为 `X-Subly-Signature: sha256=<hex>`，其中 `<hex>` 是对原始请求体计算的 HMAC-SHA256。
+- **Webhook 通知**：设置 → Webhook 通知 → 填写接收 URL 与双方共享的签名密钥 → 保存并发送测试。请求体为 UTF-8 JSON，签名头为 `X-Subly-Signature: sha256=<hex>`，其中 `<hex>` 是对原始请求体计算的 HMAC-SHA256；正式提醒另带稳定的 `X-Subly-Delivery-ID`，接收端可据此幂等处理。
+- **通知投递中心**：到期扫描只负责把任务写入 Outbox，不在扫描事务内联网。网络异常、HTTP 408/425/429 与 5xx 会按 1 分钟、5 分钟、15 分钟、1 小时、6 小时退避，最多 6 次；普通 4xx 或确定性供应商拒绝会停止自动重试。`dead` / `retry_wait` 可在通知中心手动重新入队，请注意系统提供的是 at-least-once 投递，接收端仍应使用 Delivery ID 去重。
 - **续费规则**：续费后可按当前时间重新计算下次到期（保号场景），也可按原到期日累加周期。
 - **服务管理**：管理员可维护内置服务列表、服务多分类、启停服务、恢复服务，并预热 favicon 缓存。
-- **备份**：设置 → 数据备份，导出 / 导入当前用户 JSON；管理员可整站备份与恢复全部成员数据。为避免凭据扩散，JSON 不包含 Telegram Token、Bark Device Key、Webhook secret 等通知凭据，恢复后需重新配置通知通道。
+- **备份**：设置 → 数据备份，导出 / 导入当前用户 JSON；管理员可整站备份与恢复全部成员数据。为避免凭据与运行态扩散，JSON 不包含 Telegram Token、Bark Device Key、Webhook secret、Notification Outbox、SchedulerState、通知尝试日志或日历 Feed Token，恢复后需重新配置通知通道。
 - **图标库**：内置服务图标会按需下载 favicon 并缓存到 `/app/data/icons/library`；远端 SVG 会消毒后缓存，失败时显示稳定颜色与首字母 fallback。
 - **日志排障**：网页「实时日志」可看活动记录；容器 stdout 日志可用 `docker logs` 或 `docker compose logs -f app` 查看。
 - **API 文档**：默认 Docker/NAS 部署访问 `http://<host>:8842/docs`；后端直跑或容器内端口为 `http://<host>:8000/docs`。

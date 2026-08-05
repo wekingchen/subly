@@ -129,7 +129,7 @@ Required schema migrations fail fast instead of starting with a partial database
 
 - Multi-user auth, registration, SMTP email verification, admin approval, account enable/disable, admin role management.
 - Recurring and one-time subscriptions with plan, notes, remark, URL, VPS IP fields, bundles, family members, calendar visibility, sorting, and per-subscription reminder days.
-- Telegram + Bark + HMAC-SHA256 signed Webhook reminders running side by side, with notification logs and manual scan.
+- Telegram + Bark + HMAC-SHA256 signed Webhook reminders backed by a reliable Outbox, automatic retry/dead-letter handling, stable Webhook Delivery IDs, attempt history, and admin scan-to-enqueue.
 - Dashboard, calendar, reports, multi-currency, live FX refresh, Chinese UI, and 5 themes.
 - Built-in service management with multi-category service library, favicon cache, SVG sanitization, visible fallback icons, and prewarm tasks.
 - Per-user backup/restore and admin full-site backup/restore.

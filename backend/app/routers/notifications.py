@@ -1,16 +1,17 @@
 import logging
+from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
 from app import activity
 from app.config import settings
 from app.database import get_db
 from app.deps import get_admin_user, get_current_user
-from app.models import NotificationLog, User
+from app.models import NotificationLog, NotificationOutbox, User
 from app.schemas import BarkTestIn, TelegramTestIn
-from app.services import bark, scheduler, telegram, webhook
+from app.services import bark, notification_outbox, scheduler, telegram, webhook
 
 router = APIRouter(prefix="/api/notifications", tags=["notifications"])
 logger = logging.getLogger(__name__)
@@ -133,14 +134,170 @@ def webhook_test(user: User = Depends(get_current_user)):
 
 @router.post("/run-scan")
 def run_scan(admin: User = Depends(get_admin_user)):
-    """手动触发一次到期扫描（仅管理员；扫描为全站范围且会真实外发通知）。
-
-    若已有扫描在跑（定时或上一次手动未结束），返回 409 避免并发重复外发。
-    """
+    """手动扫描并入队（仅管理员）；请求内不执行外部 HTTP。"""
     result = scheduler.run_reminder_scan()
     if result.get("skipped") == "已有扫描在运行":
         raise HTTPException(409, "已有提醒扫描在运行，请稍后再试")
     return result
+
+
+def _as_utc(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+
+
+def _naive_utc(value: datetime) -> datetime:
+    if value.tzinfo:
+        return value.astimezone(timezone.utc).replace(tzinfo=None)
+    return value
+
+
+def _outbox_item(row: NotificationOutbox) -> dict:
+    return {
+        "id": row.id,
+        "subscription_id": row.subscription_id,
+        "subscription_name": row.subscription_name,
+        "business_date": row.business_date,
+        "renewal_date": row.renewal_date,
+        "days_before": row.days_before,
+        "channel": row.channel,
+        "status": row.status,
+        "retry_cycle": row.retry_cycle,
+        "attempt_count": row.attempt_count,
+        "next_attempt_at": _as_utc(row.next_attempt_at),
+        "last_error": row.last_error,
+        "created_at": _as_utc(row.created_at),
+        "updated_at": _as_utc(row.updated_at),
+        "sent_at": _as_utc(row.sent_at),
+        "canceled_at": _as_utc(row.canceled_at),
+    }
+
+
+@router.get("/outbox")
+def outbox_list(
+    status: str | None = None,
+    limit: int = Query(default=50, ge=1, le=200),
+    before_created_at: datetime | None = None,
+    before_id: int | None = Query(default=None, ge=1),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if status is not None and status not in notification_outbox.OUTBOX_STATES:
+        raise HTTPException(400, "无效的投递状态")
+    if (before_created_at is None) != (before_id is None):
+        raise HTTPException(400, "分页游标不完整")
+    stmt = select(NotificationOutbox).where(NotificationOutbox.user_id == user.id)
+    if status:
+        stmt = stmt.where(NotificationOutbox.status == status)
+    if before_created_at is not None and before_id is not None:
+        cursor_time = _naive_utc(before_created_at)
+        stmt = stmt.where(or_(
+            NotificationOutbox.created_at < cursor_time,
+            and_(
+                NotificationOutbox.created_at == cursor_time,
+                NotificationOutbox.id < before_id,
+            ),
+        ))
+    rows = db.scalars(
+        stmt.order_by(NotificationOutbox.created_at.desc(), NotificationOutbox.id.desc())
+        .limit(limit + 1)
+    ).all()
+    has_more = len(rows) > limit
+    page = rows[:limit]
+    summary_rows = db.execute(
+        select(NotificationOutbox.status, func.count())
+        .where(NotificationOutbox.user_id == user.id)
+        .group_by(NotificationOutbox.status)
+    ).all()
+    summary = {state: 0 for state in notification_outbox.OUTBOX_STATES}
+    summary.update({state: count for state, count in summary_rows})
+    summary["total"] = sum(summary[state] for state in notification_outbox.OUTBOX_STATES)
+    last = page[-1] if has_more and page else None
+    return {
+        "summary": summary,
+        "items": [_outbox_item(row) for row in page],
+        "has_more": has_more,
+        "next_cursor": (
+            {"created_at": _as_utc(last.created_at), "id": last.id}
+            if last else None
+        ),
+    }
+
+
+@router.get("/outbox/{outbox_id}")
+def outbox_detail(
+    outbox_id: int,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    row = db.scalar(
+        select(NotificationOutbox).where(
+            NotificationOutbox.id == outbox_id,
+            NotificationOutbox.user_id == user.id,
+        )
+    )
+    if not row:
+        raise HTTPException(404, "投递记录不存在")
+    return _outbox_item(row)
+
+
+@router.get("/outbox/{outbox_id}/attempts")
+def outbox_attempts(
+    outbox_id: int,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    row = db.scalar(
+        select(NotificationOutbox).where(
+            NotificationOutbox.id == outbox_id,
+            NotificationOutbox.user_id == user.id,
+        )
+    )
+    if not row:
+        raise HTTPException(404, "投递记录不存在")
+    attempts = db.scalars(
+        select(NotificationLog)
+        .where(
+            NotificationLog.outbox_id == outbox_id,
+            NotificationLog.user_id == user.id,
+        )
+        .order_by(NotificationLog.id)
+    ).all()
+    return [{
+        "id": item.id,
+        "attempt_no": item.attempt_no,
+        "retry_cycle": item.retry_cycle or 0,
+        "status": item.status,
+        "message": item.message,
+        "sent_at": _as_utc(item.sent_at),
+    } for item in attempts]
+
+
+@router.post("/outbox/{outbox_id}/retry")
+def retry_outbox(
+    outbox_id: int,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    row = db.scalar(
+        select(NotificationOutbox).where(
+            NotificationOutbox.id == outbox_id,
+            NotificationOutbox.user_id == user.id,
+        )
+    )
+    if not row:
+        raise HTTPException(404, "投递记录不存在")
+    if not notification_outbox.retry_outbox(db, outbox_id, user.id):
+        db.rollback()
+        raise HTTPException(409, "当前状态不可重新发送")
+    db.commit()
+    activity.log(
+        "notification.retry",
+        f"将通知投递 #{outbox_id} 重新加入队列",
+        user=user,
+    )
+    return {"ok": True, "status": "pending"}
 
 
 @router.get("/logs")
@@ -155,11 +312,13 @@ def logs(limit: int = 50, user: User = Depends(get_current_user), db: Session = 
         {
             "id": r.id,
             "subscription_id": r.subscription_id,
+            "outbox_id": r.outbox_id,
+            "attempt_no": r.attempt_no,
             "days_before": r.days_before,
             "channel": r.channel,
             "status": r.status,
             "message": r.message,
-            "sent_at": r.sent_at,
+            "sent_at": _as_utc(r.sent_at),
         }
         for r in rows
     ]

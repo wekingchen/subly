@@ -1,4 +1,5 @@
 from datetime import date, datetime
+from uuid import uuid4
 
 from sqlalchemy import (
     JSON,
@@ -244,12 +245,62 @@ class ActivityLog(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), index=True)
 
 
+class NotificationOutbox(Base):
+    __tablename__ = "notification_outbox"
+    __table_args__ = (
+        UniqueConstraint(
+            "subscription_id",
+            "business_date",
+            "days_before",
+            "channel",
+            name="uq_notification_outbox_delivery",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    delivery_id: Mapped[str] = mapped_column(
+        String(32), unique=True, index=True, default=lambda: uuid4().hex
+    )
+    subscription_id: Mapped[int] = mapped_column(ForeignKey("subscriptions.id"), index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    business_date: Mapped[date] = mapped_column(Date, index=True)
+    days_before: Mapped[int] = mapped_column(Integer)
+    channel: Mapped[str] = mapped_column(String(16))
+    status: Mapped[str] = mapped_column(String(16), default="pending", index=True)
+    subscription_name: Mapped[str] = mapped_column(String(128))
+    renewal_date: Mapped[date] = mapped_column(Date)
+    payload: Mapped[dict] = mapped_column(JSON)
+    retry_cycle: Mapped[int] = mapped_column(Integer, default=0)
+    attempt_count: Mapped[int] = mapped_column(Integer, default=0)
+    next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    lease_token: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    last_error: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    canceled_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class SchedulerState(Base):
+    __tablename__ = "scheduler_state"
+
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    last_completed_business_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
 class NotificationLog(Base):
     __tablename__ = "notification_log"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     subscription_id: Mapped[int] = mapped_column(ForeignKey("subscriptions.id"), index=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    outbox_id: Mapped[int | None] = mapped_column(
+        ForeignKey("notification_outbox.id"), nullable=True, index=True
+    )
+    attempt_no: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    retry_cycle: Mapped[int | None] = mapped_column(Integer, nullable=True)
     days_before: Mapped[int] = mapped_column(Integer)
     channel: Mapped[str] = mapped_column(String(16), default="telegram")
     status: Mapped[str] = mapped_column(String(16))         # sent | failed
