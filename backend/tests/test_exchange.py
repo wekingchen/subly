@@ -89,7 +89,7 @@ def test_refresh_if_stale_skips_fresh_rates_and_swallows_refresh_failures(monkey
         engine.dispose()
 
 
-def test_convert_uses_base_rates_and_falls_back_when_rate_missing(monkeypatch):
+def test_convert_strict_uses_base_rates_and_reports_missing_rates(monkeypatch):
     db, engine = make_db()
     try:
         monkeypatch.setattr(exchange.settings, "exchange_api_base", "USD", raising=False)
@@ -99,8 +99,9 @@ def test_convert_uses_base_rates_and_falls_back_when_rate_missing(monkeypatch):
         ])
         db.commit()
 
-        assert exchange.convert(db, 10, "EUR", "CNY") == 140
-        assert exchange.convert(db, 10, "CNY", "CNY") == 10
+        assert exchange.convert_strict(db, 10, "EUR", "CNY") == 140
+        assert exchange.convert_strict(db, 10, "CNY", "CNY") == 10
+        assert exchange.convert_strict(db, 10, "JPY", "CNY") is None
         assert exchange.convert(db, 10, "JPY", "CNY") == 10
     finally:
         db.close()
@@ -119,9 +120,9 @@ def test_convert_isolates_manual_rates_by_user(monkeypatch):
         ])
         db.commit()
 
-        assert exchange.convert(db, 10, "ABC", "CNY", user_id=1) == 20
-        assert exchange.convert(db, 10, "ABC", "CNY", user_id=2) == 10
-        assert exchange.convert(db, 10, "ABC", "CNY") == 10
+        assert exchange.convert_strict(db, 10, "ABC", "CNY", user_id=1) == 20
+        assert exchange.convert_strict(db, 10, "ABC", "CNY", user_id=2) is None
+        assert exchange.convert_strict(db, 10, "ABC", "CNY") is None
     finally:
         db.close()
         engine.dispose()

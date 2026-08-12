@@ -331,7 +331,7 @@ def _escape_md(text: str) -> str:
 def _renewal_facts(db, sub: Subscription, user: User, days_left: int):
     """提醒文案的共用要素，避免 Telegram / Bark 两份文案逻辑分叉走偏。"""
     amount = f"{sub.amount:.2f} {sub.currency}"
-    in_base = exchange.convert(
+    in_base = exchange.convert_strict(
         db,
         sub.amount,
         sub.currency,
@@ -339,7 +339,9 @@ def _renewal_facts(db, sub: Subscription, user: User, days_left: int):
         user_id=user.id,
     )
     base_str = ""
-    if abs(in_base - sub.amount) > 1e-6 or sub.currency != user.base_currency:
+    if in_base is not None and (
+        abs(in_base - sub.amount) > 1e-6 or sub.currency != user.base_currency
+    ):
         base_str = f"（约 {in_base:.2f} {user.base_currency}）"
     cat = db.get(Category, sub.category_id) if sub.category_id else None
     pm = db.get(PaymentMethod, sub.payment_method_id) if sub.payment_method_id else None

@@ -129,6 +129,49 @@ def test_payment_history_december_crosses_year_correctly(monkeypatch):
         engine.dispose()
 
 
+def test_financial_totals_expose_missing_rate_completeness(monkeypatch):
+    db, engine = make_db()
+    try:
+        monkeypatch.setattr(reports.exchange.settings, "exchange_api_base", "USD", raising=False)
+        user = add_user(db)
+        db.add(ExchangeRate(base="USD", quote="CNY", rate=7.0))
+        db.add_all([
+            Subscription(
+                user_id=user.id, name="已换算", amount=70, currency="CNY",
+                billing_type="recurring", cycle="month", cycle_count=1,
+                start_date=date.today(), next_renewal_date=date.today(),
+            ),
+            Subscription(
+                user_id=user.id, name="缺汇率", amount=1000, currency="JPY",
+                billing_type="recurring", cycle="month", cycle_count=1,
+                start_date=date.today(), next_renewal_date=date.today(),
+            ),
+        ])
+        db.commit()
+
+        result = reports.insights(user=user, db=db)
+        assert result["monthly_total"] == 70
+        assert result["financial_completeness"] == {
+            "is_complete": False,
+            "included_count": 1,
+            "excluded_count": 1,
+            "missing_currencies": ["JPY"],
+        }
+        ranking = reports.ranking(user=user, db=db)
+        assert [item.name for item in ranking] == ["已换算", "缺汇率"]
+        assert ranking[0].amount_in_base == 70
+        assert ranking[0].monthly_cost_in_base == 70
+        assert ranking[1].amount_in_base is None
+        assert ranking[1].monthly_cost_in_base is None
+        category_detail = reports.category_detail(user=user, db=db)
+        uncategorized = category_detail["recurring"][0]
+        assert uncategorized["count"] == 2
+        assert uncategorized["monthly"] == 70
+    finally:
+        db.close()
+        engine.dispose()
+
+
 def test_current_reports_and_dashboard_respect_inclusive_end_date(monkeypatch):
     import datetime as _dt
 
@@ -141,8 +184,8 @@ def test_current_reports_and_dashboard_respect_inclusive_end_date(monkeypatch):
     try:
         monkeypatch.setattr(reports, "date", _FakeDate)
         monkeypatch.setattr(dashboard, "date", _FakeDate)
-        monkeypatch.setattr(reports.exchange, "convert", lambda db, amount, from_cur, to_cur, **kwargs: amount)
-        monkeypatch.setattr(dashboard.exchange, "convert", lambda db, amount, from_cur, to_cur, **kwargs: amount)
+        monkeypatch.setattr(reports.exchange, "convert_strict", lambda db, amount, from_cur, to_cur, **kwargs: amount)
+        monkeypatch.setattr(dashboard.exchange, "convert_strict", lambda db, amount, from_cur, to_cur, **kwargs: amount)
         user = add_user(db)
         current = Subscription(
             user_id=user.id,
@@ -212,8 +255,11 @@ def test_current_reports_and_dashboard_respect_inclusive_end_date(monkeypatch):
         assert [item.name for item in dashboard_out.upcoming] == ["截止日当天"]
         assert "已截止" in {item.name for item in dashboard_out.recent}
 
-        ranking_names = [item.name for item in reports.ranking(user=user, db=db)]
+        ranking_rows = reports.ranking(user=user, db=db)
+        ranking_names = [item.name for item in ranking_rows]
         assert ranking_names == ["续费日越界", "截止日当天", "仍有效但逾期"]
+        assert ranking_rows[0].amount_in_base == 30
+        assert ranking_rows[0].monthly_cost_in_base == 30
         assert [item.name for item in reports.upcoming(days=30, user=user, db=db)] == ["截止日当天"]
         assert [item.name for item in reports.expired(user=user, db=db)] == ["仍有效但逾期"]
         assert reports.insights(user=user, db=db)["monthly_total"] == 45

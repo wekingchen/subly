@@ -1,14 +1,14 @@
 import { describe, expect, it } from 'vitest'
 
-import { amountOf, formatMoney, hasBaseEquivalent, splitMoney } from './money'
+import { amountOf, baseAmountOf, formatMoney, hasBaseEquivalent, splitMoney } from './money'
 
 describe('amountOf', () => {
   it('prefers amount_in_base over amount', () => {
     expect(amountOf({ amount_in_base: 88, amount: 99 })).toBe(88)
   })
 
-  it('falls back to amount when amount_in_base is missing', () => {
-    expect(amountOf({ amount: '12.5' })).toBe(12.5)
+  it('does not treat a raw foreign amount as a base amount when conversion is missing', () => {
+    expect(amountOf({ amount: '12.5', currency: 'USD' })).toBe(0)
   })
 
   it('uses fallback when item is missing', () => {
@@ -21,6 +21,20 @@ describe('amountOf', () => {
 
   it('returns zero when both value and fallback are invalid', () => {
     expect(amountOf({ amount: 'bad' }, 'also-bad')).toBe(0)
+  })
+})
+
+
+describe('baseAmountOf', () => {
+  it('returns only finite converted base amounts', () => {
+    expect(baseAmountOf({ amount_in_base: '12.5' })).toBe(12.5)
+    expect(baseAmountOf({ amount_in_base: 0 })).toBe(0)
+  })
+
+  it('returns null for missing or invalid conversions', () => {
+    expect(baseAmountOf({ amount_in_base: null, amount: 99 })).toBeNull()
+    expect(baseAmountOf({ amount_in_base: 'bad', amount: 99 })).toBeNull()
+    expect(baseAmountOf({ amount_in_base: false, amount: 99 })).toBeNull()
   })
 })
 

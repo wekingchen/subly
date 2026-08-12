@@ -41,13 +41,13 @@ const zh = {
     registerOk: '注册成功，请登录'
   },
   dashboard: {
-    monthSpend: '本月支出', yearSpend: '年度支出', active: '生效订阅', upcoming: '即将到期', recent: '最近订阅',
+    monthSpend: '月化成本', yearSpend: '年化成本', active: '生效订阅', upcoming: '即将到期', recent: '最近订阅',
     none: '暂无数据', daysLeft: '剩 {n} 天', today: '今天到期',
     overdue: '已过期', byCategory: '分类占比', viewAll: '查看全部',
     commandCenter: '控制台',
     greeting: '你好，{name} 👋', subtitle: '这是你的订阅总览', catOverview: '分类总览（全部订阅）',
-    radarTitle: '续费雷达', radarHero: '未来 30 天有 {n} 项续费，预计 {amount}',
-    radarOverdue: '已过期', radar3: '3 天内', radar7: '7 天内', radar30: '30 天内'
+    radarTitle: '续费雷达', radarHero: '已逾期及未来 30 天共有 {n} 个续费信号，预计 {amount}',
+    radarOverdue: '已逾期', radar3: '今天至 3 天', radar7: '4–7 天', radar30: '8–30 天'
   },
   sub: {
     add: '添加订阅', edit: '编辑订阅', name: '名称', amount: '金额', currency: '货币',
@@ -70,8 +70,8 @@ const zh = {
     renewHint: '标记当期已续费，推进下次到期日；此操作不会触发付款。',
     renewDisclaimer: '此操作只更新你的续费记录与下次到期日，不会向任何服务付款。',
     renewMark: '标记已续费',
-    renewToday: '保号 / 提前续费：从今天起 +1 个周期（重新计周期）',
-    renewDue: '常规循环：从原到期日 +1 个周期（不浪费已付时间）',
+    renewToday: '提前续费：从今天起 +1 个周期（重新计周期）',
+    renewDue: '常规续费：从原到期日 +1 个周期（不浪费已付时间）',
     renewNext: '续费后下次到期：', renewOk: '已续费，下次到期 {date}', confirm: '确认续费',
     renewModeTodayShort: '从今天', renewModeDueShort: '从到期日',
     renewalHistory: '续费历史', renewalHistoryEmpty: '暂无续费记录',
@@ -103,18 +103,21 @@ const zh = {
   },
   calendar: {
     title: '续费日历', noEvents: '本月无续费', today: '今天', prevMonth: '上个月', nextMonth: '下个月', more: '还有 {n} 项',
-    trajectory: '续费航迹', monthSignal: '本月信号', monthSummary: '本月 {n} 个续费信号，预计 {amount}', monthSafe: '本月暂无可见续费风险'
+    trajectory: '续费航迹', monthSignal: '本月信号', monthNavigation: '所选月份导航', todayRadar: '以今天为基准的续费风险',
+    monthSummary: '所选月份共 {n} 个续费事件，预计 {amount}', monthSummaryIncomplete: '所选月份共 {n} 个续费事件；缺少 {currencies} 汇率，预计金额不完整', monthSafe: '所选月份暂无可见续费事件',
+    openDayEvents: '查看 {date} 的全部 {n} 个续费事件', dayEventsTitle: '{date} 的续费事件', radarAmountIncomplete: '缺少 {currencies} 汇率'
   },
   reports: {
     title: '报表分析', overview: '总览', insights: '支出洞察', categoryDetail: '分类明细', recentPayments: '近期付款',
     ranking: '支出排行', oneTime: '永久购买', upcoming: '即将续费', expired: '已过期',
-    category: '分类', monthly: '月支出', percent: '占比', total: '月支出合计', empty: '暂无数据',
-    monthlyTotal: '每月合计', yearlyTotal: '每年合计', byCategory: '分类支出占比', spendTrend: '支出概览',
+    category: '分类', monthly: '月化成本', percent: '占比', total: '月化成本合计', empty: '暂无数据',
+    monthlyTotal: '月化成本合计', yearlyTotal: '年化成本合计', byCategory: '分类月化成本占比', spendTrend: '月化成本概览',
     budget: '月度预算', budgetUsed: '已用 {n}%', budgetOver: '超支 {n}',
-    trend: '支出趋势', trendHistory: '历史付款', trendFuture: '未来预计', trendEmpty: '暂无趋势数据', trendRange: '趋势月份范围', trendMonths: '{n} 个月', trendLoadFailed: '历史趋势加载失败，请检查网络后重试。',
+    trend: '支出趋势', trendHistory: '历史付款', trendFuture: '未来预计', trendEmpty: '暂无趋势数据', trendRange: '历史与未来月份范围（均含本月）', trendMonths: '历史/未来各 {n} 个月', trendLoadFailed: '历史趋势加载失败，请检查网络后重试。',
     recurringSubs: '循环订阅', permanentBuy: '永久购买', count: '数量', countUnit: '项', amount: '金额', date: '日期', type: '类型',
-    permanentTotal: '永久购买总额', recurringMonthly: '循环订阅月支出', noData: '暂无可视化数据',
-    finRadar: '财务雷达', reportSubtitle: '支出结构、续费风险与近期付款信号', riskRadar: '续费压力', riskTotal: '风险信号'
+    permanentTotal: '永久购买总额', recurringMonthly: '循环订阅月化成本', noData: '暂无可视化数据',
+    incompleteFx: '部分金额因缺少 {currencies} 汇率未计入，当前合计为不完整结果。', rateUnavailable: '缺少汇率', radarAmountIncomplete: '缺少 {currencies} 汇率',
+    finRadar: '财务雷达', reportSubtitle: '月化成本结构、续费风险与近期付款信号', riskRadar: '续费压力', riskTotal: '风险信号'
   },
   settings: {
     title: '设置', theme: '主题', baseCurrency: '基准货币', monthlyBudget: '月度预算', budgetPh: '不设预算上限', budgetHint: '用于雷达与报表的超支预警，按月化续费成本对比。', budgetClearedOnCurrencyChange: '已切换基准货币，月度预算已清空，请按新币种重新设置。', telegram: 'Telegram 通知',

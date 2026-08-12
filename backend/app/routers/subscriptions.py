@@ -33,16 +33,15 @@ def _name_hash(name: str | None) -> str:
 
 def _to_out(db: Session, sub: Subscription, base_currency: str) -> SubscriptionOut:
     out = SubscriptionOut.model_validate(sub)
-    out.amount_in_base = round(
-        exchange.convert(
-            db,
-            sub.amount,
-            sub.currency,
-            base_currency,
-            user_id=sub.user_id,
-        ),
-        2,
+    amount_in_base = exchange.convert_strict(
+        db,
+        sub.amount,
+        sub.currency,
+        base_currency,
+        user_id=sub.user_id,
     )
+    out.amount_in_base = round(amount_in_base, 2) if amount_in_base is not None else None
+    out.base_conversion_complete = amount_in_base is not None
     return out
 
 

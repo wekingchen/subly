@@ -188,6 +188,27 @@ def user_base_rate_from_stored(
     return user_base_rate / custom_rate
 
 
+def convert_strict(
+    db: Session,
+    amount: float,
+    from_cur: str,
+    to_cur: str,
+    *,
+    user_id: int | None = None,
+) -> float | None:
+    """严格换算金额；缺少任一可靠汇率时返回 None，绝不伪装成目标币金额。"""
+    from_cur = from_cur.strip().upper()
+    to_cur = to_cur.strip().upper()
+    if from_cur == to_cur:
+        return amount
+
+    r_from = system_quote_rate(db, from_cur, user_id=user_id)
+    r_to = system_quote_rate(db, to_cur, user_id=user_id)
+    if r_from is None or r_to is None:
+        return None
+    return amount / r_from * r_to
+
+
 def convert(
     db: Session,
     amount: float,
@@ -196,26 +217,21 @@ def convert(
     *,
     user_id: int | None = None,
 ) -> float:
-    """换算金额。汇率以系统基准货币(base)存储，通过基准货币中转。"""
-    from_cur = from_cur.strip().upper()
-    to_cur = to_cur.strip().upper()
-    if from_cur == to_cur:
-        return amount
+    """兼容换算入口；缺汇率时保留旧行为并返回原金额。财务/UI 应使用 convert_strict。"""
+    converted = convert_strict(
+        db, amount, from_cur, to_cur, user_id=user_id
+    )
+    if converted is not None:
+        return converted
 
     base = (settings.exchange_api_base or "USD").upper()
-    # base -> from_cur 与 base -> to_cur
-    r_from = _rate_from_base(db, base, from_cur, user_id=user_id)
-    r_to = _rate_from_base(db, base, to_cur, user_id=user_id)
-    if not r_from or not r_to:
-        key = (base, from_cur, to_cur, user_id)
-        if key not in _missing_rate_warned:
-            _missing_rate_warned.add(key)
-            logger.warning(
-                "event=exchange_rate_missing base=%s from_cur=%s to_cur=%s "
-                "missing_from=%s missing_to=%s",
-                base, from_cur, to_cur, not bool(r_from), not bool(r_to),
-            )
-        return amount
-    # amount(from) -> base -> to
-    amount_in_base = amount / r_from
-    return amount_in_base * r_to
+    from_cur = from_cur.strip().upper()
+    to_cur = to_cur.strip().upper()
+    key = (base, from_cur, to_cur, user_id)
+    if key not in _missing_rate_warned:
+        _missing_rate_warned.add(key)
+        logger.warning(
+            "event=exchange_rate_missing base=%s from_cur=%s to_cur=%s",
+            base, from_cur, to_cur,
+        )
+    return amount

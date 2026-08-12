@@ -1,5 +1,18 @@
 <template>
   <div>
+    <DataState
+      v-if="dataState !== 'ready'"
+      :state="dataState"
+      :trust="dataState === 'stale' ? 'stale' : 'unknown'"
+      :compact="dataState === 'refreshing' || dataState === 'stale'"
+      error-title="支出报表加载失败"
+      stale-title="刷新失败，当前显示上次加载的报表"
+      @retry="loadActive"
+    />
+    <template v-if="hasLoaded">
+    <p v-if="financeCompleteness?.is_complete === false" class="finance-warning" role="status">
+      {{ t('reports.incompleteFx', { currencies: (financeCompleteness.missing_currencies || []).join('、') }) }}
+    </p>
     <div class="report-head card radar-grid-bg" :class="reportStatus">
       <div class="report-title">
         <div class="hero-kicker">
@@ -147,7 +160,7 @@
                 <td class="rk mono-data">{{ i + 1 }}</td>
                 <td><span class="nm"><ServiceIcon :src="s.icon" :name="s.name" :fallback="emojiOf(s)" class="nm-ico" /><span class="nm-txt"><b>{{ s.name }}</b><i v-if="s.plan" class="nm-sub">{{ s.plan }}</i><i v-if="s.remark" class="nm-remark">📝 {{ s.remark }}</i></span></span></td>
                 <td class="muted">{{ catName(s.category_id) }}</td>
-                <td class="mono-data money-cell">{{ money(s.amount_in_base || 0) }}</td>
+                <td class="mono-data money-cell">{{ s.monthly_cost_in_base == null ? t('reports.rateUnavailable') : money(s.monthly_cost_in_base) }}</td>
               </tr>
               <tr v-if="!ranking.length"><td colspan="4" class="muted">{{ t('reports.empty') }}</td></tr>
             </tbody>
@@ -162,7 +175,7 @@
               <div class="ld-meta">{{ ledgerMeta(s) }}</div>
               <div v-if="cleanText(s.remark)" class="ld-remark">📝 {{ cleanText(s.remark) }}</div>
             </div>
-            <div class="ld-amt mono-data">{{ money(s.amount_in_base || 0) }}<span class="muted">/ {{ t('reports.monthly') }}</span></div>
+            <div class="ld-amt mono-data">{{ s.monthly_cost_in_base == null ? t('reports.rateUnavailable') : money(s.monthly_cost_in_base) }}<span class="muted">/ {{ t('reports.monthly') }}</span></div>
           </div>
           <p v-if="!ranking.length" class="muted">{{ t('reports.empty') }}</p>
         </div>
@@ -337,13 +350,15 @@
       </div>
       <p v-if="!payments.length" class="muted">{{ t('reports.empty') }}</p>
     </div>
+    </template>
   </div>
 </template>
 
 <script setup>
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import api from '../api'
+import DataState from '../components/DataState.vue'
 import RadarBars from '../components/RadarBars.vue'
 import ServiceIcon from '../components/ServiceIcon.vue'
 import SignalDot from '../components/SignalDot.vue'
@@ -351,8 +366,9 @@ import TrendChart from '../components/TrendChart.vue'
 import { useBreakpoint } from '../composables/useBreakpoint'
 import { useAuth } from '../stores/auth'
 import { daysLeft } from '../utils/date'
+import { createRequestGuard } from '../utils/dataRequest'
 import { emojiOf } from '../utils/icon'
-import { amountOf, formatMoney } from '../utils/money'
+import { baseAmountOf, formatMoney } from '../utils/money'
 import { renewalStatus } from '../utils/renewal'
 import { buildFutureTrend, TREND_MONTH_OPTIONS } from '../utils/trend'
 
@@ -361,6 +377,23 @@ const auth = useAuth()
 const isDesktop = useBreakpoint('(min-width: 721px)')
 const tabs = ['overview', 'insights', 'categoryDetail', 'recentPayments']
 const active = ref('overview')
+const tabStates = reactive(Object.fromEntries(tabs.map((tab) => [tab, {
+  initialLoading: false,
+  refreshing: false,
+  initialError: false,
+  stale: false,
+  hasLoaded: false
+}])))
+const currentTabState = computed(() => tabStates[active.value])
+const hasLoaded = computed(() => currentTabState.value.hasLoaded)
+const dataState = computed(() => {
+  const state = currentTabState.value
+  if (state.initialLoading) return 'loading'
+  if (state.initialError) return 'error'
+  if (state.stale) return 'stale'
+  if (state.refreshing) return 'refreshing'
+  return 'ready'
+})
 const cur = computed(() => auth.user?.base_currency || 'CNY')
 
 const insights = ref({ breakdown: [] })
@@ -379,6 +412,7 @@ const oneTime = ref([])
 const upcoming = ref([])
 const expired = ref([])
 const payments = ref([])
+const paymentsCompleteness = ref(null)
 const cats = ref([])
 
 function catName(id) {
@@ -415,6 +449,14 @@ const donutStyle = computed(() => {
 const maxMonthly = computed(() => Math.max(1, ...(insights.value.breakdown || []).map((b) => b.monthly)))
 function barW(b) { return Math.round((b.monthly / maxMonthly.value) * 100) }
 const recurringCount = computed(() => (detail.value.recurring || []).reduce((a, r) => a + r.count, 0))
+const financeCompleteness = computed(() => {
+  if (active.value === 'overview') {
+    return detail.value.financial_completeness || insights.value.financial_completeness || null
+  }
+  if (active.value === 'categoryDetail') return detail.value.financial_completeness || null
+  if (active.value === 'recentPayments') return paymentsCompleteness.value
+  return null
+})
 // 月度预算：基于月化 run-rate（insights.monthly_total）对比用户预算
 const budget = computed(() => auth.user?.monthly_budget ?? null)
 const monthlyTotal = computed(() => insights.value.monthly_total || 0)
@@ -434,18 +476,33 @@ const reportStatus = computed(() => {
 })
 const riskRadarRaw = computed(() => {
   const base = {
-    overdue: { key: 'overdue', label: t('reports.expired'), count: expired.value.length, amount: expired.value.reduce((n, s) => n + amountOf(s), 0) },
-    soon: { key: 'soon', label: t('sub.statusSoon'), count: 0, amount: 0 },
-    ok: { key: 'ok', label: t('sub.statusSafe'), count: 0, amount: 0 },
-    oneTime: { key: 'oneTime', label: t('reports.oneTime'), count: oneTime.value.length, amount: oneTime.value.reduce((n, s) => n + amountOf(s), 0) }
+    overdue: { key: 'overdue', label: t('reports.expired'), count: expired.value.length, amount: 0, missingCurrencies: new Set() },
+    soon: { key: 'soon', label: t('sub.statusSoon'), count: 0, amount: 0, missingCurrencies: new Set() },
+    ok: { key: 'ok', label: t('sub.statusSafe'), count: 0, amount: 0, missingCurrencies: new Set() },
+    oneTime: { key: 'oneTime', label: t('reports.oneTime'), count: oneTime.value.length, amount: 0, missingCurrencies: new Set() }
   }
+  function addAmount(bucket, item) {
+    const amount = baseAmountOf(item)
+    if (amount === null) {
+      if (item.currency) bucket.missingCurrencies.add(item.currency)
+    } else {
+      bucket.amount += amount
+    }
+  }
+  for (const s of expired.value) addAmount(base.overdue, s)
+  for (const s of oneTime.value) addAmount(base.oneTime, s)
   for (const s of upcoming.value) {
     const d = daysLeft(s)
     const key = d !== null && d <= 7 ? 'soon' : 'ok'
     base[key].count += 1
-    base[key].amount += amountOf(s)
+    addAmount(base[key], s)
   }
-  return Object.values(base)
+  return Object.values(base).map((bucket) => ({
+    ...bucket,
+    amountLabel: bucket.missingCurrencies.size
+      ? t('reports.radarAmountIncomplete', { currencies: [...bucket.missingCurrencies].join('、') })
+      : ''
+  }))
 })
 const riskRadarBars = computed(() => {
   const max = Math.max(1, ...riskRadarRaw.value.map((b) => b.count))
@@ -460,7 +517,13 @@ async function loadPaymentHistory() {
     const response = await api.get('/api/reports/payment-history', { params: { months: requestedMonths } })
     if (requestId === paymentHistoryRequestId && requestedMonths === trendMonths.value) {
       paymentHistory.value = response.data.history || []
-      trendError.value = ''
+      if (response.data.financial_completeness?.is_complete === false) {
+        trendError.value = t('reports.incompleteFx', {
+          currencies: (response.data.financial_completeness.missing_currencies || []).join('、')
+        })
+      } else {
+        trendError.value = ''
+      }
     }
   } catch (error) {
     if (requestId === paymentHistoryRequestId && requestedMonths === trendMonths.value) {
@@ -491,18 +554,8 @@ async function loadOverview() {
     api.get('/api/subscriptions', { params: { active: true } })
   ])
   const [ins, det, u, e, hist, subs] = results.map((r) => (r.status === 'fulfilled' ? r.value : null))
-  if (ins) insights.value = ins.data
-  if (det) detail.value = det.data
-  if (u) upcoming.value = u.data
-  if (e) expired.value = e.data
-  if (
-    historyRequestId === paymentHistoryRequestId
-    && requestedMonths === trendMonths.value
-  ) {
-    paymentHistory.value = hist?.data.history || []
-    trendError.value = hist ? '' : t('reports.trendLoadFailed')
-  }
-  if (subs) activeSubs.value = subs.data || []
+  if (!ins || !det || !u || !e || !subs) throw new Error('reports overview unavailable')
+  return { requestedMonths, historyRequestId, ins, det, u, e, hist, subs }
 }
 async function loadInsights() {
   const [r, o, u, e] = await Promise.all([
@@ -511,27 +564,87 @@ async function loadInsights() {
     api.get('/api/reports/upcoming'),
     api.get('/api/reports/expired')
   ])
-  ranking.value = r.data; oneTime.value = o.data; upcoming.value = u.data; expired.value = e.data
+  return { r, o, u, e }
 }
-async function loadDetail() { detail.value = (await api.get('/api/reports/category-detail')).data }
-async function loadPayments() { payments.value = (await api.get('/api/reports/recent-payments')).data.items }
+async function loadDetail() { return (await api.get('/api/reports/category-detail')).data }
+async function loadPayments() { return (await api.get('/api/reports/recent-payments')).data }
 
-function loadActive() {
-  if (active.value === 'overview') loadOverview()
-  else if (active.value === 'insights') loadInsights()
-  else if (active.value === 'categoryDetail') loadDetail()
-  else loadPayments()
+function applyOverview(payload) {
+  insights.value = payload.ins.data
+  if (payload.det) detail.value = payload.det.data
+  if (payload.u) upcoming.value = payload.u.data
+  if (payload.e) expired.value = payload.e.data
+  if (
+    payload.historyRequestId === paymentHistoryRequestId
+    && payload.requestedMonths === trendMonths.value
+  ) {
+    paymentHistory.value = payload.hist?.data.history || []
+    if (!payload.hist) {
+      trendError.value = t('reports.trendLoadFailed')
+    } else if (payload.hist.data.financial_completeness?.is_complete === false) {
+      trendError.value = t('reports.incompleteFx', {
+        currencies: (payload.hist.data.financial_completeness.missing_currencies || []).join('、')
+      })
+    } else {
+      trendError.value = ''
+    }
+  }
+  if (payload.subs) activeSubs.value = payload.subs.data || []
+}
+
+const activeRequestGuard = createRequestGuard()
+async function loadActive() {
+  const tab = active.value
+  const state = tabStates[tab]
+  const requestId = activeRequestGuard.begin()
+  if (state.hasLoaded) state.refreshing = true
+  else state.initialLoading = true
+  state.initialError = false
+  try {
+    let payload
+    if (tab === 'overview') payload = await loadOverview()
+    else if (tab === 'insights') payload = await loadInsights()
+    else if (tab === 'categoryDetail') payload = await loadDetail()
+    else payload = await loadPayments()
+    if (!activeRequestGuard.isCurrent(requestId) || active.value !== tab) return
+    if (tab === 'overview') applyOverview(payload)
+    else if (tab === 'insights') {
+      ranking.value = payload.r.data
+      oneTime.value = payload.o.data
+      upcoming.value = payload.u.data
+      expired.value = payload.e.data
+    } else if (tab === 'categoryDetail') {
+      detail.value = payload
+    } else {
+      payments.value = payload.items || []
+      paymentsCompleteness.value = payload.financial_completeness || null
+    }
+    state.hasLoaded = true
+    state.stale = false
+  } catch {
+    if (!activeRequestGuard.isCurrent(requestId) || active.value !== tab) return
+    if (state.hasLoaded) state.stale = true
+    else state.initialError = true
+  } finally {
+    if (activeRequestGuard.isCurrent(requestId) && active.value === tab) {
+      state.initialLoading = false
+      state.refreshing = false
+    }
+  }
 }
 
 watch(active, loadActive)
-onMounted(async () => {
-  cats.value = (await api.get('/api/categories').catch(() => ({ data: [] }))).data || []
+onMounted(() => {
   loadActive()
+  api.get('/api/categories')
+    .then((response) => { cats.value = response.data || [] })
+    .catch(() => { /* 分类名称是辅助元数据，失败不阻断报表主数据。 */ })
 })
 </script>
 
 <style scoped>
 h1 { margin: 0; }
+.finance-warning { margin: 0 0 14px; padding: 10px 12px; border: 1px solid color-mix(in srgb, var(--warning) 45%, var(--border)); border-radius: 10px; background: color-mix(in srgb, var(--warning) 8%, var(--surface)); color: var(--text-soft); font-size: 13px; }
 .report-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 18px; margin-bottom: 14px;
   position: relative; overflow: hidden; background: linear-gradient(135deg, color-mix(in srgb, var(--signal-cyan) 10%, var(--surface)), var(--surface)); }
 .report-head.overdue { background: linear-gradient(135deg, color-mix(in srgb, var(--danger) 12%, var(--surface)), var(--surface)); }

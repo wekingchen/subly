@@ -69,6 +69,31 @@ export function expandRenewalsInRange(subscriptions, rangeStart, rangeEnd, optio
   return out
 }
 
+export function buildRenewalRadarEvents(subscriptions, options = {}) {
+  const todayISO = toISODate(parseLocalDate(options.now) || new Date())
+  const today = parseLocalDate(todayISO)
+  const horizon = options.horizon ?? 30
+  const rangeEnd = new Date(today)
+  rangeEnd.setDate(rangeEnd.getDate() + horizon)
+  const future = expandRenewalsInRange(subscriptions, todayISO, rangeEnd, {
+    includeHidden: options.includeHidden === true
+  })
+  const overdue = []
+
+  for (const sub of subscriptions || []) {
+    if (!sub || sub.billing_type !== 'recurring') continue
+    if (sub.is_active === false || sub.is_paused === true) continue
+    if (!options.includeHidden && sub.show_in_calendar === false) continue
+    const due = parseLocalDate(sub.next_renewal_date)
+    if (!due || due.getTime() >= today.getTime()) continue
+    const endLimit = parseLocalDate(sub.end_date)
+    if (endLimit && endLimit.getTime() < today.getTime()) continue
+    overdue.push(sub)
+  }
+
+  return [...overdue, ...future]
+}
+
 export function groupRenewalEventsByDate(events) {
   const map = new Map()
   for (const ev of events || []) {

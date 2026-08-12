@@ -9,6 +9,7 @@
 ## [Unreleased]
 
 ### Added
+- 雷达总览、续费日历、订阅账本与支出报表新增统一的数据可信状态：首次加载、真实空数据、首次错误、后台刷新与陈旧数据明确区分并支持重试；核心请求增加竞态防护，辅助分类/付款/图标等元数据失败不再阻断主数据。雷达总览的“添加订阅”现直接打开现有订阅表单。
 - 通知链路新增可靠 Outbox：每日扫描只在短事务中幂等入队，后台 Dispatcher 通过租约认领后再联网；网络异常、408/425/429/5xx 自动按固定退避重试，最多 6 次后进入 dead-letter，过期租约可恢复，启动当天未扫会自动补扫。通知中心升级为投递控制台，展示 `pending / sending / retry_wait / sent / dead / canceled`、安全错误、下次重试与逐次尝试记录，并允许本人将 `dead/retry_wait` 原子重新入队；Webhook 正式投递增加稳定 Delivery ID 供接收端幂等。
 - 设置页新增私有 iCal 日历订阅：每个用户可生成、重置或撤销高熵私有链接，数据库只保存 SHA-256，原始链接仅在本次生成/重置时显示；Feed 复用后端周期与包含式结束日期语义，输出前 31 天至未来 24 个月的有效全天续费事件，不包含备注、IP、家庭成员或通知凭据。
 - 新增安全 PWA 支持：生产环境注册 Service Worker，并提供 Manifest、192/512/maskable 品牌图标和静态离线页；仅预缓存离线页与品牌图标，导航保持 network-first，API、Feed、登录数据与 SPA shell 均不写入 Cache Storage。
@@ -32,6 +33,9 @@
 - 订阅账本卡片重构为“信号卡 + 内联详情”：默认卡片聚焦服务身份 / 费用 / 到期风险与少量摘要 chip，点击卡片展开内联详情，分「身份与费用 / 风险与提醒 / 账务与归属」三块展示完整字段；同时只展开一张卡片，展开按钮支持键盘 Enter/Space。
 - 订阅币种非基准货币时，卡片与详情显示 `amount_in_base` 的基准货币折合值，跨币种对账更直观。
 - 内置服务库新增「智谱 GLM」（AI）与「火山引擎 / 豆包」（AI + VPS，因火山引擎同时提供豆包大模型与火山云服务器）。
+
+### Changed
+- 统一财务成本与汇率契约：Dashboard 与 Reports 共用唯一月化函数，界面明确显示月化 / 年化成本；`amount_in_base` 仅表示单次金额折合，支出排行改用 `monthly_cost_in_base`。财务与 UI 换算缺汇率时不再把原币金额伪装成基准币，相关汇总返回完整性元数据并提示缺失币种。
 
 ### Fixed
 - 收紧私有日历与 PWA 的日志、缓存和响应头：Uvicorn access log 默认关闭，应用日志只记录 path 不记录 query；Feed 和管理响应统一 `private, no-store` / `noindex` / `no-referrer`，HTML 与 Service Worker 禁止持久缓存，Vite 哈希资源使用长期 immutable，CSP 增加 `worker-src` 与 `manifest-src`；订阅 URL 拒绝控制字符，周期数量增加安全上限，历史脏数据不会再击穿 Feed。

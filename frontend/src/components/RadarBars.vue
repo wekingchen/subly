@@ -10,8 +10,9 @@
     >
       <span class="rb-count mono-data">{{ bar.count }}</span>
       <span class="rb-label">{{ bar.label }}</span>
+      <span v-if="bar.amountLabel" class="rb-amt muted">{{ bar.amountLabel }}</span>
       <MoneyText
-        v-if="bar.amount !== undefined"
+        v-else-if="bar.amount !== undefined"
         class="rb-amt"
         :value="bar.amount"
         :currency="currency"

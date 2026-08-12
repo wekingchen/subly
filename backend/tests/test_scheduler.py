@@ -375,7 +375,7 @@ def test_send_one_sanitizes_provider_failure_messages(monkeypatch):
 def test_reminder_text_includes_core_subscription_context(monkeypatch):
     db, engine = make_db()
     try:
-        monkeypatch.setattr(scheduler.exchange, "convert", lambda db, amount, from_cur, to_cur, **kwargs: 88.88)
+        monkeypatch.setattr(scheduler.exchange, "convert_strict", lambda db, amount, from_cur, to_cur, **kwargs: 88.88)
         user = add_user(db, base_currency="CNY")
         category = Category(user_id=user.id, name="云服务器", icon="", color="#00f")
         payment = PaymentMethod(user_id=user.id, name="Visa", icon="")
@@ -413,7 +413,7 @@ def test_bark_text_is_natural_and_omits_empty_fields(monkeypatch):
     """Bark 文案单行口语化；套餐/付款/备注「有才说」；外币才折算；周期用「月/年」。"""
     db, engine = make_db()
     try:
-        monkeypatch.setattr(scheduler.exchange, "convert",
+        monkeypatch.setattr(scheduler.exchange, "convert_strict",
                             lambda db, amount, from_cur, to_cur, **kwargs: amount if from_cur == to_cur else 88.0)
         # 同币种：不折算；无套餐/付款/备注/分类：正文停在到期语句
         user_cny = add_user(db, username="cn", base_currency="CNY")

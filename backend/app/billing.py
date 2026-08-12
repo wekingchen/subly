@@ -1,6 +1,18 @@
 from datetime import date, timedelta
 
 
+def monthly_cost(amount: float, cycle: str, cycle_count: int) -> float:
+    """把一个计费周期金额月化；不做汇率换算或数据库访问。"""
+    count = max(1, cycle_count)
+    factor = {
+        "day": 30 / count,
+        "week": 52 / 12 / count,
+        "month": 1 / count,
+        "year": 1 / 12 / count,
+    }
+    return amount * factor.get(cycle, 1)
+
+
 def is_subscription_current(as_of: date, end_date: date | None) -> bool:
     """截止日包含在有效期内；无截止日时始终有效。"""
     return end_date is None or as_of <= end_date

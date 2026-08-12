@@ -4,26 +4,53 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.billing import is_renewal_within_end_date, is_subscription_current
+from app.billing import is_renewal_within_end_date, is_subscription_current, monthly_cost
 from app.database import get_db
 from app.deps import get_current_user
 from app.models import Category, RenewalHistory, Subscription, User
-from app.schemas import SubscriptionOut
+from app.schemas import (
+    CategoryDetailOut,
+    InsightsOut,
+    PaymentHistoryOut,
+    RecentPaymentsOut,
+    SubscriptionOut,
+)
 from app.services import exchange
 
 router = APIRouter(prefix="/api/reports", tags=["reports"])
 
 
-def _monthly_cost(db, sub, base):
-    amt = exchange.convert(
+def _base_amount(db: Session, sub: Subscription, base: str) -> float | None:
+    return exchange.convert_strict(
         db, sub.amount, sub.currency, base, user_id=sub.user_id
     )
-    n = max(1, sub.cycle_count)
-    factor = {"day": 30 / n, "week": 52 / 12 / n, "month": 1 / n, "year": 1 / 12 / n}
-    return amt * factor.get(sub.cycle, 1)
 
 
-@router.get("/insights")
+def _monthly_cost_in_base(db: Session, sub: Subscription, base: str) -> float | None:
+    amount_in_base = _base_amount(db, sub, base)
+    if amount_in_base is None:
+        return None
+    return monthly_cost(amount_in_base, sub.cycle, sub.cycle_count)
+
+
+def _to_out(db: Session, sub: Subscription, base: str) -> SubscriptionOut:
+    out = SubscriptionOut.model_validate(sub)
+    amount_in_base = _base_amount(db, sub, base)
+    out.amount_in_base = round(amount_in_base, 2) if amount_in_base is not None else None
+    out.base_conversion_complete = amount_in_base is not None
+    return out
+
+
+def _completeness(included_count: int, total_count: int, missing_currencies: set[str]) -> dict:
+    return {
+        "is_complete": included_count == total_count,
+        "included_count": included_count,
+        "excluded_count": total_count - included_count,
+        "missing_currencies": sorted(missing_currencies),
+    }
+
+
+@router.get("/insights", response_model=InsightsOut)
 def insights(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """支出洞察：按分类的月度支出占比。"""
     base = user.base_currency
@@ -38,9 +65,16 @@ def insights(user: User = Depends(get_current_user), db: Session = Depends(get_d
     subs = [s for s in subs if is_subscription_current(date.today(), s.end_date)]
     cats = {c.id: c.name for c in db.scalars(select(Category)).all()}
     by_cat: dict[str, float] = {}
+    included_count = 0
+    missing_currencies: set[str] = set()
     for s in subs:
+        cost = _monthly_cost_in_base(db, s, base)
+        if cost is None:
+            missing_currencies.add(s.currency)
+            continue
         name = cats.get(s.category_id, "未分类 / Uncategorized")
-        by_cat[name] = by_cat.get(name, 0.0) + _monthly_cost(db, s, base)
+        by_cat[name] = by_cat.get(name, 0.0) + cost
+        included_count += 1
     total = sum(by_cat.values())
     breakdown = sorted(
         (
@@ -50,7 +84,14 @@ def insights(user: User = Depends(get_current_user), db: Session = Depends(get_d
         key=lambda x: x["monthly"],
         reverse=True,
     )
-    return {"base_currency": base, "monthly_total": round(total, 2), "breakdown": breakdown}
+    return {
+        "base_currency": base,
+        "monthly_total": round(total, 2),
+        "breakdown": breakdown,
+        "financial_completeness": _completeness(
+            included_count, len(subs), missing_currencies
+        ),
+    }
 
 
 @router.get("/ranking", response_model=list[SubscriptionOut])
@@ -66,11 +107,20 @@ def ranking(user: User = Depends(get_current_user), db: Session = Depends(get_db
         )
     ).all()
     subs = [s for s in subs if is_subscription_current(date.today(), s.end_date)]
-    ranked = sorted(subs, key=lambda s: _monthly_cost(db, s, base), reverse=True)
+    costs = {s.id: _monthly_cost_in_base(db, s, base) for s in subs}
+    ranked = sorted(
+        subs,
+        key=lambda s: (
+            costs[s.id] is not None,
+            costs[s.id] if costs[s.id] is not None else 0,
+        ),
+        reverse=True,
+    )
     out = []
     for s in ranked:
-        o = SubscriptionOut.model_validate(s)
-        o.amount_in_base = round(_monthly_cost(db, s, base), 2)  # 此处复用为「月成本」
+        o = _to_out(db, s, base)
+        cost = costs[s.id]
+        o.monthly_cost_in_base = round(cost, 2) if cost is not None else None
         out.append(o)
     return out
 
@@ -89,9 +139,7 @@ def one_time(user: User = Depends(get_current_user), db: Session = Depends(get_d
     ).all()
     out = []
     for s in subs:
-        o = SubscriptionOut.model_validate(s)
-        o.amount_in_base = round(exchange.convert(db, s.amount, s.currency, base, user_id=s.user_id), 2)
-        out.append(o)
+        out.append(_to_out(db, s, base))
     return out
 
 
@@ -124,9 +172,7 @@ def upcoming(
     )
     out = []
     for s in items:
-        o = SubscriptionOut.model_validate(s)
-        o.amount_in_base = round(exchange.convert(db, s.amount, s.currency, base, user_id=s.user_id), 2)
-        out.append(o)
+        out.append(_to_out(db, s, base))
     return out
 
 
@@ -157,13 +203,11 @@ def expired(user: User = Depends(get_current_user), db: Session = Depends(get_db
     )
     out = []
     for s in items:
-        o = SubscriptionOut.model_validate(s)
-        o.amount_in_base = round(exchange.convert(db, s.amount, s.currency, base, user_id=s.user_id), 2)
-        out.append(o)
+        out.append(_to_out(db, s, base))
     return out
 
 
-@router.get("/recent-payments")
+@router.get("/recent-payments", response_model=RecentPaymentsOut)
 def recent_payments(
     limit: int = 20, user: User = Depends(get_current_user), db: Session = Depends(get_db)
 ):
@@ -174,10 +218,17 @@ def recent_payments(
     ).all()
     cats = {c.id: c.name for c in db.scalars(select(Category)).all()}
     rows = []
+    included_count = 0
+    missing_currencies: set[str] = set()
     for s in subs:
         paid_on = s.last_renewed_at or (s.start_date if s.billing_type == "one_time" else None)
         if not paid_on:
             continue
+        amount_in_base = _base_amount(db, s, base)
+        if amount_in_base is None:
+            missing_currencies.add(s.currency)
+        else:
+            included_count += 1
         rows.append(
             {
                 "id": s.id,
@@ -189,15 +240,22 @@ def recent_payments(
                 "date": paid_on,
                 "amount": round(s.amount, 2),
                 "currency": s.currency,
-                "amount_in_base": round(exchange.convert(db, s.amount, s.currency, base, user_id=s.user_id), 2),
+                "amount_in_base": round(amount_in_base, 2) if amount_in_base is not None else None,
+                "base_conversion_complete": amount_in_base is not None,
                 "billing_type": s.billing_type,
             }
         )
     rows.sort(key=lambda r: r["date"], reverse=True)
-    return {"base_currency": base, "items": rows[:limit]}
+    return {
+        "base_currency": base,
+        "items": rows[:limit],
+        "financial_completeness": _completeness(
+            included_count, len(rows), missing_currencies
+        ),
+    }
 
 
-@router.get("/category-detail")
+@router.get("/category-detail", response_model=CategoryDetailOut)
 def category_detail(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """分类明细：循环订阅（月成本）与永久购买（总额）按分类汇总。"""
     base = user.base_currency
@@ -215,19 +273,33 @@ def category_detail(user: User = Depends(get_current_user), db: Session = Depend
 
     recurring_map: dict[str, dict] = {}
     onetime_map: dict[str, dict] = {}
+    included_count = 0
+    total_count = 0
+    missing_currencies: set[str] = set()
     for s in subs:
         name = cat_name(s)
         if s.billing_type == "recurring":
             if not is_subscription_current(date.today(), s.end_date):
                 continue
+            total_count += 1
             d = recurring_map.setdefault(name, {"category": name, "count": 0, "monthly": 0.0})
             d["count"] += 1
-            d["monthly"] += _monthly_cost(db, s, base)
+            cost = _monthly_cost_in_base(db, s, base)
+            if cost is None:
+                missing_currencies.add(s.currency)
+                continue
+            d["monthly"] += cost
+            included_count += 1
         else:
-            amt = exchange.convert(db, s.amount, s.currency, base, user_id=s.user_id)
+            total_count += 1
             d = onetime_map.setdefault(name, {"category": name, "count": 0, "total": 0.0})
             d["count"] += 1
-            d["total"] += amt
+            amount_in_base = _base_amount(db, s, base)
+            if amount_in_base is None:
+                missing_currencies.add(s.currency)
+                continue
+            d["total"] += amount_in_base
+            included_count += 1
 
     recurring = sorted(
         ({**v, "monthly": round(v["monthly"], 2)} for v in recurring_map.values()),
@@ -245,10 +317,13 @@ def category_detail(user: User = Depends(get_current_user), db: Session = Depend
         "one_time": one_time,
         "recurring_monthly_total": round(sum(r["monthly"] for r in recurring), 2),
         "one_time_total": round(sum(o["total"] for o in one_time), 2),
+        "financial_completeness": _completeness(
+            included_count, total_count, missing_currencies
+        ),
     }
 
 
-@router.get("/payment-history")
+@router.get("/payment-history", response_model=PaymentHistoryOut)
 def payment_history(
     months: int = Query(default=6, ge=1, le=24),
     user: User = Depends(get_current_user),
@@ -286,15 +361,28 @@ def payment_history(
     ).all()
 
     by_month: dict[str, float] = {}
+    included_count = 0
+    missing_currencies: set[str] = set()
     for r in rows:
-        key = r.renewed_at.strftime("%Y-%m")
-        by_month[key] = by_month.get(key, 0.0) + exchange.convert(
+        amount_in_base = exchange.convert_strict(
             db, r.amount, r.currency, base, user_id=r.user_id
         )
+        if amount_in_base is None:
+            missing_currencies.add(r.currency)
+            continue
+        key = r.renewed_at.strftime("%Y-%m")
+        by_month[key] = by_month.get(key, 0.0) + amount_in_base
+        included_count += 1
     for s in one_time_subs:
-        if s.start_date:
-            key = s.start_date.strftime("%Y-%m")
-            by_month[key] = by_month.get(key, 0.0) + exchange.convert(db, s.amount, s.currency, base, user_id=s.user_id)
+        if not s.start_date:
+            continue
+        amount_in_base = _base_amount(db, s, base)
+        if amount_in_base is None:
+            missing_currencies.add(s.currency)
+            continue
+        key = s.start_date.strftime("%Y-%m")
+        by_month[key] = by_month.get(key, 0.0) + amount_in_base
+        included_count += 1
 
     # 填充连续月份（无数据补 0），用连续索引避免跨年递增错误
     out = []
@@ -304,4 +392,10 @@ def payment_history(
         key = f"{y:04d}-{m + 1:02d}"
         out.append({"month": key, "amount": round(by_month.get(key, 0.0), 2)})
         idx += 1
-    return {"base_currency": base, "history": out}
+    return {
+        "base_currency": base,
+        "history": out,
+        "financial_completeness": _completeness(
+            included_count, len(rows) + len(one_time_subs), missing_currencies
+        ),
+    }

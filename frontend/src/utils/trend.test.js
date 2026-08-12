@@ -55,4 +55,14 @@ describe('buildFutureTrend', () => {
     expect(rows[0]).toEqual({ month: '2026-07', amount: 0 })
     expect(rows[11]).toEqual({ month: '2027-06', amount: 0 })
   })
+
+  it('does not aggregate raw foreign amounts when base conversion is missing', () => {
+    const missingRate = { ...monthly, amount: 999, amount_in_base: null, currency: 'USD' }
+
+    expect(buildFutureTrend([missingRate], 3, { now: new Date(2026, 10, 15) })).toEqual([
+      { month: '2026-11', amount: 0 },
+      { month: '2026-12', amount: 0 },
+      { month: '2027-01', amount: 0 }
+    ])
+  })
 })

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { expandRenewalsInRange, groupRenewalEventsByDate } from './recurrence'
+import { buildRenewalRadarEvents, expandRenewalsInRange, groupRenewalEventsByDate } from './recurrence'
 
 const baseSub = (overrides = {}) => ({
   id: 1,
@@ -117,5 +117,26 @@ describe('expandRenewalsInRange', () => {
     const grouped = groupRenewalEventsByDate(events)
 
     expect(grouped.get('2026-07-05')).toHaveLength(2)
+  })
+
+  it('expands future occurrences while keeping overdue separate', () => {
+    const events = buildRenewalRadarEvents([
+      baseSub({ id: 1, cycle: 'day', next_renewal_date: '2026-07-01' }),
+      baseSub({ id: 2, next_renewal_date: '2026-06-30' }),
+      baseSub({ id: 3, show_in_calendar: false, next_renewal_date: '2026-07-02' })
+    ], { now: '2026-07-01', horizon: 3 })
+
+    expect(events.filter((e) => e.occurrence_origin_id === 1)).toHaveLength(4)
+    expect(events.some((e) => e.id === 2 && e.next_renewal_date === '2026-06-30')).toBe(true)
+    expect(events.some((e) => e.occurrence_origin_id === 3)).toBe(false)
+  })
+
+  it('normalizes a timed current date before classifying today and inclusive end dates', () => {
+    const events = buildRenewalRadarEvents([
+      baseSub({ id: 1, next_renewal_date: '2026-07-01', end_date: '2026-07-01' })
+    ], { now: new Date(2026, 6, 1, 15, 30), horizon: 1 })
+
+    expect(events).toHaveLength(1)
+    expect(events[0].occurrence_date).toBe('2026-07-01')
   })
 })

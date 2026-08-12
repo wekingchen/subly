@@ -3,6 +3,17 @@ from datetime import date
 from app import billing
 
 
+def test_monthly_cost_normalizes_supported_cycles_and_counts():
+    assert billing.monthly_cost(10, "day", 2) == 150
+    assert billing.monthly_cost(120, "week", 2) == 260
+    assert billing.monthly_cost(60, "month", 3) == 20
+    assert billing.monthly_cost(240, "year", 2) == 10
+
+
+def test_monthly_cost_preserves_existing_invalid_cycle_contract():
+    assert billing.monthly_cost(12, "unknown", 0) == 12
+
+
 def test_add_cycle_day():
     assert billing.add_cycle(date(2024, 1, 1), "day", 3) == date(2024, 1, 4)
 

@@ -7,18 +7,29 @@
         <p class="ledger-subtitle">{{ t('sub.ledgerSubtitle') }}</p>
       </div>
       <div class="ledger-hero-side">
-        <div class="ledger-count mono-data">{{ t('sub.ledgerCount', { n: subs.length }) }}</div>
+        <div class="ledger-count mono-data">{{ t('sub.ledgerCount', { n: visibleSubscriptionCount }) }}</div>
         <button class="btn" @click="openNew">+ {{ t('sub.add') }}</button>
       </div>
     </section>
 
     <SubscriptionToolbar
       :filter="filter"
-      :has-items="subs.length > 0"
+      :has-items="visibleSubscriptionCount > 0"
       @filter-change="setFilter"
     />
 
-    <div v-if="!subs.length" class="card empty-ledger">
+    <DataState
+      v-if="dataState !== 'ready' && dataState !== 'empty'"
+      :state="dataState"
+      :trust="dataState === 'stale' ? 'stale' : 'unknown'"
+      :compact="dataState === 'refreshing' || dataState === 'stale'"
+      empty-title="还没有订阅信号"
+      error-title="订阅账本加载失败"
+      stale-title="刷新失败，当前显示上次加载的订阅"
+      @retry="load"
+    />
+
+    <div v-if="dataState === 'empty'" class="card empty-ledger">
       <div class="empty-orbit" aria-hidden="true"><span></span></div>
       <div>
         <h2>{{ filter ? t('sub.emptyFilteredTitle') : t('sub.emptyTitle') }}</h2>
@@ -29,7 +40,7 @@
 
     <!-- 按分类分组 -->
     <SubscriptionCategoryGroup
-      v-for="g in grouped"
+      v-for="g in dataState === 'loading' || dataState === 'error' || (dataState !== 'stale' && loadedFilter !== filter) ? [] : grouped"
       :key="g.key"
       :group="g"
       :sort-enabled="!filter"
@@ -115,6 +126,7 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import api from '../api'
+import DataState from '../components/DataState.vue'
 import DeleteSubscriptionModal from '../components/subscriptions/DeleteSubscriptionModal.vue'
 import RenewSubscriptionModal from '../components/subscriptions/RenewSubscriptionModal.vue'
 import SubscriptionActionMenuLayer from '../components/subscriptions/SubscriptionActionMenuLayer.vue'
@@ -125,17 +137,24 @@ import { useAuth } from '../stores/auth'
 import { useBodyLock } from '../composables/useBodyLock'
 import { useSubscriptionActions } from '../composables/useSubscriptionActions'
 import { amountOf, hasBaseEquivalent } from '../utils/money'
+import { useDataRequest } from '../utils/dataRequest'
 import { buildGroupedSubscriptions, buildSubscriptionOrderState, categoryOrderToPersistedIds, getCategoryMeta, getSubscriptionCategoryKey, moveCategoryByOffset, moveCategoryToTarget, moveValueByOffset, moveValueToTarget, UNCATEGORIZED_KEY } from '../utils/subscriptionOrdering'
 
 const { t } = useI18n()
 const auth = useAuth()
-const subs = ref([])
+const dataRequest = useDataRequest({ initialData: [] })
+const subs = dataRequest.data
+const dataState = computed(() => dataRequest.state())
+const visibleSubscriptionCount = computed(() => (
+  loadedFilter.value === filter.value || dataRequest.stale.value ? subs.value.length : 0
+))
 const currencies = ref([])
 const categories = ref([])
 const methods = ref([])
 const bundles = ref([])
 const iconLib = ref([])
 const filter = ref('')
+const loadedFilter = ref(null)
 
 const actionTarget = ref(null)
 const actionCatKey = ref(null)
@@ -330,13 +349,20 @@ async function onCardDrop(catKey, id, e) {
 }
 
 async function load() {
-  const params = filter.value ? { billing_type: filter.value } : {}
-  const { data } = await api.get('/api/subscriptions', { params })
-  subs.value = data
+  const requestedFilter = filter.value
+  const params = requestedFilter ? { billing_type: requestedFilter } : {}
+  const result = await dataRequest.run(async () => (await api.get('/api/subscriptions', { params })).data)
+  if (!result.applied || result.error || filter.value !== requestedFilter) return result
+  loadedFilter.value = requestedFilter
   if (expandedSubId.value && !subs.value.some((s) => s.id === expandedSubId.value)) expandedSubId.value = null
   rebuild()
+  return result
 }
-function setFilter(f) { filter.value = f; load() }
+async function setFilter(f) {
+  filter.value = f
+  const result = await load()
+  if (result?.error && loadedFilter.value !== f) filter.value = loadedFilter.value ?? ''
+}
 
 function openNew() {
   openEdit(null)
@@ -398,19 +424,20 @@ function moveFromActions(dir) {
 }
 
 onMounted(async () => {
-  const [c, cat, m, b, lib] = await Promise.all([
+  load()
+  const metadata = await Promise.allSettled([
     api.get('/api/currencies'),
     api.get('/api/categories'),
     api.get('/api/payment-methods'),
     api.get('/api/bundles'),
     api.get('/api/icons/library')
   ])
-  currencies.value = c.data
-  categories.value = cat.data
-  methods.value = m.data
-  bundles.value = b.data
-  iconLib.value = lib.data
-  load()
+  if (metadata[0].status === 'fulfilled') currencies.value = metadata[0].value.data
+  if (metadata[1].status === 'fulfilled') categories.value = metadata[1].value.data
+  if (metadata[2].status === 'fulfilled') methods.value = metadata[2].value.data
+  if (metadata[3].status === 'fulfilled') bundles.value = metadata[3].value.data
+  if (metadata[4].status === 'fulfilled') iconLib.value = metadata[4].value.data
+  rebuild()
 })
 </script>
 

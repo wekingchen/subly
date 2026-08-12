@@ -227,7 +227,9 @@ def rate_table(user: User = Depends(get_current_user), db: Session = Depends(get
         currency_rate = exchange.system_quote_rate(db, c.code, user_id=user.id)
         if base_rate is None or currency_rate is None:
             continue
-        val = exchange.convert(db, 1.0, c.code, base, user_id=user.id)
+        val = exchange.convert_strict(db, 1.0, c.code, base, user_id=user.id)
+        if val is None:
+            continue
         items.append(
             {
                 "code": c.code,

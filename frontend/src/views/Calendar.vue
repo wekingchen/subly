@@ -1,5 +1,15 @@
 <template>
   <div>
+    <DataState
+      v-if="dataState !== 'ready'"
+      :state="dataState"
+      :trust="dataState === 'stale' ? 'stale' : 'unknown'"
+      :compact="dataState === 'refreshing' || dataState === 'stale'"
+      error-title="续费日历加载失败"
+      stale-title="刷新失败，当前显示上次加载的日历"
+      @retry="reload"
+    />
+    <template v-if="hasLoaded">
     <div class="cal-hero card radar-grid-bg" :class="heroStatus">
       <div class="cal-hero-main">
         <div class="hero-kicker">
@@ -12,12 +22,15 @@
         <div class="cal-sub muted">{{ calendarSummary }}</div>
       </div>
       <div class="cal-ops">
-        <div class="nav" :aria-label="t('calendar.monthSignal')">
+        <div class="nav" :aria-label="t('calendar.monthNavigation')">
           <button class="navbtn" :aria-label="t('calendar.prevMonth')" @click="move(-1)">‹</button>
           <button class="today-btn" @click="goToday">{{ t('calendar.today') }}</button>
           <button class="navbtn" :aria-label="t('calendar.nextMonth')" @click="move(1)">›</button>
         </div>
-        <RadarBars :bars="radarBars" :currency="cur" wrapper-class="cal-radar-bars" />
+        <div class="today-radar" role="region" :aria-label="t('calendar.todayRadar')">
+          <div class="today-radar-label muted">{{ t('calendar.todayRadar') }}</div>
+          <RadarBars :bars="radarBars" :currency="cur" wrapper-class="cal-radar-bars" />
+        </div>
       </div>
     </div>
 
@@ -37,9 +50,11 @@
               <ServiceIcon :src="ev.icon" :name="ev.name" :fallback="emojiOf(ev)" class="ev-ico" />
               <span class="ev-name">{{ ev.name }}</span>
             </div>
-            <div v-if="cell.events.length > 3" class="ev more">
+            <button v-if="cell.events.length > 3" class="ev more" type="button"
+                    :aria-label="t('calendar.openDayEvents', { date: cell.key, n: cell.events.length })"
+                    @click="openDayEvents(cell)">
               {{ t('calendar.more', { n: cell.events.length - 3 }) }}
-            </div>
+            </button>
           </div>
         </div>
       </div>
@@ -64,6 +79,19 @@
         <div v-if="!agendaDays.length" class="ag-empty muted">{{ t('calendar.noEvents') }}</div>
       </div>
     </div>
+
+    <AppModal v-model="showDayEvents" :title="dayEventsTitle" width="560px" :close-label="t('common.close')" @close="closeDayEvents">
+      <div class="day-events-list">
+        <button v-for="ev in dayEvents" :key="ev.id" type="button" class="day-event" @click="openDayEventDetail(ev)">
+          <ServiceIcon :src="ev.icon" :name="ev.name" :fallback="emojiOf(ev)" class="day-event-ico" />
+          <span class="day-event-main">
+            <strong>{{ ev.name }}</strong>
+            <span class="muted">{{ ev.occurrence_date }}</span>
+          </span>
+          <MoneyText v-if="ev.amount" :value="ev.amount" :currency="ev.currency" position="suffix" muted />
+        </button>
+      </div>
+    </AppModal>
 
     <!-- 订阅详情弹窗：详情/续费/编辑/删除一律基于原始订阅（点击的是周期展开后的 occurrence） -->
     <AppModal v-model="showDetail" :title="detailTarget?.name" width="640px" :close-label="t('common.close')" @close="closeDetail">
@@ -129,6 +157,7 @@
     <div class="toast-wrap">
       <div v-for="tst in toasts" :key="tst.id" class="toast" :class="tst.type">{{ tst.msg }}</div>
     </div>
+    </template>
   </div>
 </template>
 
@@ -137,6 +166,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import api from '../api'
 import AppModal from '../components/AppModal.vue'
+import DataState from '../components/DataState.vue'
 import MoneyText from '../components/MoneyText.vue'
 import RadarBars from '../components/RadarBars.vue'
 import ServiceIcon from '../components/ServiceIcon.vue'
@@ -149,9 +179,10 @@ import { useAuth } from '../stores/auth'
 import { useBodyLock } from '../composables/useBodyLock'
 import { useSubscriptionActions } from '../composables/useSubscriptionActions'
 import { toISODate } from '../utils/date'
+import { useDataRequest } from '../utils/dataRequest'
 import { emojiOf } from '../utils/icon'
-import { amountOf, formatMoney, hasBaseEquivalent } from '../utils/money'
-import { expandRenewalsInRange, groupRenewalEventsByDate } from '../utils/recurrence'
+import { amountOf, baseAmountOf, formatMoney, hasBaseEquivalent } from '../utils/money'
+import { buildRenewalRadarEvents, expandRenewalsInRange, groupRenewalEventsByDate } from '../utils/recurrence'
 import { groupRenewalStatus, radarBucket as renewalRadarBucket, renewalStatus } from '../utils/renewal'
 
 const { t } = useI18n()
@@ -159,7 +190,10 @@ const auth = useAuth()
 const now = new Date()
 const year = ref(now.getFullYear())
 const month = ref(now.getMonth())
-const subs = ref([])
+const dataRequest = useDataRequest({ initialData: [] })
+const subs = dataRequest.data
+const dataState = computed(() => dataRequest.state())
+const hasLoaded = dataRequest.hasLoaded
 const cats = ref([])
 const currencies = ref([])
 const methods = ref([])
@@ -227,6 +261,7 @@ const cells = computed(() => {
     return {
       day: d.getDate(),
       inMonth: d.getMonth() === month.value,
+      key,
       isToday: today.getFullYear() === d.getFullYear() && today.getMonth() === d.getMonth() && today.getDate() === d.getDate(),
       events: eventsByDate.get(key) || []
     }
@@ -236,18 +271,29 @@ const cells = computed(() => {
 const visibleEvents = computed(() => cells.value.filter((c) => c.inMonth).flatMap((c) => c.events))
 const radarRaw = computed(() => {
   const base = {
-    overdue: { key: 'overdue', label: t('dashboard.radarOverdue'), count: 0, amount: 0 },
-    d3: { key: 'd3', label: t('dashboard.radar3'), count: 0, amount: 0 },
-    d7: { key: 'd7', label: t('dashboard.radar7'), count: 0, amount: 0 },
-    d30: { key: 'd30', label: t('dashboard.radar30'), count: 0, amount: 0 }
+    overdue: { key: 'overdue', label: t('dashboard.radarOverdue'), count: 0, amount: 0, missingCurrencies: new Set() },
+    d3: { key: 'd3', label: t('dashboard.radar3'), count: 0, amount: 0, missingCurrencies: new Set() },
+    d7: { key: 'd7', label: t('dashboard.radar7'), count: 0, amount: 0, missingCurrencies: new Set() },
+    d30: { key: 'd30', label: t('dashboard.radar30'), count: 0, amount: 0, missingCurrencies: new Set() }
   }
-  for (const s of visibleEvents.value) {
+  const events = buildRenewalRadarEvents(subs.value)
+  for (const s of events) {
     const key = renewalRadarBucket(s)
     if (!key) continue
     base[key].count += 1
-    base[key].amount += amountOf(s)
+    const amount = baseAmountOf(s)
+    if (amount === null) {
+      if (s.currency) base[key].missingCurrencies.add(s.currency)
+    } else {
+      base[key].amount += amount
+    }
   }
-  return Object.values(base)
+  return Object.values(base).map((bucket) => ({
+    ...bucket,
+    amountLabel: bucket.missingCurrencies.size
+      ? t('calendar.radarAmountIncomplete', { currencies: [...bucket.missingCurrencies].join('、') })
+      : ''
+  }))
 })
 const radarBars = computed(() => {
   const max = Math.max(1, ...radarRaw.value.map((b) => b.count))
@@ -259,8 +305,20 @@ const heroStatus = computed(() => {
   return 'ok'
 })
 const monthAmount = computed(() => visibleEvents.value.reduce((n, s) => n + amountOf(s), 0))
+const missingAmountCurrencies = computed(() => [...new Set(
+  visibleEvents.value
+    .filter((s) => baseAmountOf(s) === null)
+    .map((s) => s.currency)
+    .filter(Boolean)
+)].join('、'))
 const calendarSummary = computed(() => {
   if (!visibleEvents.value.length) return t('calendar.monthSafe')
+  if (missingAmountCurrencies.value) {
+    return t('calendar.monthSummaryIncomplete', {
+      n: visibleEvents.value.length,
+      currencies: missingAmountCurrencies.value
+    })
+  }
   return t('calendar.monthSummary', { n: visibleEvents.value.length, amount: fmt(monthAmount.value) })
 })
 
@@ -279,18 +337,14 @@ const agendaDays = computed(() => {
     })
 })
 
-// 刷新代际：仅最新一批 reload 的结果才写入状态，避免慢请求的旧快照覆盖较新操作结果。
-let reloadGen = 0
+let auxiliaryRequestId = 0
 async function reload() {
-  const gen = ++reloadGen
+  const requestId = ++auxiliaryRequestId
   // 核心订阅数据独立写入并立即 resolve：不让辅助元数据请求拖累 safeReload 的 busy 周期。
-  // 若 /api/icons/library 等慢或卡住，订阅仍能尽快落到月历与详情，操作条也不会被永久禁用。
-  try {
-    const { data } = await api.get('/api/subscriptions', { params: { billing_type: 'recurring', active: true } })
-    if (gen === reloadGen) subs.value = data
-  } catch { /* 保留旧订阅，不因单次失败清空 */ }
+  await dataRequest.run(async () => (
+    await api.get('/api/subscriptions', { params: { billing_type: 'recurring', active: true } })
+  ).data)
   // 辅助元数据（分类/付款方式/捆绑包/币种/图标库）后台并行拉取，各自成功即写入，失败保留旧值。
-  // 不 await：避免任一辅助请求 pending 阻塞 reload 返回、使 busy 卡住。
   Promise.allSettled([
     api.get('/api/categories'),
     api.get('/api/payment-methods'),
@@ -298,7 +352,7 @@ async function reload() {
     api.get('/api/currencies'),
     api.get('/api/icons/library')
   ]).then((aux) => {
-    if (gen !== reloadGen) return
+    if (requestId !== auxiliaryRequestId) return
     const [c, m, b, cur, lib] = aux.map((r) => (r.status === 'fulfilled' ? r.value : null))
     if (c) cats.value = c.data || []
     if (m) methods.value = m.data || []
@@ -312,6 +366,25 @@ async function reload() {
 // 使详情/续费/编辑/删除一律基于订阅真实全貌（真实下次续费日、续费日期预览口径）。
 function originOf(ev) {
   return ev.occurrence_origin_id ?? Number(String(ev.id).split(':')[0])
+}
+const dayEvents = ref([])
+const dayEventsDate = ref('')
+const showDayEvents = computed({
+  get: () => dayEvents.value.length > 0,
+  set: (v) => { if (!v) closeDayEvents() }
+})
+const dayEventsTitle = computed(() => t('calendar.dayEventsTitle', { date: dayEventsDate.value }))
+function openDayEvents(cell) {
+  dayEventsDate.value = cell.key
+  dayEvents.value = cell.events.slice()
+}
+function closeDayEvents() {
+  dayEvents.value = []
+  dayEventsDate.value = ''
+}
+function openDayEventDetail(ev) {
+  closeDayEvents()
+  openDetail(ev)
 }
 const detailId = ref(null)
 const showDetail = computed({
@@ -387,7 +460,7 @@ const {
 
 // 统一汇总日历页 overlay 状态，交给引用计数式 body lock 管理。
 const calendarOverlays = computed(() =>
-  showDetail.value || showForm.value || !!renewTarget.value || !!delTarget.value
+  showDayEvents.value || showDetail.value || showForm.value || !!renewTarget.value || !!delTarget.value
 )
 useBodyLock(calendarOverlays, 'calendar-overlays')
 
@@ -411,6 +484,8 @@ onMounted(async () => {
 .year { font-size: 20px; font-weight: 600; }
 .cal-sub { font-size: 14px; margin-top: 4px; }
 .cal-ops { display: flex; flex-direction: column; gap: 10px; min-width: min(520px, 52%); }
+.today-radar { display: flex; flex-direction: column; gap: 6px; }
+.today-radar-label { font-size: 11px; text-align: right; letter-spacing: .04em; }
 .nav { display: flex; align-items: center; justify-content: flex-end; gap: 6px; }
 .navbtn { width: 34px; height: 34px; border-radius: 9px; border: 1px solid var(--border); background: var(--surface);
   font-size: 18px; color: var(--text); cursor: pointer; }
@@ -465,7 +540,16 @@ onMounted(async () => {
 .ev-ico { width: 13px; height: 13px; border-radius: 3px; object-fit: contain; flex-shrink: 0; }
 .ev-emoji { font-size: 12px; flex-shrink: 0; line-height: 1; }
 .ev-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ev.more { background: transparent; border-color: transparent; color: var(--text-soft); padding: 0 5px; }
+.ev.more { width: 100%; background: transparent; border-color: transparent; color: var(--text-soft); padding: 0 5px; cursor: pointer; text-align: left; }
+.ev.more:hover { color: var(--primary); }
+.day-events-list { display: flex; flex-direction: column; gap: 8px; }
+.day-event { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 10px; width: 100%; padding: 10px 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-2); color: var(--text); text-align: left; cursor: pointer; }
+.day-event:hover { border-color: color-mix(in srgb, var(--primary) 45%, var(--border)); }
+.day-event:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.day-event-ico { width: 28px; height: 28px; border-radius: 7px; object-fit: contain; }
+.day-event-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.day-event-main strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.day-event-main .muted { font-size: 12px; }
 
 /* 可点击的续费事件：键盘可达 + 轻量 hover，仅叠加描边不覆盖 soon/overdue 警示底色与左边框 */
 .clickable { cursor: pointer; transition: background .15s ease, box-shadow .15s ease; }

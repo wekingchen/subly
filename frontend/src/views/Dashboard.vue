@@ -1,7 +1,15 @@
 <template>
   <div>
-    <div v-if="loading" class="muted">{{ t('common.loading') }}</div>
-    <template v-else>
+    <DataState
+      v-if="dataState !== 'ready'"
+      :state="dataState"
+      :trust="dataState === 'stale' ? 'stale' : 'unknown'"
+      :compact="dataState === 'refreshing' || dataState === 'stale'"
+      error-title="雷达总览加载失败"
+      stale-title="刷新失败，当前显示上次加载的总览"
+      @retry="reload"
+    />
+    <template v-if="hasMainData">
       <!-- Command Center hero -->
       <div class="hero card" :class="heroStatus">
         <div>
@@ -9,7 +17,7 @@
           <div class="hi">{{ t('dashboard.greeting', { name: auth.user?.username || '' }) }}</div>
           <div class="sub muted">{{ radarHero }}</div>
         </div>
-        <router-link to="/subscriptions" class="btn">+ {{ t('sub.add') }}</router-link>
+        <button class="btn" type="button" @click="openEdit(null)">+ {{ t('sub.add') }}</button>
       </div>
 
       <!-- 续费雷达 -->
@@ -20,6 +28,10 @@
         </div>
         <RadarBars :bars="radarBars" :currency="cur" />
       </div>
+
+      <p v-if="financeIncomplete" class="finance-warning" role="status">
+        {{ t('reports.incompleteFx', { currencies: missingCurrencies }) }}
+      </p>
 
       <!-- KPI -->
       <div class="grid stats">
@@ -64,7 +76,7 @@
             </span>
             <span class="l-right">
               <span class="tag" :class="dueClass(s)">{{ dueText(s, t) }}</span>
-              <b class="mono-data">{{ fmt(s.amount_in_base) }}</b>
+              <b class="mono-data">{{ s.amount_in_base == null ? t('reports.rateUnavailable') : fmt(s.amount_in_base) }}</b>
             </span>
           </div>
         </div>
@@ -118,7 +130,7 @@
                @click="openDetail(s)" @keydown="onItemKeydown($event, s)">
             <ServiceIcon :src="s.icon" :name="s.name" :fallback="emojiOf(s)" class="rc-ico-img" />
             <div class="rc-main"><div class="rc-n">{{ s.name }}</div>
-              <div class="muted rc-a">{{ fmt(s.amount_in_base) }}</div></div>
+              <div class="muted rc-a">{{ s.amount_in_base == null ? t('reports.rateUnavailable') : fmt(s.amount_in_base) }}</div></div>
           </div>
         </div>
       </div>
@@ -196,6 +208,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import api from '../api'
 import AppModal from '../components/AppModal.vue'
+import DataState from '../components/DataState.vue'
 import RadarBars from '../components/RadarBars.vue'
 import ServiceIcon from '../components/ServiceIcon.vue'
 import SignalDot from '../components/SignalDot.vue'
@@ -208,13 +221,26 @@ import { useBodyLock } from '../composables/useBodyLock'
 import { useSubscriptionActions } from '../composables/useSubscriptionActions'
 import { icon } from '../icons'
 import { daysLeft } from '../utils/date'
+import { createRequestGuard } from '../utils/dataRequest'
 import { emojiOf } from '../utils/icon'
 import { amountOf, formatMoney, hasBaseEquivalent } from '../utils/money'
+import { buildRenewalRadarEvents } from '../utils/recurrence'
 import { radarBucket as renewalRadarBucket, dueText, renewalStatus } from '../utils/renewal'
 
 const { t } = useI18n()
 const auth = useAuth()
-const loading = ref(true)
+const initialLoading = ref(true)
+const refreshing = ref(false)
+const initialError = ref(false)
+const stale = ref(false)
+const hasMainData = ref(false)
+const dataState = computed(() => {
+  if (initialLoading.value) return 'loading'
+  if (initialError.value) return 'error'
+  if (stale.value) return 'stale'
+  if (refreshing.value) return 'refreshing'
+  return 'ready'
+})
 const data = ref({ upcoming: [], recent: [] })
 const breakdown = ref([])
 const expiredCount = ref(0)
@@ -264,10 +290,13 @@ const detailTarget = computed(() => {
 // 订阅在操作后被删除/停用导致 detailTarget 失联时，自动关闭弹窗。
 watch(detailTarget, (s) => { if (!s) detailId.value = null })
 
-// 刷新代际：仅最新一批 reload 的结果才写入状态，避免慢请求的旧快照覆盖较新操作结果。
-let reloadGen = 0
+// 仅最新一批 reload 的结果才写入状态，避免慢请求的旧快照覆盖较新操作结果。
+const reloadGuard = createRequestGuard()
 async function reload() {
-  const gen = ++reloadGen
+  const requestId = reloadGuard.begin()
+  if (hasMainData.value) refreshing.value = true
+  else initialLoading.value = true
+  initialError.value = false
   const results = await Promise.allSettled([
     api.get('/api/dashboard'),
     api.get('/api/reports/insights'),
@@ -279,19 +308,28 @@ async function reload() {
     api.get('/api/currencies'),
     api.get('/api/icons/library')
   ])
-  // 期间又触发了更新的刷新，丢弃这批旧结果。
-  if (gen !== reloadGen) return
+  if (!reloadGuard.isCurrent(requestId)) return
   const [d, ins, exp, subs, c, m, b, cur, lib] = results.map((r) => (r.status === 'fulfilled' ? r.value : null))
-  // 仅在请求成功时更新对应状态，失败的项保留已有数据，不因暂时网络错误清空。
-  if (d) data.value = d.data
+  // Dashboard、分类洞察、过期数量与 occurrence 雷达共同构成主数据；表单辅助元数据失败只降级对应区域。
+  if (d && ins && exp && subs) {
+    data.value = d.data
+    allSubs.value = subs.data || []
+    hasMainData.value = true
+    stale.value = false
+  } else if (hasMainData.value) {
+    stale.value = true
+  } else {
+    initialError.value = true
+  }
   if (ins) breakdown.value = ins.data.breakdown || []
   if (exp) expiredCount.value = (exp.data || []).length
-  if (subs) allSubs.value = subs.data || []
   if (c) cats.value = c.data || []
   if (m) methods.value = m.data || []
   if (b) bundles.value = b.data || []
   if (cur) currencies.value = cur.data || []
   if (lib) iconLib.value = lib.data || []
+  initialLoading.value = false
+  refreshing.value = false
 }
 
 const {
@@ -319,6 +357,8 @@ function color(i) { return PALETTE[i % PALETTE.length] }
 const cur = computed(() => auth.user?.base_currency || 'CNY')
 function fmt(v) { return formatMoney(v, cur.value) }
 const budget = computed(() => auth.user?.monthly_budget ?? null)
+const financeIncomplete = computed(() => data.value.financial_completeness?.is_complete === false)
+const missingCurrencies = computed(() => (data.value.financial_completeness?.missing_currencies || []).join('、'))
 const budgetOver = computed(() => budget.value !== null && (data.value.month_spend || 0) > budget.value)
 function dueClass(s) {
   const d = daysLeft(s)
@@ -332,8 +372,9 @@ const radarRaw = computed(() => {
     d7: { key: 'd7', label: t('dashboard.radar7'), count: 0, amount: 0, to: '/calendar' },
     d30: { key: 'd30', label: t('dashboard.radar30'), count: 0, amount: 0, to: '/calendar' }
   }
-  for (const s of allSubs.value) {
-    const key = renewalRadarBucket(s)
+  const events = buildRenewalRadarEvents(allSubs.value, { includeHidden: true })
+  for (const s of events) {
+    const key = renewalRadarBucket(s, { includeHidden: true })
     if (!key) continue
     base[key].count += 1
     base[key].amount += amountOf(s)
@@ -430,10 +471,7 @@ const detailCycleText = computed(() => {
 const detailShowBase = computed(() => detailTarget.value ? hasBaseEquivalent(detailTarget.value, cur.value) : false)
 const detailBaseAmount = computed(() => detailTarget.value ? amountOf(detailTarget.value) : 0)
 
-onMounted(async () => {
-  await reload()
-  loading.value = false
-})
+onMounted(reload)
 </script>
 
 <style scoped>
@@ -473,6 +511,7 @@ onMounted(async () => {
 @keyframes pulse-danger { 0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--danger) 40%, transparent); } 50% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--danger) 12%, transparent); } }
 @media (prefers-reduced-motion: reduce) { .radar-bar.overdue { animation: none; } }
 
+.finance-warning { margin: 0 0 16px; padding: 10px 12px; border: 1px solid color-mix(in srgb, var(--warning) 45%, var(--border)); border-radius: 10px; background: color-mix(in srgb, var(--warning) 8%, var(--surface)); color: var(--text-soft); font-size: 13px; }
 .stats { grid-template-columns: repeat(4, 1fr); margin-bottom: 16px; }
 .stat { display: flex; align-items: center; gap: 14px; }
 .stat .badge { width: 48px; height: 48px; border-radius: 14px; display: flex; align-items: center;

@@ -1,8 +1,15 @@
-export function amountOf(item, fallback = 0) {
-  const raw = item ? item.amount_in_base ?? item.amount ?? fallback : fallback
+export function baseAmountOf(item) {
+  const raw = item?.amount_in_base
+  if (raw == null || typeof raw === 'boolean') return null
+  if (typeof raw === 'string' && raw.trim() === '') return null
   const value = Number(raw)
+  return Number.isFinite(value) ? value : null
+}
+
+export function amountOf(item, fallback = 0) {
+  const baseAmount = baseAmountOf(item)
+  if (baseAmount !== null) return baseAmount
   const safeFallback = Number(fallback)
-  if (Number.isFinite(value)) return value
   return Number.isFinite(safeFallback) ? safeFallback : 0
 }
 

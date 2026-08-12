@@ -425,8 +425,10 @@ class SubscriptionOut(BaseModel):
     family_members: list[str] | None
     remind_days_before: str
     created_at: datetime
-    # 派生字段
+    # 派生字段：amount_in_base 仅表示当前 amount 的单次折合；月化成本使用专用字段。
     amount_in_base: float | None = None
+    monthly_cost_in_base: float | None = None
+    base_conversion_complete: bool | None = None
 
 
 # ---------- Bundle ----------
@@ -443,13 +445,87 @@ class BundleOut(BaseModel):
 
 
 # ---------- Dashboard / Reports ----------
+class FinancialCompleteness(BaseModel):
+    is_complete: bool
+    included_count: int
+    excluded_count: int
+    missing_currencies: list[str] = Field(default_factory=list)
+
+
 class DashboardOut(BaseModel):
     base_currency: str
     month_spend: float
     year_spend: float
+    financial_completeness: FinancialCompleteness
     active_count: int
     upcoming: list[SubscriptionOut]
     recent: list[SubscriptionOut]
+
+
+class InsightBreakdown(BaseModel):
+    category: str
+    monthly: float
+    percent: float
+
+
+class InsightsOut(BaseModel):
+    base_currency: str
+    monthly_total: float
+    breakdown: list[InsightBreakdown]
+    financial_completeness: FinancialCompleteness
+
+
+class CategoryMonthlyCost(BaseModel):
+    category: str
+    count: int
+    monthly: float
+
+
+class CategoryOneTimeCost(BaseModel):
+    category: str
+    count: int
+    total: float
+
+
+class CategoryDetailOut(BaseModel):
+    base_currency: str
+    recurring: list[CategoryMonthlyCost]
+    one_time: list[CategoryOneTimeCost]
+    recurring_monthly_total: float
+    one_time_total: float
+    financial_completeness: FinancialCompleteness
+
+
+class PaymentHistoryPoint(BaseModel):
+    month: str
+    amount: float
+
+
+class PaymentHistoryOut(BaseModel):
+    base_currency: str
+    history: list[PaymentHistoryPoint]
+    financial_completeness: FinancialCompleteness
+
+
+class RecentPaymentOut(BaseModel):
+    id: int
+    name: str
+    plan: str | None
+    remark: str | None
+    icon: str | None
+    category: str | None
+    date: date
+    amount: float
+    currency: str
+    amount_in_base: float | None
+    base_conversion_complete: bool
+    billing_type: str
+
+
+class RecentPaymentsOut(BaseModel):
+    base_currency: str
+    items: list[RecentPaymentOut]
+    financial_completeness: FinancialCompleteness
 
 
 class TelegramTestIn(BaseModel):
