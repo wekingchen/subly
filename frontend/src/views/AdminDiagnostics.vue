@@ -3,7 +3,7 @@
     <section class="diag-hero card radar-grid-bg">
       <div class="hero-copy">
         <div class="hero-kicker"><span class="signal-dot"></span>{{ t('diagnostics.kicker') }}</div>
-        <h1>{{ t('diagnostics.title') }}</h1>
+        <h1 tabindex="-1">{{ t('diagnostics.title') }}</h1>
         <p class="muted">{{ t('diagnostics.subtitle') }}</p>
       </div>
       <div class="hero-actions">
@@ -278,7 +278,7 @@ h1 { margin: 8px 0; }
 .metric-card.ok { border-color: color-mix(in srgb, var(--success) 30%, var(--border)); }
 .metric-card.warn { border-color: color-mix(in srgb, var(--warning) 30%, var(--border)); }
 .metric-card.bad { border-color: color-mix(in srgb, var(--danger) 30%, var(--border)); }
-.err { color: var(--danger); }
+.err { color: var(--danger-text); }
 .loading-line { display: flex; align-items: center; gap: 8px; }
 .loading-line::before { content: ''; width: 8px; height: 8px; border-radius: 999px; background: var(--primary); box-shadow: 0 0 12px color-mix(in srgb, var(--primary) 55%, transparent); animation: diag-pulse 1s ease-in-out infinite; }
 .run-stamp { margin-top: 4px; font-size: 12px; }
@@ -300,10 +300,10 @@ h1 { margin: 8px 0; }
 .issue-card p, .sim-card p { margin: 0; line-height: 1.6; }
 .suggestion { margin-top: 6px !important; }
 .issue-foot { margin-top: 10px; font-size: 12px; }
-.tag.bad { background: color-mix(in srgb, var(--danger) 18%, transparent); color: var(--danger); }
-.tag.warn { background: color-mix(in srgb, var(--warning) 18%, transparent); color: var(--warning); }
+.tag.bad { background: color-mix(in srgb, var(--danger) 18%, transparent); color: var(--danger-text); }
+.tag.warn { background: color-mix(in srgb, var(--warning) 18%, transparent); color: var(--warning-text); }
 .tag.info, .tag.muted { background: var(--surface-2); color: var(--text-soft); }
-.tag.ok { background: color-mix(in srgb, var(--success) 16%, transparent); color: var(--success); }
+.tag.ok { background: color-mix(in srgb, var(--success) 16%, transparent); color: var(--success-text); }
 .tag.scope, .tag.chan { background: var(--surface-2); color: var(--text-soft); }
 .tag.keepalive { background: color-mix(in srgb, var(--signal-cyan) 16%, transparent); color: var(--signal-cyan); }
 .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; }

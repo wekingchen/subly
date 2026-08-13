@@ -1,23 +1,24 @@
+import { nextTick } from 'vue'
 import { createRouter, createWebHistory } from 'vue-router'
 import { useAuth } from '../stores/auth'
 
 const routes = [
-  { path: '/login', component: () => import('../views/Login.vue'), meta: { guest: true } },
+  { path: '/login', component: () => import('../views/Login.vue'), meta: { guest: true, title: '登录' } },
   {
     path: '/',
     component: () => import('../components/Layout.vue'),
     children: [
       { path: '', redirect: '/dashboard' },
-      { path: 'dashboard', component: () => import('../views/Dashboard.vue') },
-      { path: 'subscriptions', component: () => import('../views/Subscriptions.vue') },
-      { path: 'calendar', component: () => import('../views/Calendar.vue') },
-      { path: 'reports', component: () => import('../views/Reports.vue') },
-      { path: 'notifications', component: () => import('../views/Notifications.vue') },
-      { path: 'logs', component: () => import('../views/Logs.vue') },
-      { path: 'settings', component: () => import('../views/Settings.vue') },
-      { path: 'icon-library', component: () => import('../views/IconLibrary.vue'), meta: { admin: true } },
-      { path: 'admin-diagnostics', component: () => import('../views/AdminDiagnostics.vue'), meta: { admin: true } },
-      { path: 'users', component: () => import('../views/Users.vue'), meta: { admin: true } }
+      { path: 'dashboard', component: () => import('../views/Dashboard.vue'), meta: { title: '雷达总览' } },
+      { path: 'subscriptions', component: () => import('../views/Subscriptions.vue'), meta: { title: '订阅账本' } },
+      { path: 'calendar', component: () => import('../views/Calendar.vue'), meta: { title: '续费日历' } },
+      { path: 'reports', component: () => import('../views/Reports.vue'), meta: { title: '支出报表' } },
+      { path: 'notifications', component: () => import('../views/Notifications.vue'), meta: { title: '通知中心' } },
+      { path: 'logs', component: () => import('../views/Logs.vue'), meta: { title: '实时日志' } },
+      { path: 'settings', component: () => import('../views/Settings.vue'), meta: { title: '系统设置' } },
+      { path: 'icon-library', component: () => import('../views/IconLibrary.vue'), meta: { admin: true, title: '服务管理' } },
+      { path: 'admin-diagnostics', component: () => import('../views/AdminDiagnostics.vue'), meta: { admin: true, title: '数据诊断' } },
+      { path: 'users', component: () => import('../views/Users.vue'), meta: { admin: true, title: '用户管理' } }
     ]
   }
 ]
@@ -38,6 +39,13 @@ router.beforeEach(async (to) => {
   if (!to.meta.guest && !auth.isLoggedIn) return '/login'
   if (to.meta.guest && auth.isLoggedIn) return '/dashboard'
   if (to.meta.admin && !auth.user?.is_admin) return '/dashboard'
+})
+
+router.afterEach((to, from, failure) => {
+  if (failure) return
+  document.title = `${to.meta.title || 'Subly'} · Subly`
+  if (!from.path || to.path === from.path) return
+  nextTick(() => document.querySelector('#main-content h1')?.focus())
 })
 
 export default router

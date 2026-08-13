@@ -1,5 +1,6 @@
 <template>
   <div>
+    <h1 class="sr-only" tabindex="-1">{{ t('reports.title') }}</h1>
     <DataState
       v-if="dataState !== 'ready'"
       :state="dataState"
@@ -18,7 +19,7 @@
         <div class="hero-kicker">
           <SignalDot :status="reportStatus" />{{ t('reports.finRadar') }}
         </div>
-        <h1>{{ t('reports.title') }}</h1>
+        <div class="report-heading">{{ t('reports.title') }}</div>
         <p class="muted">{{ t('reports.reportSubtitle') }}</p>
       </div>
       <div class="report-head-metrics">
@@ -649,6 +650,7 @@ h1 { margin: 0; }
   position: relative; overflow: hidden; background: linear-gradient(135deg, color-mix(in srgb, var(--signal-cyan) 10%, var(--surface)), var(--surface)); }
 .report-head.overdue { background: linear-gradient(135deg, color-mix(in srgb, var(--danger) 12%, var(--surface)), var(--surface)); }
 .report-head.soon { background: linear-gradient(135deg, color-mix(in srgb, var(--warning) 12%, var(--surface)), var(--surface)); }
+.report-heading { margin-top: 4px; font-size: 24px; font-weight: 800; letter-spacing: -.02em; }
 .report-title p { margin: 6px 0 0; font-size: 14px; }
 .hero-kicker { display: flex; align-items: center; gap: 8px; font-size: 11px; text-transform: uppercase; letter-spacing: .18em; color: var(--text-soft); margin-bottom: 6px; }
 .hero-kicker .signal-dot { width: 8px; height: 8px; }
@@ -667,15 +669,15 @@ h1 { margin: 0; }
 .panel-title .panel-signal { margin-right: 2px; }
 .panel-title > .panel-signal + * { margin-left: 0; }
 .total { font-size: 13px; font-weight: 500; margin-left: auto; }
-.danger { color: var(--danger); }
+.danger { color: var(--danger-text); }
 .money-cell, .date-cell { white-space: nowrap; }
 .status-row { position: relative; }
 .status-row td:first-child { border-left: 3px solid transparent; }
 .status-row.soon { background: color-mix(in srgb, var(--warning) 6%, transparent); }
 .status-row.overdue { background: color-mix(in srgb, var(--danger) 6%, transparent); }
 .status-row.oneTime { background: color-mix(in srgb, var(--text-soft) 5%, transparent); }
-.status-row.soon td:first-child { border-left-color: var(--warning); }
-.status-row.overdue td:first-child { border-left-color: var(--danger); }
+.status-row.soon td:first-child { border-left-color: var(--warning-text); }
+.status-row.overdue td:first-child { border-left-color: var(--danger-text); }
 .status-row.ok td:first-child { border-left-color: color-mix(in srgb, var(--success) 55%, transparent); }
 .status-row.oneTime td:first-child { border-left-color: color-mix(in srgb, var(--text-soft) 42%, transparent); }
 .signal-cell { display: flex; align-items: center; gap: 8px; min-width: 0; }
@@ -705,14 +707,14 @@ h1 { margin: 0; }
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--border) 55%, transparent); }
 .budget-fill { height: 100%; border-radius: 20px; background: var(--primary); transition: width .4s ease; }
 .budget-fill.over { background: var(--danger); }
-.budget-head .over { color: var(--danger); font-weight: 700; }
+.budget-head .over { color: var(--danger-text); font-weight: 700; }
 .budget-status { font-size: 12px; margin: 6px 0 0; }
 .trend-card { margin-bottom: 16px; overflow: hidden; }
 .trend-card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
 .trend-card-head .panel-title { margin-bottom: 0; }
 .trend-range { flex: 0 0 auto; margin: 0; }
-.trend-range button { min-height: 36px; padding: 6px 10px; white-space: nowrap; }
-.trend-error { margin: 10px 0 0; color: var(--danger); font-size: 13px; }
+.trend-range button { min-height: var(--tap-size); padding: 6px 10px; white-space: nowrap; }
+.trend-error { margin: 10px 0 0; color: var(--danger-text); font-size: 13px; }
 .kpi { position: relative; overflow: hidden; border-color: color-mix(in srgb, var(--signal-cyan) 18%, var(--border)); }
 .kpi-l { font-size: 13px; color: var(--text-soft); }
 .kpi-v { font-size: 23px; font-weight: 800; margin-top: 6px; letter-spacing: -.03em; }
@@ -759,12 +761,12 @@ h1 { margin: 0; }
 .rb-fill { display: block; height: 100%; border-radius: 999px; }
 .radar-bar.overdue { border-color: color-mix(in srgb, var(--danger) 48%, var(--border)); }
 .radar-bar.overdue.active { animation: pulse-danger 2s ease-in-out infinite; }
-.radar-bar.overdue .rb-count { color: var(--danger); }
+.radar-bar.overdue .rb-count { color: var(--danger-text); }
 .radar-bar.overdue .rb-fill { background: var(--danger); }
 .radar-bar.soon { border-color: color-mix(in srgb, var(--warning) 48%, var(--border)); }
-.radar-bar.soon .rb-count { color: var(--warning); }
+.radar-bar.soon .rb-count { color: var(--warning-text); }
 .radar-bar.soon .rb-fill { background: var(--warning); }
-.radar-bar.ok .rb-count { color: var(--success); }
+.radar-bar.ok .rb-count { color: var(--success-text); }
 .radar-bar.ok .rb-fill { background: var(--success); }
 .radar-bar.oneTime .rb-count { color: var(--text-soft); }
 .radar-bar.oneTime .rb-fill { background: color-mix(in srgb, var(--text-soft) 44%, var(--border)); }
@@ -793,8 +795,8 @@ h1 { margin: 0; }
 .ld-row { display: flex; align-items: center; gap: 10px; padding: 11px 4px; border-bottom: 1px solid var(--border);
   min-height: 44px; border-left: 3px solid transparent; padding-left: 8px; }
 .ld-row:last-child { border-bottom: none; }
-.ld-row.soon { border-left-color: var(--warning); background: color-mix(in srgb, var(--warning) 6%, transparent); }
-.ld-row.overdue { border-left-color: var(--danger); background: color-mix(in srgb, var(--danger) 6%, transparent); }
+.ld-row.soon { border-left-color: var(--warning-text); background: color-mix(in srgb, var(--warning) 6%, transparent); }
+.ld-row.overdue { border-left-color: var(--danger-text); background: color-mix(in srgb, var(--danger) 6%, transparent); }
 .ld-row.ok { border-left-color: color-mix(in srgb, var(--success) 55%, transparent); }
 .ld-row.oneTime { border-left-color: color-mix(in srgb, var(--text-soft) 40%, transparent); }
 .rank-row { border-left-color: color-mix(in srgb, var(--primary) 45%, transparent); }

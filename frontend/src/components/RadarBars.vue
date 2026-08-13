@@ -57,16 +57,16 @@ defineProps({
 .rb-fill { display: block; height: 100%; border-radius: 999px; }
 .radar-bar.overdue { border-color: color-mix(in srgb, var(--danger) 48%, var(--border)); }
 .radar-bar.overdue.active { animation: pulse-danger 2s ease-in-out infinite; }
-.radar-bar.overdue .rb-count { color: var(--danger); }
+.radar-bar.overdue .rb-count { color: var(--danger-text); }
 .radar-bar.overdue .rb-fill { background: var(--danger); }
 .radar-bar.d3, .radar-bar.soon { border-color: color-mix(in srgb, var(--warning) 48%, var(--border)); }
-.radar-bar.d3 .rb-count, .radar-bar.soon .rb-count { color: var(--warning); }
+.radar-bar.d3 .rb-count, .radar-bar.soon .rb-count { color: var(--warning-text); }
 .radar-bar.d3 .rb-fill, .radar-bar.soon .rb-fill { background: var(--warning); }
 .radar-bar.d7 .rb-count { color: var(--primary); }
 .radar-bar.d7 .rb-fill { background: var(--primary); }
 .radar-bar.d30 .rb-count, .radar-bar.oneTime .rb-count { color: var(--text-soft); }
 .radar-bar.d30 .rb-fill { background: color-mix(in srgb, var(--primary) 42%, var(--border)); }
-.radar-bar.ok .rb-count { color: var(--success); }
+.radar-bar.ok .rb-count { color: var(--success-text); }
 .radar-bar.ok .rb-fill { background: var(--success); }
 .radar-bar.oneTime .rb-fill { background: color-mix(in srgb, var(--text-soft) 44%, var(--border)); }
 @keyframes pulse-danger {

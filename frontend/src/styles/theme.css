@@ -9,8 +9,11 @@
   --primary-2: #22d3ee;
   --primary-soft: #e9f5ff;
   --success: #10b981;
+  --success-text: #047857;
   --warning: #f59e0b;
+  --warning-text: #92400e;
   --danger: #ef4444;
+  --danger-text: #b91c1c;
   --radar-bg: #0b1020;
   --radar-panel: #11182b;
   --radar-panel-2: #17213a;
@@ -28,20 +31,23 @@
 [data-theme="dark"] {
   --bg: #0b1020; --surface: #11182b; --surface-2: #17213a; --text: #e6edf7; --text-soft: #94a3b8;
   --border: #26324f; --primary: #22d3ee; --primary-2: #5b5bd6; --primary-soft: #102c42;
-  --success: #22c55e; --warning: #f59e0b; --danger: #f87171;
+  --success: #22c55e; --success-text: #86efac; --warning: #f59e0b; --warning-text: #fcd34d; --danger: #f87171; --danger-text: #fca5a5;
   --shadow: 0 1px 2px rgba(0,0,0,.35), 0 10px 28px rgba(0,0,0,.38); --shadow-lg: 0 22px 60px rgba(0,0,0,.55);
 }
 [data-theme="ocean"] {
   --bg: #eafcff; --surface: #ffffff; --surface-2: #f0fdff; --text: #06323f; --text-soft: #0e7490;
   --border: #bdeef5; --primary: #0891b2; --primary-2: #06b6d4; --primary-soft: #d6f7fd;
+  --success-text: #047857; --warning-text: #92400e; --danger-text: #b91c1c;
 }
 [data-theme="forest"] {
   --bg: #f0fdf4; --surface: #ffffff; --surface-2: #f3fdf6; --text: #0f3d22; --text-soft: #15803d;
   --border: #c5edd0; --primary: #16a34a; --primary-2: #22c55e; --primary-soft: #dcfce7;
+  --success-text: #047857; --warning-text: #92400e; --danger-text: #b91c1c;
 }
 [data-theme="purple"] {
   --bg: #faf5ff; --surface: #ffffff; --surface-2: #fcf8ff; --text: #3a0a5e; --text-soft: #7e22ce;
   --border: #ecd9fb; --primary: #9333ea; --primary-2: #a855f7; --primary-soft: #f4e8ff;
+  --success-text: #047857; --warning-text: #92400e; --danger-text: #b91c1c;
 }
 
 * { box-sizing: border-box; }
@@ -100,6 +106,11 @@ h3 { letter-spacing: -.01em; }
 .btn.danger { background: linear-gradient(135deg, #ef4444, #f87171); box-shadow: 0 2px 8px rgba(239,68,68,.25); }
 .btn.sm { min-height: 34px; padding: 5px 11px; font-size: 13px; border-radius: 8px; }
 
+@media (pointer: coarse) {
+  .btn, .btn.sm, .seg button, input, select, textarea, button[role="button"] { min-height: var(--tap-size); }
+  .btn, .btn.sm { min-width: var(--tap-size); }
+}
+
 input, select, textarea { width: 100%; min-height: 38px; padding: 9px 12px; border: 1px solid var(--border);
   border-radius: 10px; background: var(--surface); color: var(--text); font-size: 14px; outline: none;
   transition: border-color .15s, box-shadow .15s; }
@@ -140,13 +151,19 @@ tr:last-child td { border-bottom: none; }
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 8px; }
 
+.sr-only { position: absolute !important; width: 1px !important; height: 1px !important; padding: 0 !important; margin: -1px !important;
+  overflow: hidden !important; clip: rect(0, 0, 0, 0) !important; white-space: nowrap !important; border: 0 !important; }
+.sr-only:focus { position: fixed !important; top: 8px; left: 50%; z-index: 300; width: auto !important; height: auto !important;
+  padding: 10px 14px !important; margin: 0 !important; overflow: visible !important; clip: auto !important; white-space: normal !important;
+  border: 2px solid var(--primary) !important; border-radius: 10px; background: var(--surface); color: var(--text); transform: translateX(-50%); }
+
 /* 轻量级 toast 提示 */
 .toast-wrap { position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%);
   z-index: 200; display: flex; flex-direction: column; gap: 8px; align-items: center; pointer-events: none; }
 .toast { background: var(--text); color: var(--surface); padding: 10px 18px; border-radius: 999px;
   font-size: 14px; box-shadow: var(--shadow-lg); animation: toast-in .25s ease; max-width: 90vw; }
-.toast.ok { background: var(--success); color: #fff; }
-.toast.err { background: var(--danger); color: #fff; }
+.toast.ok { background: color-mix(in srgb, var(--success) 72%, #052e16); color: #fff; }
+.toast.err { background: color-mix(in srgb, var(--danger) 76%, #450a0a); color: #fff; }
 @keyframes toast-in { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
 
 /* 移动端通用适配 */

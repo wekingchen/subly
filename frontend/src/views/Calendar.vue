@@ -1,5 +1,6 @@
 <template>
   <div>
+    <h1 class="sr-only" tabindex="-1">{{ t('calendar.title') }}</h1>
     <DataState
       v-if="dataState !== 'ready'"
       :state="dataState"
@@ -154,9 +155,7 @@
       @bundle-created="onBundleCreated"
     />
 
-    <div class="toast-wrap">
-      <div v-for="tst in toasts" :key="tst.id" class="toast" :class="tst.type">{{ tst.msg }}</div>
-    </div>
+    <AppToastRegion :toasts="toasts" />
     </template>
   </div>
 </template>
@@ -166,6 +165,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import api from '../api'
 import AppModal from '../components/AppModal.vue'
+import AppToastRegion from '../components/AppToastRegion.vue'
 import DataState from '../components/DataState.vue'
 import MoneyText from '../components/MoneyText.vue'
 import RadarBars from '../components/RadarBars.vue'
@@ -178,6 +178,7 @@ import SubscriptionFormModal from '../components/subscriptions/SubscriptionFormM
 import { useAuth } from '../stores/auth'
 import { useBodyLock } from '../composables/useBodyLock'
 import { useSubscriptionActions } from '../composables/useSubscriptionActions'
+import { useToasts } from '../composables/useToasts'
 import { toISODate } from '../utils/date'
 import { useDataRequest } from '../utils/dataRequest'
 import { emojiOf } from '../utils/icon'
@@ -200,13 +201,7 @@ const methods = ref([])
 const bundles = ref([])
 const iconLib = ref([])
 
-const toasts = ref([])
-let toastId = 0
-function toast(msg, type = 'ok') {
-  const id = ++toastId
-  toasts.value.push({ id, msg, type })
-  setTimeout(() => { toasts.value = toasts.value.filter((x) => x.id !== id) }, 2600)
-}
+const { toasts, add: toast } = useToasts()
 
 const PALETTE = ['#5b5bd6', '#06b6d4', '#16a34a', '#f59e0b', '#ef4444', '#a855f7', '#0ea5e9', '#ec4899']
 const STATUS_COLORS = { overdue: '#ef4444', soon: '#f59e0b' }
@@ -487,11 +482,11 @@ onMounted(async () => {
 .today-radar { display: flex; flex-direction: column; gap: 6px; }
 .today-radar-label { font-size: 11px; text-align: right; letter-spacing: .04em; }
 .nav { display: flex; align-items: center; justify-content: flex-end; gap: 6px; }
-.navbtn { width: 34px; height: 34px; border-radius: 9px; border: 1px solid var(--border); background: var(--surface);
+.navbtn { width: var(--tap-size); height: var(--tap-size); border-radius: 9px; border: 1px solid var(--border); background: var(--surface);
   font-size: 18px; color: var(--text); cursor: pointer; }
 .navbtn:hover { border-color: var(--primary); color: var(--primary); }
 .today-btn { padding: 7px 14px; border-radius: 9px; border: 1px solid var(--border); background: var(--surface);
-  font-size: 13px; color: var(--text); cursor: pointer; min-height: 34px; }
+  font-size: 13px; color: var(--text); cursor: pointer; min-height: var(--tap-size); }
 .today-btn:hover { border-color: var(--primary); color: var(--primary); }
 .cal-radar-bars { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
 .radar-bar { display: flex; flex-direction: column; gap: 3px; min-width: 0; border: 1px solid var(--border); border-radius: 12px;
@@ -502,10 +497,10 @@ onMounted(async () => {
 .rb-fill { display: block; height: 100%; border-radius: 999px; }
 .radar-bar.overdue { border-color: color-mix(in srgb, var(--danger) 48%, var(--border)); }
 .radar-bar.overdue.active { animation: pulse-danger 2s ease-in-out infinite; }
-.radar-bar.overdue .rb-count { color: var(--danger); }
+.radar-bar.overdue .rb-count { color: var(--danger-text); }
 .radar-bar.overdue .rb-fill { background: var(--danger); }
 .radar-bar.d3 { border-color: color-mix(in srgb, var(--warning) 48%, var(--border)); }
-.radar-bar.d3 .rb-count { color: var(--warning); }
+.radar-bar.d3 .rb-count { color: var(--warning-text); }
 .radar-bar.d3 .rb-fill { background: var(--warning); }
 .radar-bar.d7 .rb-count { color: var(--primary); }
 .radar-bar.d7 .rb-fill { background: var(--primary); }
@@ -561,11 +556,11 @@ onMounted(async () => {
 .detail-action { box-shadow: none; }
 .detail-action-primary { color: var(--primary); background: var(--primary-soft);
   border: 1px solid color-mix(in srgb, var(--primary) 30%, var(--border)); }
-.detail-action-danger { color: var(--danger); background: transparent;
+.detail-action-danger { color: var(--danger-text); background: transparent;
   border-color: color-mix(in srgb, var(--danger) 42%, var(--border)); }
 .detail-action:hover { transform: none; box-shadow: none; }
 .detail-action-primary:hover { color: var(--primary); background: color-mix(in srgb, var(--primary-soft) 72%, var(--primary) 10%); }
-.detail-action-danger:hover { color: var(--danger); background: color-mix(in srgb, var(--danger) 8%, transparent); border-color: var(--danger); }
+.detail-action-danger:hover { color: var(--danger-text); background: color-mix(in srgb, var(--danger) 8%, transparent); border-color: var(--danger-text); }
 
 @keyframes pulse-danger { 0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--danger) 40%, transparent); } 50% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--danger) 12%, transparent); } }
 @media (prefers-reduced-motion: reduce) { .radar-bar.overdue { animation: none; } }
@@ -593,8 +588,8 @@ onMounted(async () => {
   .ag-count { background: var(--surface-2); color: var(--text-soft); border-radius: 999px; padding: 2px 8px; font-size: 12px; }
   .ag-ev { display: grid; grid-template-columns: auto auto minmax(0, 1fr); align-items: center; gap: 8px; min-height: 44px; border-radius: 10px; padding: 6px 8px;
     border-left: 3px solid color-mix(in srgb, var(--c) 55%, transparent); background: color-mix(in srgb, var(--c) 10%, transparent); }
-  .ag-ev.soon { border-left-color: var(--warning); background: color-mix(in srgb, var(--warning) 10%, transparent); }
-  .ag-ev.overdue { border-left-color: var(--danger); background: color-mix(in srgb, var(--danger) 10%, transparent); }
+  .ag-ev.soon { border-left-color: var(--warning-text); background: color-mix(in srgb, var(--warning) 10%, transparent); }
+  .ag-ev.overdue { border-left-color: var(--danger-text); background: color-mix(in srgb, var(--danger) 10%, transparent); }
   .ag-signal { width: 8px; height: 8px; border-radius: 999px; background: var(--c); flex-shrink: 0; box-shadow: 0 0 0 3px color-mix(in srgb, var(--c) 12%, transparent); }
   .ag-ico { width: 24px; height: 24px; border-radius: 6px; object-fit: contain; flex-shrink: 0; }
   .ag-name { min-width: 0; font-weight: 600; white-space: normal; line-height: 1.35; overflow-wrap: anywhere; }
@@ -603,6 +598,6 @@ onMounted(async () => {
   .month { font-size: 20px; }
   /* 详情弹窗底部三按钮：移动端横向等分紧凑排列，与雷达页一致 */
   :deep(.modal-foot) { gap: 6px; }
-  :deep(.modal-foot) .btn { flex: 1 1 0; min-height: 38px; padding: 6px 8px; font-size: 13px; }
+  :deep(.modal-foot) .btn { flex: 1 1 0; min-height: var(--tap-size); padding: 6px 8px; font-size: 13px; }
 }
 </style>

@@ -3,7 +3,7 @@
     <section class="logs-hero card radar-grid-bg">
       <div class="hero-copy">
         <div class="hero-kicker"><span class="signal-dot"></span> 系统遥测</div>
-        <h1>{{ t('rtlog.title') }}</h1>
+        <h1 tabindex="-1">{{ t('rtlog.title') }}</h1>
         <p class="muted">实时追踪系统动作、成员操作与后台任务信号；开启后每 4 秒拉取增量日志。</p>
       </div>
       <label class="switch hero-switch">
@@ -142,8 +142,8 @@ h1 { margin: 8px 0; }
 .time { color: var(--text-soft); white-space: nowrap; }
 .lvl { text-transform: uppercase; font-size: 10px; font-weight: 800; letter-spacing: .04em; padding: 2px 7px; border-radius: 999px; width: fit-content;
   background: color-mix(in srgb, var(--primary) 14%, transparent); color: var(--primary); }
-.lvl.warn { background: color-mix(in srgb, var(--warning) 18%, transparent); color: var(--warning); }
-.lvl.error { background: color-mix(in srgb, var(--danger) 18%, transparent); color: var(--danger); }
+.lvl.warn { background: color-mix(in srgb, var(--warning) 18%, transparent); color: var(--warning-text); }
+.lvl.error { background: color-mix(in srgb, var(--danger) 18%, transparent); color: var(--danger-text); }
 .act { font-weight: 700; word-break: break-word; }
 .usr { color: var(--primary); word-break: break-word; }
 .detail { color: var(--text-soft); word-break: break-word; line-height: 1.5; }

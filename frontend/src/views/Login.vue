@@ -1,8 +1,8 @@
 <template>
-  <div class="auth-wrap">
+  <main id="main-content" class="auth-wrap">
     <section class="radar-panel radar-grid-bg">
       <div class="rp-kicker"><span class="signal-dot"></span>{{ t('auth.radarKicker') }}</div>
-      <h1>{{ t('auth.radarTitle') }}</h1>
+      <h1 tabindex="-1">{{ t('auth.radarTitle') }}</h1>
       <p>{{ t('auth.radarSubtitle') }}</p>
       <div class="radar-orbit" aria-hidden="true">
         <span class="orbit o1"></span>
@@ -26,42 +26,42 @@
       <p class="tag muted">{{ t('app.tagline') }}</p>
 
       <!-- 登录 / 注册 -->
-      <template v-if="step === 'form'">
+      <form v-if="step === 'form'" @submit.prevent="submit">
         <div class="seg">
-          <button :class="{ on: mode === 'login' }" @click="mode = 'login'">{{ t('auth.login') }}</button>
-          <button :class="{ on: mode === 'register' }" @click="mode = 'register'">{{ t('auth.register') }}</button>
+          <button type="button" :class="{ on: mode === 'login' }" :aria-pressed="mode === 'login'" :disabled="busy" @click="mode = 'login'">{{ t('auth.login') }}</button>
+          <button type="button" :class="{ on: mode === 'register' }" :aria-pressed="mode === 'register'" :disabled="busy" @click="mode = 'register'">{{ t('auth.register') }}</button>
         </div>
 
-        <label>{{ t('auth.username') }}</label>
-        <input v-model="username" @keyup.enter="submit" />
+        <label for="auth-username">{{ t('auth.username') }}</label>
+        <input id="auth-username" v-model="username" name="username" autocomplete="username" />
 
         <template v-if="mode === 'register'">
-          <label>{{ t('auth.email') }}</label>
-          <input v-model="email" type="email" />
+          <label for="auth-email">{{ t('auth.email') }}</label>
+          <input id="auth-email" v-model="email" name="email" type="email" autocomplete="email" />
         </template>
 
-        <label>{{ t('auth.password') }}</label>
-        <input v-model="password" type="password" @keyup.enter="submit" />
+        <label for="auth-password">{{ t('auth.password') }}</label>
+        <input id="auth-password" v-model="password" name="password" type="password" :autocomplete="mode === 'login' ? 'current-password' : 'new-password'" />
 
-        <p v-if="error" class="err">{{ error }}</p>
+        <p v-if="error" class="err" role="alert">{{ error }}</p>
         <p v-if="info" class="ok">{{ info }}</p>
-        <button class="btn" style="width:100%;margin-top:16px" :disabled="busy" @click="submit">
+        <button type="submit" class="btn" style="width:100%;margin-top:16px" :disabled="busy">
           {{ mode === 'login' ? t('auth.loginBtn') : t('auth.registerBtn') }}
         </button>
-      </template>
+      </form>
 
       <!-- 邮箱验证码 -->
-      <template v-else-if="step === 'verify'">
+      <form v-else-if="step === 'verify'" @submit.prevent="doVerify">
         <h3 class="step-t">📧 {{ t('auth.verifyTitle') }}</h3>
         <p class="muted hint">{{ t('auth.verifyTip', { email }) }}</p>
-        <label>{{ t('auth.code') }}</label>
-        <input v-model="code" :placeholder="t('auth.codePh')" maxlength="6" @keyup.enter="doVerify" />
-        <p v-if="error" class="err">{{ error }}</p>
-        <button class="btn" style="width:100%;margin-top:16px" :disabled="busy" @click="doVerify">
+        <label for="auth-code">{{ t('auth.code') }}</label>
+        <input id="auth-code" v-model="code" name="code" :placeholder="t('auth.codePh')" maxlength="6" inputmode="numeric" autocomplete="one-time-code" />
+        <p v-if="error" class="err" role="alert">{{ error }}</p>
+        <button type="submit" class="btn" style="width:100%;margin-top:16px" :disabled="busy">
           {{ t('auth.verifyBtn') }}
         </button>
         <a href="#" class="back" @click.prevent="backToLogin">{{ t('auth.backToLogin') }}</a>
-      </template>
+      </form>
 
       <!-- 等待审核 -->
       <template v-else-if="step === 'pending'">
@@ -72,7 +72,7 @@
         </button>
       </template>
     </div>
-  </div>
+  </main>
 </template>
 
 <script setup>
@@ -96,11 +96,13 @@ const info = ref('')
 const busy = ref(false)
 
 function backToLogin() {
+  if (busy.value) return
   step.value = 'form'; mode.value = 'login'
   error.value = ''; code.value = ''
 }
 
 async function submit() {
+  if (busy.value) return
   error.value = ''; info.value = ''
   busy.value = true
   try {
@@ -129,6 +131,7 @@ async function submit() {
 }
 
 async function doVerify() {
+  if (busy.value) return
   error.value = ''
   busy.value = true
   try {
@@ -143,7 +146,7 @@ async function doVerify() {
       }
     }
   } catch (e) {
-    error.value = e.response?.data?.detail || 'Error'
+    error.value = e.response?.data?.detail || '验证码验证失败，请稍后重试'
   } finally {
     busy.value = false
   }
@@ -189,8 +192,8 @@ h2 { margin: 8px 0 4px; font-weight: 800; letter-spacing: -.03em; }
   cursor: pointer; color: var(--text-soft); }
 .seg button.on { background: var(--surface); color: var(--text); box-shadow: var(--shadow); }
 label { text-align: left; }
-.err { color: var(--danger); font-size: 13px; margin-top: 10px; }
-.ok { color: var(--success); font-size: 13px; margin-top: 10px; }
+.err { color: var(--danger-text); font-size: 13px; margin-top: 10px; }
+.ok { color: var(--success-text); font-size: 13px; margin-top: 10px; }
 .back { display: block; margin-top: 14px; font-size: 13px; }
 
 @media (max-width: 880px) {

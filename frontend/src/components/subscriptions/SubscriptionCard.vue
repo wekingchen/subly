@@ -160,8 +160,8 @@ function onCardClick(e) {
 .sub-card.inactive { opacity: .55; }
 .sub-card.paused { opacity: .72; border-style: dashed; }
 .sub-card.paused .status-strip { background: var(--text-soft); opacity: .5; }
-.sub-card.expired { border-color: var(--danger); box-shadow: 0 0 0 1px var(--danger), var(--shadow); }
-.sub-card.soon { border-color: var(--warning); box-shadow: 0 0 0 1px var(--warning), var(--shadow); }
+.sub-card.expired { border-color: var(--danger-text); box-shadow: 0 0 0 1px var(--danger), var(--shadow); }
+.sub-card.soon { border-color: var(--warning-text); box-shadow: 0 0 0 1px var(--warning), var(--shadow); }
 .sub-card.drop-card { border-color: var(--primary); box-shadow: 0 0 0 2px var(--primary-soft); }
 .sc-head { display: flex; align-items: center; gap: 12px; }
 .sc-ico { width: 44px; height: 44px; border-radius: 12px; object-fit: contain; border: 1px solid var(--border);
@@ -176,7 +176,7 @@ function onCardClick(e) {
 .card-grip:focus-visible { opacity: 1; }
 .card-grip:hover { background: var(--surface-2); color: var(--text); }
 .card-grip:active { cursor: grabbing; }
-.card-more { display: inline-flex; flex-shrink: 0; align-items: center; justify-content: center; width: 32px; height: 32px;
+.card-more { display: inline-flex; flex-shrink: 0; align-items: center; justify-content: center; width: var(--tap-size); height: var(--tap-size);
   border: none; border-radius: 999px; background: transparent; color: var(--text-soft); cursor: pointer; font-size: 20px; line-height: 1; }
 .card-more:hover { background: var(--surface-2); color: var(--text); }
 .card-detail-toggle { flex-shrink: 0; border: none; background: transparent; color: var(--text-soft); cursor: pointer;
@@ -190,8 +190,8 @@ function onCardClick(e) {
 .sc-due .due { font-weight: 700; }
 .sc-due-text { font-size: 12px; color: var(--text-soft); }
 .sc-due.ok .due { color: var(--text); }
-.sc-due.soon .due, .sc-due.soon .sc-due-text { color: var(--warning); }
-.sc-due.overdue .due, .sc-due.overdue .sc-due-text { color: var(--danger); }
+.sc-due.soon .due, .sc-due.soon .sc-due-text { color: var(--warning-text); }
+.sc-due.overdue .due, .sc-due.overdue .sc-due-text { color: var(--danger-text); }
 .sc-due.oneTime .sc-due-text { color: var(--text-soft); font-style: italic; }
 .sc-meter { height: 3px; border-radius: 999px; overflow: hidden; background: color-mix(in srgb, var(--surface-2) 48%, transparent); }
 .sc-meter span { display: block; width: 54%; height: 100%; border-radius: inherit; background: color-mix(in srgb, var(--success) 62%, var(--signal-cyan)); }
@@ -211,8 +211,8 @@ function onCardClick(e) {
 .btn.act-renew:hover { background: color-mix(in srgb, var(--primary-soft) 70%, var(--primary) 14%);
   border-color: color-mix(in srgb, var(--primary) 38%, var(--border)); transform: none; box-shadow: none; }
 .act-ico { display: inline-flex; align-items: center; justify-content: center; line-height: 1; }
-.due.soon { color: var(--warning); font-weight: 600; }
-.due.overdue { color: var(--danger); font-weight: 700; }
+.due.soon { color: var(--warning-text); font-weight: 600; }
+.due.overdue { color: var(--danger-text); font-weight: 700; }
 @media (max-width: 720px) {
   .sc-head { align-items: flex-start; gap: 10px; }
   .sc-name { font-size: 16px; white-space: normal; line-height: 1.3; }

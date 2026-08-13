@@ -1,14 +1,16 @@
 <template>
   <div class="modal-mask">
-    <div
+    <form
       ref="dialogRef"
       class="modal"
       role="dialog"
       :aria-modal="!showBrowser"
       aria-labelledby="subscription-form-title"
+      :aria-busy="saving || iconBusy"
       tabindex="-1"
+      @submit.prevent="save"
     >
-      <button type="button" class="modal-x" :aria-label="t('common.close')" @click="emit('close')">×</button>
+      <button type="button" class="modal-x" :aria-label="t('common.close')" :disabled="saving" @click="requestClose">×</button>
       <h3 id="subscription-form-title">{{ form.id ? t('sub.edit') : t('sub.add') }}</h3>
 
       <div class="block">
@@ -47,16 +49,16 @@
           </div>
         </template>
 
-        <button type="button" class="btn ghost sm" style="margin-top:8px" @click="openBrowser">📚 {{ t('sub.browse') }}</button>
+        <button type="button" class="btn ghost sm" style="margin-top:8px" :disabled="saving" @click="openBrowser">📚 {{ t('sub.browse') }}</button>
 
         <details class="icon-lib" @toggle="onIconLibraryToggle">
           <summary>{{ t('sub.icon') }} — {{ t('sub.iconLibrary') }} / URL / {{ t('sub.uploadIcon') }}</summary>
           <input id="sub-icon" v-model="form.icon" name="icon" :aria-label="t('sub.icon')" placeholder="🔖 emoji / /static/... / https://..." style="margin:8px 0" />
           <div class="row" style="margin-bottom:8px">
             <input id="sub-icon-url" v-model="iconUrl" name="icon_url" :aria-label="t('sub.iconUrl')" :placeholder="t('sub.iconUrl')" style="flex:1" />
-            <button v-if="auth.user?.is_admin" type="button" class="btn ghost sm" @click="importIconUrl">{{ t('sub.iconUrlImport') }}</button>
-            <label class="btn ghost sm" style="width:auto">{{ t('sub.uploadIcon') }}
-              <input type="file" accept="image/*" hidden @change="uploadIcon" />
+            <button v-if="auth.user?.is_admin" type="button" class="btn ghost sm" :disabled="saving || iconBusy" @click="importIconUrl">{{ t('sub.iconUrlImport') }}</button>
+            <label class="btn ghost sm" :class="{ disabled: saving || iconBusy }" style="width:auto" :aria-disabled="saving || iconBusy">{{ t('sub.uploadIcon') }}
+              <input type="file" accept="image/*" :disabled="saving || iconBusy" class="visually-hidden-file" @change="uploadIcon" />
             </label>
           </div>
           <div v-if="showIconLibrary" class="lib-grid">
@@ -179,11 +181,12 @@
         <div class="block-t">{{ t('sub.secFamily') }}</div>
         <div class="chips">
           <span v-for="(m, i) in form.family_members" :key="i" class="chip">
-            {{ m }} <a href="#" @click.prevent="removeMember(i)">✕</a>
+            {{ m }}
+            <button type="button" class="chip-remove" :aria-label="`删除家庭成员“${m}”`" @click="removeMember(i)">✕</button>
           </span>
         </div>
         <div class="row">
-          <input id="sub-family-add" v-model="newMember" name="family_member" :aria-label="t('sub.familyPh')" :placeholder="t('sub.familyPh')" @keyup.enter="addMember" style="flex:1" />
+          <input id="sub-family-add" v-model="newMember" name="family_member" :aria-label="t('sub.familyPh')" :placeholder="t('sub.familyPh')" @keydown.enter.prevent="addMember" style="flex:1" />
           <button type="button" class="btn ghost sm" @click="addMember">{{ t('sub.familyAdd') }}</button>
         </div>
       </div>
@@ -217,10 +220,10 @@
 
       <p v-if="formErr" class="err" role="alert">{{ formErr }}</p>
       <div class="modal-foot">
-        <button type="button" class="btn ghost" @click="emit('close')">{{ t('sub.cancel') }}</button>
-        <button type="button" class="btn" @click="save">{{ t('sub.save') }}</button>
+        <button type="button" class="btn ghost" :disabled="saving" @click="requestClose">{{ t('sub.cancel') }}</button>
+        <button type="submit" class="btn" :disabled="saving || iconBusy">{{ t('sub.save') }}</button>
       </div>
-    </div>
+    </form>
   </div>
 
   <ServiceBrowserModal
@@ -265,6 +268,8 @@ const suggestions = ref([])
 const showIconLibrary = ref(false)
 const visibleIconCount = ref(0)
 const showBrowser = ref(false)
+const saving = ref(false)
+const iconBusy = ref(false)
 const dialogRef = ref(null)
 const nameInputRef = ref(null)
 const ICON_BATCH_SIZE = 18
@@ -276,7 +281,7 @@ useDialogFocus({
   open: () => true,
   dialogRef,
   initialFocus: nameInputRef,
-  onClose: () => emit('close'),
+  onClose: requestClose,
   restoreFocus: true,
   trap: true
 })
@@ -353,6 +358,11 @@ function pickService(s) {
   suggestions.value = []
 }
 
+function requestClose() {
+  if (saving.value) return
+  emit('close')
+}
+
 function openBrowser() {
   showBrowser.value = true
 }
@@ -375,27 +385,50 @@ function removeMember(index) {
 }
 
 async function importIconUrl() {
-  if (!iconUrl.value.trim()) return
+  if (saving.value || iconBusy.value || !iconUrl.value.trim()) return
+  formErr.value = ''
+  iconBusy.value = true
   try {
     const { data } = await api.post('/api/icons/from-url', { url: iconUrl.value.trim() })
     form.value.icon = data.url
     iconUrl.value = ''
   } catch (e) {
-    formErr.value = e.response?.data?.detail || 'Error'
+    formErr.value = e.response?.data?.detail || '图标下载失败，请稍后重试'
+  } finally {
+    iconBusy.value = false
   }
 }
 
 async function uploadIcon(e) {
-  const file = e.target.files[0]
-  if (!file) return
-  const fd = new FormData()
-  fd.append('file', file)
-  const { data } = await api.post('/api/icons/upload', fd)
-  form.value.icon = data.url
+  const input = e.target
+  if (saving.value || iconBusy.value) {
+    input.value = ''
+    return
+  }
+  const file = input.files[0]
+  if (!file) {
+    input.value = ''
+    return
+  }
+  formErr.value = ''
+  iconBusy.value = true
+  try {
+    const fd = new FormData()
+    fd.append('file', file)
+    const { data } = await api.post('/api/icons/upload', fd)
+    form.value.icon = data.url
+  } catch (e) {
+    formErr.value = e.response?.data?.detail || '图标上传失败，请稍后重试'
+  } finally {
+    iconBusy.value = false
+    input.value = ''
+  }
 }
 
 async function save() {
+  if (saving.value || iconBusy.value) return
   formErr.value = ''
+  saving.value = true
   try {
     if (bundleMode.value === 'create' && newBundleName.value.trim()) {
       const { data } = await api.post('/api/bundles', { name: newBundleName.value.trim() })
@@ -411,13 +444,15 @@ async function save() {
     else await api.post('/api/subscriptions', payload)
     emit('saved')
   } catch (e) {
-    formErr.value = e.response?.data?.detail || 'Error'
+    formErr.value = e.response?.data?.detail || '保存失败，请稍后重试'
+  } finally {
+    saving.value = false
   }
 }
 </script>
 
 <style scoped>
-.err { color: var(--danger); font-size: 13px; }
+.err { color: var(--danger-text); font-size: 13px; }
 .ico { width: 18px; height: 18px; vertical-align: middle; border-radius: 4px; }
 .auto-tip { color: var(--primary); font-size: 11px; }
 .block { border: 1px solid var(--border); border-radius: 10px; padding: 12px; margin-bottom: 12px; }
@@ -431,12 +466,17 @@ async function save() {
   width: 100%; background: transparent; border: none; text-align: left; color: var(--text); }
 .suggest-i:hover { background: var(--primary-soft); }
 .icon-lib summary { cursor: pointer; font-size: 13px; color: var(--text-soft); }
+.visually-hidden-file { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+.btn:focus-within { outline: 2px solid var(--primary); outline-offset: 2px; }
+.btn.disabled { opacity: .6; cursor: not-allowed; }
 .lib-grid { display: grid; grid-template-columns: repeat(auto-fill, 34px); gap: 8px; max-height: 140px; overflow: auto; }
-.lib-ico-btn { width: 34px; height: 34px; padding: 0; border: none; background: transparent; cursor: pointer; }
+.lib-ico-btn { width: var(--tap-size); height: var(--tap-size); padding: 0; border: none; background: transparent; cursor: pointer; }
 .lib-ico { width: 30px; height: 30px; border-radius: 6px; padding: 3px; border: 1px solid var(--border); object-fit: contain; }
 .lib-ico-btn:hover .lib-ico { border-color: var(--primary); }
 .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
-.chip { background: var(--primary-soft); color: var(--primary); padding: 3px 8px; border-radius: 16px; font-size: 13px; }
+.chip { display: inline-flex; align-items: center; gap: 3px; background: var(--primary-soft); color: var(--primary); padding: 3px 8px; border-radius: 16px; font-size: 13px; }
+.chip-remove { width: var(--tap-size); height: var(--tap-size); border: 0; border-radius: 50%; background: transparent; color: inherit;
+  padding: 0; cursor: pointer; line-height: 1; display: inline-flex; align-items: center; justify-content: center; }
 .radio-row { gap: 18px; }
 .end-date-hint { margin: -2px 0 10px; font-size: 12px; line-height: 1.5; }
 .rb { display: flex; align-items: center; gap: 6px; width: auto; margin: 0; font-size: 14px; color: var(--text); }

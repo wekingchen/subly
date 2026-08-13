@@ -60,13 +60,16 @@
       v-model="confirmOpen"
       :title="confirm.state.value?.title || ''"
       :close-label="t('common.close')"
-      @close="confirm.reset"
+      :pending="confirm.state.value?.pending"
+      description-id="calendar-feed-confirm-description"
+      @close="confirm.close"
     >
-      <p>{{ confirm.state.value?.message }}</p>
+      <p id="calendar-feed-confirm-description">{{ confirm.state.value?.message }}</p>
+      <p v-if="confirm.state.value?.error" class="feedback err" role="alert">{{ confirm.state.value.error }}</p>
       <template #footer>
-        <button type="button" class="btn ghost" @click="confirm.reset">{{ t('sub.cancel') }}</button>
-        <button type="button" class="btn" :class="{ danger: confirm.state.value?.danger }" @click="confirm.confirm">
-          {{ t('common.confirm') }}
+        <button type="button" class="btn ghost" :disabled="confirm.state.value?.pending" @click="confirm.close">{{ t('sub.cancel') }}</button>
+        <button type="button" class="btn" :class="{ danger: confirm.state.value?.danger }" :disabled="confirm.state.value?.pending" @click="confirm.confirm">
+          {{ confirm.state.value?.pending ? t('common.processing') : t('common.confirm') }}
         </button>
       </template>
     </AppModal>
@@ -84,7 +87,7 @@ const { t } = useI18n()
 const confirm = useConfirm()
 const confirmOpen = computed({
   get: () => Boolean(confirm.state.value?.open),
-  set: (value) => { if (!value) confirm.reset() }
+  set: (value) => { if (!value) confirm.close() }
 })
 const enabled = ref(false)
 const feedUrl = ref('')
@@ -150,9 +153,6 @@ async function reset() {
     enabled.value = true
     ok.value = true
     message.value = t('settings.calendarFeedResetDone')
-  } catch (error) {
-    ok.value = false
-    message.value = error.response?.data?.detail || t('common.networkError')
   } finally {
     busy.value = false
   }
@@ -177,9 +177,6 @@ async function revoke() {
     clearPlaintextUrl()
     ok.value = true
     message.value = t('settings.calendarFeedRevoked')
-  } catch (error) {
-    ok.value = false
-    message.value = error.response?.data?.detail || t('common.networkError')
   } finally {
     busy.value = false
   }
@@ -227,7 +224,7 @@ onBeforeUnmount(() => {
 .feed-signal { width: 9px; height: 9px; border-radius: 50%; background: var(--signal-cyan); box-shadow: 0 0 0 4px color-mix(in srgb, var(--signal-cyan) 13%, transparent), 0 0 18px color-mix(in srgb, var(--signal-cyan) 45%, transparent); }
 .feed-status { display: inline-flex; align-items: center; gap: 7px; flex-shrink: 0; min-height: 32px; padding: 6px 10px; border: 1px solid var(--border); border-radius: 999px; font-size: 12px; font-weight: 800; }
 .feed-status span { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
-.feed-status.enabled { color: var(--success); background: color-mix(in srgb, var(--success) 10%, transparent); }
+.feed-status.enabled { color: var(--success-text); background: color-mix(in srgb, var(--success) 10%, transparent); }
 .feed-status.disabled { color: var(--text-soft); background: var(--surface-2); }
 .feed-route { display: flex; align-items: center; max-width: 580px; margin: 22px 0 16px; }
 .route-node { display: grid; place-items: center; width: 42px; height: 42px; border: 1px solid color-mix(in srgb, var(--signal-cyan) 40%, var(--border)); border-radius: 12px; background: var(--surface-2); color: var(--signal-cyan); font: 850 14px/1 ui-monospace, SFMono-Regular, Menlo, monospace; }
@@ -242,13 +239,13 @@ onBeforeUnmount(() => {
 .credential-row input { min-width: 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .credential-row .btn { min-height: 44px; }
 .credential-warning, .https-warning { margin: 8px 0 0; font-size: 12px; line-height: 1.55; }
-.credential-warning { color: var(--warning); }
-.https-warning { color: var(--danger); }
+.credential-warning { color: var(--warning-text); }
+.https-warning { color: var(--danger-text); }
 .feed-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
 .feed-actions .btn { min-height: 44px; }
 .feedback { margin: 10px 0 0; font-size: 13px; line-height: 1.5; }
-.ok { color: var(--success); }
-.err { color: var(--danger); overflow-wrap: anywhere; }
+.ok { color: var(--success-text); }
+.err { color: var(--danger-text); overflow-wrap: anywhere; }
 @media (max-width: 720px) {
   .calendar-feed-card { padding: 16px; }
   .feed-head { flex-direction: column; gap: 10px; }

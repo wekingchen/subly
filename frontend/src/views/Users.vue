@@ -3,7 +3,7 @@
     <section class="users-hero card radar-grid-bg">
       <div class="hero-copy">
         <div class="hero-kicker"><span class="signal-dot"></span> 成员矩阵</div>
-        <h1>{{ t('admin.title') }}</h1>
+        <h1 tabindex="-1">{{ t('admin.title') }}</h1>
         <p class="muted">审核注册、分配权限、处理账号状态，让成员访问保持在可控范围内。</p>
       </div>
       <div class="hero-actions">
@@ -84,15 +84,15 @@
               <td :data-label="t('admin.subs')" class="mono-data">{{ u.subscription_count }}</td>
               <td :data-label="t('admin.created')" class="muted mono-data">{{ fmt(u.created_at) }}</td>
               <td class="acts" :data-label="t('common.actions')">
-                <button v-if="!u.is_approved" class="btn sm" @click="approve(u)">✓ {{ t('admin.approve') }}</button>
-                <button class="btn sm ghost" @click="toggleAdmin(u)">
+                <button v-if="!u.is_approved" type="button" class="btn sm" :disabled="isRowBusy(u.id)" @click="approve(u)">✓ {{ t('admin.approve') }}</button>
+                <button type="button" class="btn sm ghost" :disabled="isRowBusy(u.id)" @click="toggleAdmin(u)">
                   {{ u.is_admin ? t('admin.revokeAdmin') : t('admin.makeAdmin') }}
                 </button>
-                <button class="btn sm ghost" @click="toggleActive(u)">
+                <button type="button" class="btn sm ghost" :disabled="isRowBusy(u.id)" @click="toggleActive(u)">
                   {{ u.is_active ? t('admin.disable') : t('admin.enable') }}
                 </button>
-                <button class="btn sm ghost" @click="resetPwd(u)">{{ t('admin.resetPwd') }}</button>
-                <button class="btn sm danger" @click="remove(u)">{{ t('sub.delete') }}</button>
+                <button type="button" class="btn sm ghost" :disabled="isRowBusy(u.id) || (resetting && pwdTarget?.id === u.id)" @click="resetPwd(u)">{{ t('admin.resetPwd') }}</button>
+                <button type="button" class="btn sm danger" :disabled="isRowBusy(u.id) || (deleting && delTarget?.id === u.id)" @click="remove(u)">{{ t('sub.delete') }}</button>
               </td>
             </tr>
             <tr v-if="!shown.length" class="empty-row">
@@ -103,40 +103,51 @@
           </tbody>
         </table>
       </div>
-      <p v-if="err" class="err">{{ err }}</p>
+      <p v-if="err" class="err" role="alert">{{ err }}</p>
     </div>
 
-    <AppModal v-model="showForm" :title="t('admin.createUser')" width="420px" :close-label="t('common.close')">
-      <label>{{ t('admin.username') }}</label>
-      <input v-model="form.username" />
-      <label>{{ t('admin.email') }}</label>
-      <input v-model="form.email" type="email" />
-      <label>{{ t('admin.password') }}</label>
-      <input v-model="form.password" type="password" />
-      <label class="rb" style="margin-top:10px">
-        <input type="checkbox" v-model="form.is_admin" /> {{ t('admin.admin') }}
-      </label>
-      <p v-if="formErr" class="err">{{ formErr }}</p>
+    <AppModal v-model="showForm" :title="t('admin.createUser')" width="420px" :close-label="t('common.close')" :pending="creating">
+      <form id="create-user-form" @submit.prevent="create">
+        <label for="create-user-username">{{ t('admin.username') }}</label>
+        <input id="create-user-username" v-model="form.username" name="username" autocomplete="username" :aria-invalid="formErr ? 'true' : undefined" />
+        <label for="create-user-email">{{ t('admin.email') }}</label>
+        <input id="create-user-email" v-model="form.email" name="email" type="email" autocomplete="email" :aria-invalid="formErr ? 'true' : undefined" />
+        <label for="create-user-password">{{ t('admin.password') }}</label>
+        <input id="create-user-password" v-model="form.password" name="password" type="password" autocomplete="new-password" :aria-invalid="formErr ? 'true' : undefined" />
+        <label class="rb" for="create-user-admin" style="margin-top:10px">
+          <input id="create-user-admin" v-model="form.is_admin" name="is_admin" type="checkbox" /> {{ t('admin.admin') }}
+        </label>
+        <p v-if="formErr" class="err" role="alert">{{ formErr }}</p>
+      </form>
       <template #footer>
-        <button class="btn ghost" @click="showForm = false">{{ t('admin.cancel') }}</button>
-        <button class="btn" @click="create">{{ t('admin.create') }}</button>
+        <button type="button" class="btn ghost" :disabled="creating" @click="showForm = false">{{ t('admin.cancel') }}</button>
+        <button type="submit" form="create-user-form" class="btn" :disabled="creating">
+          {{ creating ? t('common.processing') : t('admin.create') }}
+        </button>
       </template>
     </AppModal>
 
-    <AppModal v-model="pwdOpen" :title="t('admin.resetPwd')" width="420px" :close-label="t('common.close')">
-      <p class="modal-copy">{{ t('admin.resetPwdPrompt') }} · {{ pwdTarget?.username }}</p>
-      <input v-model="pwdValue" type="password" :placeholder="t('admin.newPwdPh')" @keyup.enter="confirmResetPwd" />
+    <AppModal v-model="pwdOpen" :title="t('admin.resetPwd')" width="420px" :close-label="t('common.close')" :pending="resetting">
+      <form id="reset-password-form" @submit.prevent="confirmResetPwd">
+        <label for="reset-user-password" class="modal-copy">{{ t('admin.resetPwdPrompt') }} · {{ pwdTarget?.username }}</label>
+        <input id="reset-user-password" v-model="pwdValue" name="password" type="password" autocomplete="new-password" :placeholder="t('admin.newPwdPh')" :aria-invalid="pwdErr ? 'true' : undefined" />
+        <p v-if="pwdErr" class="err" role="alert">{{ pwdErr }}</p>
+      </form>
       <template #footer>
-        <button class="btn ghost" @click="pwdTarget = null">{{ t('admin.cancel') }}</button>
-        <button class="btn" :disabled="!pwdValue" @click="confirmResetPwd">{{ t('common.confirm') }}</button>
+        <button type="button" class="btn ghost" :disabled="resetting" @click="pwdTarget = null">{{ t('admin.cancel') }}</button>
+        <button type="submit" form="reset-password-form" class="btn" :disabled="resetting || !pwdValue">
+          {{ resetting ? t('common.processing') : t('common.confirm') }}
+        </button>
       </template>
     </AppModal>
 
-    <AppModal v-model="delOpen" :title="t('admin.deleteTitle')" width="420px" :close-label="t('common.close')">
+    <AppModal v-model="delOpen" :title="t('admin.deleteTitle')" width="420px" :close-label="t('common.close')" :pending="deleting">
       <p class="modal-copy">{{ t('admin.confirmDelete') }} · {{ delTarget?.username }}</p>
       <template #footer>
-        <button class="btn ghost" @click="delTarget = null">{{ t('admin.cancel') }}</button>
-        <button class="btn danger" @click="confirmDelete">{{ t('common.confirm') }}</button>
+        <button type="button" class="btn ghost" :disabled="deleting" @click="delTarget = null">{{ t('admin.cancel') }}</button>
+        <button type="button" class="btn danger" :disabled="deleting" @click="confirmDelete">
+          {{ deleting ? t('common.processing') : t('common.confirm') }}
+        </button>
       </template>
     </AppModal>
   </div>
@@ -155,10 +166,15 @@ const tab = ref('pending')
 const showForm = ref(false)
 const formErr = ref('')
 const form = ref({ username: '', email: '', password: '', is_admin: false })
+const creating = ref(false)
+const rowBusyIds = ref(new Set())
 
 const pwdTarget = ref(null)
 const pwdValue = ref('')
+const pwdErr = ref('')
+const resetting = ref(false)
 const delTarget = ref(null)
+const deleting = ref(false)
 const pwdOpen = computed({
   get: () => pwdTarget.value !== null,
   set: (v) => { if (!v) pwdTarget.value = null }
@@ -190,40 +206,79 @@ function openNew() {
   formErr.value = ''; showForm.value = true
 }
 async function create() {
+  if (creating.value) return
+  creating.value = true
   formErr.value = ''
   try {
     await api.post('/api/admin/users', form.value)
-    showForm.value = false; load()
+    showForm.value = false
+    await load()
   } catch (e) { formErr.value = e.response?.data?.detail || 'Error' }
+  finally { creating.value = false }
 }
 
+function isRowBusy(id) { return rowBusyIds.value.has(id) }
 async function patch(u, body) {
+  if (!u || isRowBusy(u.id)) return
+  rowBusyIds.value = new Set([...rowBusyIds.value, u.id])
   err.value = ''
-  try { await api.patch(`/api/admin/users/${u.id}`, body); load() }
+  try { await api.patch(`/api/admin/users/${u.id}`, body); await load() }
   catch (e) { err.value = e.response?.data?.detail || 'Error' }
+  finally {
+    const next = new Set(rowBusyIds.value)
+    next.delete(u.id)
+    rowBusyIds.value = next
+  }
 }
 const approve = (u) => patch(u, { is_approved: true })
 const toggleAdmin = (u) => patch(u, { is_admin: !u.is_admin })
 const toggleActive = (u) => patch(u, { is_active: !u.is_active })
 function resetPwd(u) {
+  if (!u || resetting.value || isRowBusy(u.id)) return
   pwdTarget.value = u
   pwdValue.value = ''
+  pwdErr.value = ''
 }
 async function confirmResetPwd() {
-  if (!pwdTarget.value || !pwdValue.value) return
-  await patch(pwdTarget.value, { password: pwdValue.value })
-  pwdTarget.value = null
-  pwdValue.value = ''
+  const target = pwdTarget.value
+  if (!target || !pwdValue.value || resetting.value || isRowBusy(target.id)) return
+  resetting.value = true
+  pwdErr.value = ''
+  rowBusyIds.value = new Set([...rowBusyIds.value, target.id])
+  try {
+    await api.patch(`/api/admin/users/${target.id}`, { password: pwdValue.value })
+    pwdTarget.value = null
+    pwdValue.value = ''
+    await load()
+  } catch (e) { pwdErr.value = e.response?.data?.detail || 'Error' }
+  finally {
+    resetting.value = false
+    const next = new Set(rowBusyIds.value)
+    next.delete(target.id)
+    rowBusyIds.value = next
+  }
 }
 function remove(u) {
+  if (!u || deleting.value || isRowBusy(u.id)) return
   delTarget.value = u
 }
 async function confirmDelete() {
-  if (!delTarget.value) return
+  const target = delTarget.value
+  if (!target || deleting.value || isRowBusy(target.id)) return
+  deleting.value = true
+  rowBusyIds.value = new Set([...rowBusyIds.value, target.id])
   err.value = ''
-  const id = delTarget.value.id
-  try { await api.delete(`/api/admin/users/${id}`); delTarget.value = null; load() }
-  catch (e) { err.value = e.response?.data?.detail || 'Error' }
+  try {
+    await api.delete(`/api/admin/users/${target.id}`)
+    delTarget.value = null
+    await load()
+  } catch (e) { err.value = e.response?.data?.detail || 'Error' }
+  finally {
+    deleting.value = false
+    const next = new Set(rowBusyIds.value)
+    next.delete(target.id)
+    rowBusyIds.value = next
+  }
 }
 
 onMounted(load)
@@ -262,11 +317,11 @@ tbody tr.disabled { opacity: .76; }
   background: color-mix(in srgb, var(--signal-cyan) 15%, var(--surface-2)); color: var(--primary); border: 1px solid color-mix(in srgb, var(--signal-cyan) 32%, var(--border)); font-weight: 900; }
 .email-cell { word-break: break-word; }
 .acts { display: flex; gap: 6px; flex-wrap: wrap; }
-.err { color: var(--danger); font-size: 13px; padding: 0 20px 18px; }
+.err { color: var(--danger-text); font-size: 13px; padding: 0 20px 18px; }
 .tag.adm { background: color-mix(in srgb, #8b5cf6 17%, transparent); color: #8b5cf6; }
-.tag.ok { background: color-mix(in srgb, var(--success) 16%, transparent); color: var(--success); }
-.tag.bad { background: color-mix(in srgb, var(--danger) 18%, transparent); color: var(--danger); }
-.tag.warn { background: color-mix(in srgb, var(--warning) 18%, transparent); color: var(--warning); }
+.tag.ok { background: color-mix(in srgb, var(--success) 16%, transparent); color: var(--success-text); }
+.tag.bad { background: color-mix(in srgb, var(--danger) 18%, transparent); color: var(--danger-text); }
+.tag.warn { background: color-mix(in srgb, var(--warning) 18%, transparent); color: var(--warning-text); }
 .tag.sm { padding: 1px 6px; font-size: 11px; margin-left: 4px; }
 .empty-row td { text-align: center; padding: 24px 10px; }
 .rb { display: flex; align-items: center; gap: 6px; width: auto; margin: 0; }
@@ -288,8 +343,8 @@ tbody tr.disabled { opacity: .76; }
   table, thead, tbody, th, td, tr { display: block; }
   thead { display: none; }
   tr { border: 1px solid var(--border); border-left: 4px solid var(--signal-cyan); border-radius: 12px; padding: 8px; margin-bottom: 10px; background: var(--surface); }
-  tr.pending { border-left-color: var(--warning); }
-  tr.disabled { border-left-color: var(--danger); opacity: 1; }
+  tr.pending { border-left-color: var(--warning-text); }
+  tr.disabled { border-left-color: var(--danger-text); opacity: 1; }
   td { border: none; padding: 6px 6px 4px; }
   td::before { content: attr(data-label); display: block; font-size: 11px; font-weight: 700;
     color: var(--text-soft); text-transform: uppercase; letter-spacing: .05em; margin-bottom: 2px; }

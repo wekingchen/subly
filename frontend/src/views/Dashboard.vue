@@ -1,5 +1,6 @@
 <template>
   <div>
+    <h1 class="sr-only" tabindex="-1">{{ t('nav.dashboard') }}</h1>
     <DataState
       v-if="dataState !== 'ready'"
       :state="dataState"
@@ -197,9 +198,7 @@
       @bundle-created="onBundleCreated"
     />
 
-    <div class="toast-wrap">
-      <div v-for="tst in toasts" :key="tst.id" class="toast" :class="tst.type">{{ tst.msg }}</div>
-    </div>
+    <AppToastRegion :toasts="toasts" />
   </div>
 </template>
 
@@ -208,6 +207,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import api from '../api'
 import AppModal from '../components/AppModal.vue'
+import AppToastRegion from '../components/AppToastRegion.vue'
 import DataState from '../components/DataState.vue'
 import RadarBars from '../components/RadarBars.vue'
 import ServiceIcon from '../components/ServiceIcon.vue'
@@ -219,6 +219,7 @@ import SubscriptionFormModal from '../components/subscriptions/SubscriptionFormM
 import { useAuth } from '../stores/auth'
 import { useBodyLock } from '../composables/useBodyLock'
 import { useSubscriptionActions } from '../composables/useSubscriptionActions'
+import { useToasts } from '../composables/useToasts'
 import { icon } from '../icons'
 import { daysLeft } from '../utils/date'
 import { createRequestGuard } from '../utils/dataRequest'
@@ -251,13 +252,7 @@ const methods = ref([])
 const bundles = ref([])
 const iconLib = ref([])
 
-const toasts = ref([])
-let toastId = 0
-function toast(msg, type = 'ok') {
-  const id = ++toastId
-  toasts.value.push({ id, msg, type })
-  setTimeout(() => { toasts.value = toasts.value.filter((x) => x.id !== id) }, 2600)
-}
+const { toasts, add: toast } = useToasts()
 
 // 订阅详情弹窗：detailId 指向当前打开的订阅，detailTarget 从刷新后的数据实时取，
 // 避免续费/编辑/删除后详情仍显示旧快照；订阅被删则 detailTarget 变 null 自动收起。
@@ -499,10 +494,10 @@ onMounted(reload)
 .rb-track { height: 6px; border-radius: 999px; background: color-mix(in srgb, var(--border) 60%, transparent); overflow: hidden; margin-top: 4px; }
 .rb-fill { display: block; height: 100%; border-radius: 999px; }
 .radar-bar.overdue { border-color: color-mix(in srgb, var(--danger) 50%, var(--border)); animation: pulse-danger 2s ease-in-out infinite; }
-.radar-bar.overdue .rb-count { color: var(--danger); }
+.radar-bar.overdue .rb-count { color: var(--danger-text); }
 .radar-bar.overdue .rb-fill { background: var(--danger); }
 .radar-bar.d3 { border-color: color-mix(in srgb, var(--warning) 50%, var(--border)); }
-.radar-bar.d3 .rb-count { color: var(--warning); }
+.radar-bar.d3 .rb-count { color: var(--warning-text); }
 .radar-bar.d3 .rb-fill { background: var(--warning); }
 .radar-bar.d7 .rb-count { color: var(--primary); }
 .radar-bar.d7 .rb-fill { background: var(--primary); }
@@ -521,9 +516,9 @@ onMounted(reload)
 .stat.s2 .badge { background: #e0f7f1; color: #0e9f6e; }
 .stat.s3 .badge { background: #fff1e6; color: #f59e0b; }
 .stat.s4 .badge { background: #fee2e2; color: #ef4444; }
-.stat.s4.alert { border-color: var(--danger); }
-.stat.budget-over { border-color: var(--danger); box-shadow: 0 0 0 1px var(--danger); }
-.budget-warn { font-size: 12px; color: var(--danger); font-weight: 600; margin-top: 2px; }
+.stat.s4.alert { border-color: var(--danger-text); }
+.stat.budget-over { border-color: var(--danger-text); box-shadow: 0 0 0 1px var(--danger); }
+.budget-warn { font-size: 12px; color: var(--danger-text); font-weight: 600; margin-top: 2px; }
 .stat .big { font-size: 24px; font-weight: 700; margin-top: 2px; letter-spacing: -.02em; }
 
 .main { grid-template-columns: 1.2fr 1fr; margin-bottom: 16px; }
@@ -573,8 +568,8 @@ h3 { margin-top: 0; }
 .cc-item.oneTime .cc-dot { background: var(--text-soft); opacity: .4; }
 .cc-n { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .cc-d { font-size: 12px; color: var(--text-soft); white-space: nowrap; }
-.cc-item.overdue .cc-d { color: var(--danger); font-weight: 600; }
-.cc-item.soon .cc-d { color: var(--warning); font-weight: 600; }
+.cc-item.overdue .cc-d { color: var(--danger-text); font-weight: 600; }
+.cc-item.soon .cc-d { color: var(--warning-text); font-weight: 600; }
 
 .recent-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 10px; }
 .rc { display: flex; align-items: center; gap: 10px; padding: 10px; border: 1px solid var(--border); border-radius: 10px; }
@@ -595,11 +590,11 @@ h3 { margin-top: 0; }
 .detail-action { box-shadow: none; }
 .detail-action-primary { color: var(--primary); background: var(--primary-soft);
   border: 1px solid color-mix(in srgb, var(--primary) 30%, var(--border)); }
-.detail-action-danger { color: var(--danger); background: transparent;
+.detail-action-danger { color: var(--danger-text); background: transparent;
   border-color: color-mix(in srgb, var(--danger) 42%, var(--border)); }
 .detail-action:hover { transform: none; box-shadow: none; }
 .detail-action-primary:hover { color: var(--primary); background: color-mix(in srgb, var(--primary-soft) 72%, var(--primary) 10%); }
-.detail-action-danger:hover { color: var(--danger); background: color-mix(in srgb, var(--danger) 8%, transparent); border-color: var(--danger); }
+.detail-action-danger:hover { color: var(--danger-text); background: color-mix(in srgb, var(--danger) 8%, transparent); border-color: var(--danger-text); }
 /* 详情弹窗底部按钮：移动端横向等分紧凑排列。 */
 @media (max-width: 980px) { .stats { grid-template-columns: 1fr 1fr; } .main { grid-template-columns: 1fr; } }
 @media (max-width: 720px) {
@@ -620,7 +615,7 @@ h3 { margin-top: 0; }
   .cat-cols, .recent-grid { grid-template-columns: 1fr; }
   /* 详情弹窗底部三按钮：移动端横向等分紧凑排列，避免三个全宽大按钮纵向堆叠 */
   :deep(.modal-foot) { gap: 6px; }
-  :deep(.modal-foot) .btn { flex: 1 1 0; min-height: 38px; padding: 6px 8px; font-size: 13px; }
+  :deep(.modal-foot) .btn { flex: 1 1 0; min-height: var(--tap-size); padding: 6px 8px; font-size: 13px; }
 }
 @media (max-width: 430px) { .stats { grid-template-columns: 1fr; } }
 </style>

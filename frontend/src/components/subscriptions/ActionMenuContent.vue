@@ -65,10 +65,10 @@ const { t } = useI18n()
 .action-copy { flex: 1; min-width: 0; }
 .action-name { font-weight: 800; line-height: 1.25; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .action-plan { font-size: 12px; margin-top: 2px; }
-.action-close { width: 36px; height: 36px; flex-shrink: 0; border: none; border-radius: 999px; background: var(--surface-2); color: var(--text-soft); cursor: pointer; font-size: 18px; line-height: 1; }
+.action-close { width: var(--tap-size); height: var(--tap-size); flex-shrink: 0; border: none; border-radius: 999px; background: var(--surface-2); color: var(--text-soft); cursor: pointer; font-size: 18px; line-height: 1; }
 .action-close:hover { color: var(--text); }
 .action-move { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; padding: 6px 0 8px; }
-.action-move-btn { min-height: 42px; border: 1px solid var(--border); border-radius: 14px; background: color-mix(in srgb, var(--surface-2) 72%, transparent);
+.action-move-btn { min-height: var(--tap-size); border: 1px solid var(--border); border-radius: 14px; background: color-mix(in srgb, var(--surface-2) 72%, transparent);
   color: var(--text-soft); font-size: 13px; font-weight: 750; cursor: pointer; }
 .action-move-btn:hover { color: var(--text); border-color: color-mix(in srgb, var(--primary) 36%, var(--border)); }
 .action-item { width: 100%; min-height: 48px; display: flex; align-items: center; gap: 10px; padding: 0 12px; border: none;
@@ -76,5 +76,5 @@ const { t } = useI18n()
 .action-item-main { display: grid; gap: 2px; min-width: 0; }
 .action-item-hint { color: var(--text-soft); font-size: 12px; font-weight: 500; line-height: 1.35; }
 .action-item:hover { background: var(--surface-2); }
-.action-item.danger { color: var(--danger); }
+.action-item.danger { color: var(--danger-text); }
 </style>

@@ -18,6 +18,7 @@ function topOfStack() {
 
 function toEl(target) {
   if (!target) return null
+  if (typeof target === 'function') return toEl(target())
   if (typeof target === 'string') return document.querySelector(target)
   // Vue ref (.value) 或直接 DOM 元素
   if (target.value && target.value.nodeType) return target.value

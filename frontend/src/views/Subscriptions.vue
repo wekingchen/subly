@@ -3,7 +3,7 @@
     <section class="ledger-hero radar-grid-bg">
       <div class="ledger-hero-main">
         <div class="ledger-kicker"><span class="signal-dot"></span>{{ t('sub.ledgerKicker') }}</div>
-        <h1>{{ t('nav.subscriptions') }}</h1>
+        <h1 tabindex="-1">{{ t('nav.subscriptions') }}</h1>
         <p class="ledger-subtitle">{{ t('sub.ledgerSubtitle') }}</p>
       </div>
       <div class="ledger-hero-side">
@@ -116,9 +116,7 @@
       @bundle-created="onBundleCreated"
     />
 
-    <div class="toast-wrap">
-      <div v-for="tst in toasts" :key="tst.id" class="toast" :class="tst.type">{{ tst.msg }}</div>
-    </div>
+    <AppToastRegion :toasts="toasts" />
   </div>
 </template>
 
@@ -126,6 +124,7 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import api from '../api'
+import AppToastRegion from '../components/AppToastRegion.vue'
 import DataState from '../components/DataState.vue'
 import DeleteSubscriptionModal from '../components/subscriptions/DeleteSubscriptionModal.vue'
 import RenewSubscriptionModal from '../components/subscriptions/RenewSubscriptionModal.vue'
@@ -136,6 +135,7 @@ import SubscriptionToolbar from '../components/subscriptions/SubscriptionToolbar
 import { useAuth } from '../stores/auth'
 import { useBodyLock } from '../composables/useBodyLock'
 import { useSubscriptionActions } from '../composables/useSubscriptionActions'
+import { useToasts } from '../composables/useToasts'
 import { amountOf, hasBaseEquivalent } from '../utils/money'
 import { useDataRequest } from '../utils/dataRequest'
 import { buildGroupedSubscriptions, buildSubscriptionOrderState, categoryOrderToPersistedIds, getCategoryMeta, getSubscriptionCategoryKey, moveCategoryByOffset, moveCategoryToTarget, moveValueByOffset, moveValueToTarget, UNCATEGORIZED_KEY } from '../utils/subscriptionOrdering'
@@ -155,6 +155,7 @@ const bundles = ref([])
 const iconLib = ref([])
 const filter = ref('')
 const loadedFilter = ref(null)
+const { toasts, add: toast } = useToasts()
 
 const actionTarget = ref(null)
 const actionCatKey = ref(null)
@@ -232,14 +233,6 @@ onBeforeUnmount(() => {
   window.removeEventListener('scroll', scheduleActionAnchorRefresh, true)
   if (actionAnchorFrame !== null) cancelAnimationFrame(actionAnchorFrame)
 })
-
-const toasts = ref([])
-let toastId = 0
-function toast(msg, type = 'ok') {
-  const id = ++toastId
-  toasts.value.push({ id, msg, type })
-  setTimeout(() => { toasts.value = toasts.value.filter((x) => x.id !== id) }, 2600)
-}
 
 function payName(s) {
   const p = methods.value.find((x) => x.id === s.payment_method_id)

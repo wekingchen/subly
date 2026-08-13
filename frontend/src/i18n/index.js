@@ -2,7 +2,7 @@ import { createI18n } from 'vue-i18n'
 
 const zh = {
   app: { tagline: '订阅 / 续费 / 保号，一个都不漏' },
-  nav: { dashboard: '雷达总览', subscriptions: '订阅账本', calendar: '续费日历', reports: '支出报表', notifications: '通知中心', logs: '实时日志', settings: '系统设置', iconLibrary: '服务管理', diagnostics: '数据诊断', users: '用户管理', groupWorkspace: '雷达工作台', groupSystem: '通知与系统', groupAdmin: '管理员', logout: '退出', logoutFail: '退出失败，请检查网络后重试', menu: '导航菜单', brandTag: '续费雷达' },
+  nav: { dashboard: '雷达总览', subscriptions: '订阅账本', calendar: '续费日历', reports: '支出报表', notifications: '通知中心', logs: '实时日志', settings: '系统设置', iconLibrary: '服务管理', diagnostics: '数据诊断', users: '用户管理', groupWorkspace: '雷达工作台', groupSystem: '通知与系统', groupAdmin: '管理员', logout: '退出', logoutFail: '退出失败，请检查网络后重试', menu: '导航菜单', closeMenu: '关闭导航菜单', brandTag: '续费雷达' },
   notify: {
     title: '通知投递中心', kicker: '可靠投递队列',
     subtitle: '查看每条提醒从入队到送达的状态；临时故障会自动退避重试，停止重试后可手动恢复。',
@@ -186,7 +186,7 @@ const zh = {
     overview: '概览', cachedCount: '{n} 已缓存', missingCount: '{n} 未缓存', activeCount: '{n} 启用', inactiveCount: '{n} 停用',
     exportList: '导出列表', refresh: '刷新', batch: '批量', selectAll: '全选', batchFetch: '抓取所选'
   },
-  common: { loading: '加载中...', actions: '操作', confirm: '确认', close: '关闭', networkError: '请求失败，请检查网络后重试' }
+  common: { loading: '加载中...', processing: '处理中…', skipMain: '跳到主要内容', actions: '操作', confirm: '确认', close: '关闭', networkError: '请求失败，请检查网络后重试' }
 }
 
 export default createI18n({

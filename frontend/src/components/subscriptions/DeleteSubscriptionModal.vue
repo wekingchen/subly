@@ -67,8 +67,8 @@ useDialogFocus({
 .delete-modal { width: 420px; }
 .delete-kicker { width: 38px; height: 38px; display: inline-flex; align-items: center; justify-content: center;
   border-radius: 14px; background: color-mix(in srgb, var(--danger) 12%, transparent); margin-bottom: 8px; font-size: 20px; }
-.delete-modal h3 { margin: 0 48px 8px 0; color: var(--danger); }
+.delete-modal h3 { margin: 0 48px 8px 0; color: var(--danger-text); }
 .delete-copy { margin: 0; font-size: 14px; line-height: 1.6; }
 .delete-label { margin-top: 14px; }
-.err { color: var(--danger); font-size: 13px; margin: 8px 0 0; }
+.err { color: var(--danger-text); font-size: 13px; margin: 8px 0 0; }
 </style>

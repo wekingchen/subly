@@ -36,11 +36,21 @@
       </template>
     </AppModal>
 
-    <AppModal v-model="confirmOpen" :title="confirm.state.value?.title || ''" :close-label="t('common.close')" @close="confirm.reset">
-      <p>{{ confirm.state.value?.message }}</p>
+    <AppModal
+      v-model="confirmOpen"
+      :title="confirm.state.value?.title || ''"
+      :close-label="t('common.close')"
+      :pending="confirm.state.value?.pending"
+      description-id="payment-confirm-description"
+      @close="confirm.close"
+    >
+      <p id="payment-confirm-description">{{ confirm.state.value?.message }}</p>
+      <p v-if="confirm.state.value?.error" class="feedback err" role="alert">{{ confirm.state.value.error }}</p>
       <template #footer>
-        <button type="button" class="btn ghost" @click="confirm.reset">{{ t('sub.cancel') }}</button>
-        <button type="button" class="btn danger" @click="confirm.confirm">{{ t('common.confirm') }}</button>
+        <button type="button" class="btn ghost" :disabled="confirm.state.value?.pending" @click="confirm.close">{{ t('sub.cancel') }}</button>
+        <button type="button" class="btn danger" :disabled="confirm.state.value?.pending" @click="confirm.confirm">
+          {{ confirm.state.value?.pending ? t('common.processing') : t('common.confirm') }}
+        </button>
       </template>
     </AppModal>
   </section>
@@ -58,7 +68,7 @@ const { t } = useI18n()
 const confirm = useConfirm()
 const confirmOpen = computed({
   get: () => Boolean(confirm.state.value?.open),
-  set: (value) => { if (!value) confirm.reset() }
+  set: (value) => { if (!value) confirm.close() }
 })
 const items = ref([])
 const loading = ref(false)
@@ -88,6 +98,7 @@ function openCreate() { resetForm(); formOpen.value = true }
 function openEdit(item) { resetForm(item); formOpen.value = true }
 
 async function save() {
+  if (saving.value) return
   const name = form.name.trim()
   if (!name) { formError.value = t('settings.nameRequired'); return }
   saving.value = true
@@ -111,13 +122,11 @@ function requestDelete(item) {
     message: t('settings.deletePaymentConfirm', { name: item.name }),
     danger: true,
     onConfirm: async () => {
-      try {
-        const { data } = await api.delete(`/api/payment-methods/${item.id}`)
-        ok.value = true
-        message.value = t('settings.referenceDeleted', { n: data.unlinked_subscriptions || 0 })
-        await load()
-        emit('changed')
-      } catch (error) { ok.value = false; message.value = error.response?.data?.detail || t('common.networkError') }
+      const { data } = await api.delete(`/api/payment-methods/${item.id}`)
+      ok.value = true
+      message.value = t('settings.referenceDeleted', { n: data.unlinked_subscriptions || 0 })
+      await load()
+      emit('changed')
     }
   })
 }
@@ -140,8 +149,8 @@ onMounted(load)
 .reference-main span { font-size: 12px; }
 .reference-actions { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
 .reference-empty, .feedback { margin: 10px 0 0; font-size: 13px; }
-.ok { color: var(--success); }
-.err { color: var(--danger); }
+.ok { color: var(--success-text); }
+.err { color: var(--danger-text); }
 @media (max-width: 720px) {
   .reference-head, .reference-row { align-items: stretch; flex-direction: column; }
   .reference-head .btn, .reference-actions .btn { min-height: 44px; flex: 1; }

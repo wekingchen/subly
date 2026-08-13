@@ -3,7 +3,7 @@
     <section class="notify-hero card radar-grid-bg" aria-labelledby="notification-title">
       <div class="hero-copy">
         <div class="hero-kicker"><span class="signal-dot"></span> {{ t('notify.kicker') }}</div>
-        <h1 id="notification-title">{{ t('notify.title') }}</h1>
+        <h1 id="notification-title" tabindex="-1">{{ t('notify.title') }}</h1>
         <p class="muted">{{ t('notify.subtitle') }}</p>
       </div>
       <div class="hero-actions">
@@ -417,8 +417,8 @@ h1 { margin: 8px 0; }
 .metric-card.pending { border-color: color-mix(in srgb, var(--signal-cyan) 32%, var(--border)); }
 .metric-card.retry { border-color: color-mix(in srgb, var(--warning) 34%, var(--border)); }
 .metric-card.dead { border-color: color-mix(in srgb, var(--danger) 34%, var(--border)); }
-.scan-message { grid-column: 1 / -1; margin: 0; padding: 10px 12px; border-radius: 10px; background: color-mix(in srgb, var(--success) 12%, transparent); color: var(--success); }
-.scan-message.bad { background: color-mix(in srgb, var(--danger) 12%, transparent); color: var(--danger); }
+.scan-message { grid-column: 1 / -1; margin: 0; padding: 10px 12px; border-radius: 10px; background: color-mix(in srgb, var(--success) 12%, transparent); color: var(--success-text); }
+.scan-message.bad { background: color-mix(in srgb, var(--danger) 12%, transparent); color: var(--danger-text); }
 .queue-section { min-width: 0; }
 .queue-toolbar { margin-bottom: 12px; }
 .filter-label { margin-bottom: 8px; color: var(--text-soft); font-size: 12px; font-weight: 800; letter-spacing: .08em; }
@@ -442,9 +442,9 @@ h1 { margin: 8px 0; }
 .status-line { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
 .status-chip { display: inline-flex; min-height: 26px; align-items: center; padding: 3px 9px; border-radius: 999px; font-size: 12px; font-weight: 800; background: var(--surface-2); color: var(--text-soft); }
 .status-pending, .status-sending { color: var(--signal-cyan); background: color-mix(in srgb, var(--signal-cyan) 13%, transparent); }
-.status-retry_wait { color: var(--warning); background: color-mix(in srgb, var(--warning) 13%, transparent); }
-.status-sent { color: var(--success); background: color-mix(in srgb, var(--success) 13%, transparent); }
-.status-dead { color: var(--danger); background: color-mix(in srgb, var(--danger) 13%, transparent); }
+.status-retry_wait { color: var(--warning-text); background: color-mix(in srgb, var(--warning) 13%, transparent); }
+.status-sent { color: var(--success-text); background: color-mix(in srgb, var(--success) 13%, transparent); }
+.status-dead { color: var(--danger-text); background: color-mix(in srgb, var(--danger) 13%, transparent); }
 .tag.chan { background: var(--surface-2); color: var(--text-soft); }
 .delivery-id { font-size: 12px; color: var(--text-soft); }
 .delivery-time { flex: 0 0 auto; text-align: right; }
@@ -467,8 +467,8 @@ h1 { margin: 8px 0; }
 .attempt-list li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 12px; padding: 10px; border-radius: 10px; background: var(--surface-2); }
 .attempt-list code { grid-column: 1 / -1; overflow-wrap: anywhere; }
 .attempt-status { margin-left: 8px; font-size: 12px; }
-.attempt-status.sent { color: var(--success); }
-.attempt-status.failed { color: var(--danger); }
+.attempt-status.sent { color: var(--success-text); }
+.attempt-status.failed { color: var(--danger-text); }
 .empty-state { display: flex; align-items: flex-start; gap: 12px; }
 .empty-state b { display: block; margin-bottom: 4px; }
 .empty-state p { margin: 0; line-height: 1.6; }

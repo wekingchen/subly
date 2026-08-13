@@ -53,11 +53,21 @@
       </template>
     </AppModal>
 
-    <AppModal v-model="confirmOpen" :title="confirm.state.value?.title || ''" :close-label="t('common.close')" @close="confirm.reset">
-      <p>{{ confirm.state.value?.message }}</p>
+    <AppModal
+      v-model="confirmOpen"
+      :title="confirm.state.value?.title || ''"
+      :close-label="t('common.close')"
+      :pending="confirm.state.value?.pending"
+      description-id="currency-confirm-description"
+      @close="confirm.close"
+    >
+      <p id="currency-confirm-description">{{ confirm.state.value?.message }}</p>
+      <p v-if="confirm.state.value?.error" class="feedback err" role="alert">{{ confirm.state.value.error }}</p>
       <template #footer>
-        <button type="button" class="btn ghost" @click="confirm.reset">{{ t('sub.cancel') }}</button>
-        <button type="button" class="btn danger" @click="confirm.confirm">{{ t('common.confirm') }}</button>
+        <button type="button" class="btn ghost" :disabled="confirm.state.value?.pending" @click="confirm.close">{{ t('sub.cancel') }}</button>
+        <button type="button" class="btn danger" :disabled="confirm.state.value?.pending" @click="confirm.confirm">
+          {{ confirm.state.value?.pending ? t('common.processing') : t('common.confirm') }}
+        </button>
       </template>
     </AppModal>
   </section>
@@ -76,7 +86,7 @@ const { t } = useI18n()
 const confirm = useConfirm()
 const confirmOpen = computed({
   get: () => Boolean(confirm.state.value?.open),
-  set: (value) => { if (!value) confirm.reset() }
+  set: (value) => { if (!value) confirm.close() }
 })
 const items = ref([])
 const customItems = computed(() => items.value.filter((item) => item.is_custom))
@@ -130,6 +140,7 @@ function openCreate() { resetForm(); formOpen.value = true }
 function openEdit(item) { resetForm(item); formOpen.value = true }
 
 async function save() {
+  if (saving.value) return
   normalizeCode()
   if (!form.code) { formError.value = t('settings.codeRequired'); return }
   if (!form.name.trim()) { formError.value = t('settings.nameRequired'); return }
@@ -167,13 +178,11 @@ function requestDelete(item) {
     message: t('settings.deleteCurrencyConfirm', { code: item.code }),
     danger: true,
     onConfirm: async () => {
-      try {
-        await api.delete(`/api/currencies/${item.code}`)
-        ok.value = true
-        message.value = t('settings.currencyDeleted')
-        await load()
-        emit('changed')
-      } catch (error) { ok.value = false; message.value = error.response?.data?.detail || t('common.networkError') }
+      await api.delete(`/api/currencies/${item.code}`)
+      ok.value = true
+      message.value = t('settings.currencyDeleted')
+      await load()
+      emit('changed')
     }
   })
 }
@@ -206,8 +215,8 @@ onMounted(load)
 .reference-actions { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
 .currency-form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .reference-empty, .feedback, .rate-lock-hint { margin: 10px 0 0; font-size: 13px; }
-.ok { color: var(--success); }
-.err { color: var(--danger); }
+.ok { color: var(--success-text); }
+.err { color: var(--danger-text); }
 @media (max-width: 720px) {
   .reference-head, .reference-row { align-items: stretch; flex-direction: column; }
   .reference-head .btn, .reference-actions .btn { min-height: 44px; flex: 1; }

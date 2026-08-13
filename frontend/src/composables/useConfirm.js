@@ -19,19 +19,32 @@ export function useConfirm() {
       title: options.title || '',
       message: options.message || '',
       danger: options.danger === true,
+      pending: false,
+      error: '',
       onConfirm: typeof options.onConfirm === 'function' ? options.onConfirm : null
     }
   }
   function close() {
-    if (state.value) state.value.open = false
+    if (state.value?.pending) return
+    reset()
   }
   function reset() {
     state.value = null
   }
   async function confirm() {
     const s = state.value
-    if (!s || !s.onConfirm) { reset(); return }
-    try { await s.onConfirm() } finally { reset() }
+    if (!s || s.pending) return
+    if (!s.onConfirm) { reset(); return }
+    s.pending = true
+    s.error = ''
+    try {
+      await s.onConfirm()
+      if (state.value === s) reset()
+    } catch (error) {
+      if (state.value !== s) return
+      s.error = error?.response?.data?.detail || error?.message || '操作失败，请重试'
+      s.pending = false
+    }
   }
 
   return { state, open, close, reset, confirm }

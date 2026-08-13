@@ -1,16 +1,30 @@
 <template>
   <div class="shell">
+    <a class="skip-link" href="#main-content" :inert="mobileDrawerOpen || undefined" :aria-hidden="mobileDrawerOpen ? 'true' : undefined">{{ t('common.skipMain') }}</a>
+
     <!-- 移动端顶部栏 -->
-    <header class="topbar">
+    <header class="topbar" :inert="mobileDrawerOpen || undefined" :aria-hidden="mobileDrawerOpen ? 'true' : undefined">
       <button ref="hambRef" class="hamb" @click="openDrawer" :aria-expanded="drawer ? 'true' : 'false'" aria-controls="mobile-sidebar" :aria-label="t('nav.menu')">☰</button>
       <div class="brand sm"><span class="brand-mark"><img src="/brand-icon.png" alt="" /></span><span>Subly</span></div>
       <div style="width:44px"></div>
     </header>
 
     <!-- 遮罩（移动端抽屉打开时） -->
-    <div v-if="drawer" class="drawer-mask" @click="drawer = false"></div>
+    <div v-if="mobileDrawerOpen" class="drawer-mask" @click="closeDrawer"></div>
 
-    <aside id="mobile-sidebar" ref="drawerRef" class="sidebar" :class="{ open: drawer }" :aria-label="t('nav.menu')" tabindex="-1">
+    <aside
+      id="mobile-sidebar"
+      ref="drawerRef"
+      class="sidebar"
+      :class="{ open: mobileDrawerOpen }"
+      :aria-label="t('nav.menu')"
+      :aria-hidden="isMobile && !mobileDrawerOpen ? 'true' : undefined"
+      :aria-modal="mobileDrawerOpen ? 'true' : undefined"
+      :role="mobileDrawerOpen ? 'dialog' : undefined"
+      :inert="isMobile && !mobileDrawerOpen ? true : undefined"
+      tabindex="-1"
+    >
+      <button ref="drawerCloseRef" type="button" class="drawer-close" :aria-label="t('nav.closeMenu')" @click="closeDrawer">×</button>
       <div class="brand-block">
         <div class="brand"><span class="brand-mark"><img src="/brand-icon.png" alt="" /></span><span>Subly</span></div>
         <div class="brand-tag"><span class="signal-dot"></span>{{ t('nav.brandTag') }}</div>
@@ -32,19 +46,21 @@
       </div>
     </aside>
 
-    <main class="content">
+    <main id="main-content" class="content" :inert="mobileDrawerOpen || undefined" :aria-hidden="mobileDrawerOpen ? 'true' : undefined">
       <router-view />
     </main>
   </div>
 </template>
 
 <script setup>
-import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { useAuth } from '../stores/auth'
 import { icon } from '../icons'
 import { useBodyLock } from '../composables/useBodyLock'
+import { useBreakpoint } from '../composables/useBreakpoint'
+import { useDialogFocus } from '../composables/useDialogFocus'
 
 const { t } = useI18n()
 const auth = useAuth()
@@ -52,25 +68,27 @@ const router = useRouter()
 const drawer = ref(false)
 const hambRef = ref(null)
 const drawerRef = ref(null)
+const drawerCloseRef = ref(null)
+const isMobile = useBreakpoint('(max-width: 720px)')
+const mobileDrawerOpen = computed(() => isMobile.value && drawer.value)
 
 function openDrawer() {
-  drawer.value = true
+  if (isMobile.value) drawer.value = true
 }
 function closeDrawer() {
   drawer.value = false
 }
-useBodyLock(drawer, 'layout-drawer')
-watch(drawer, (open) => {
-  nextTick(() => (open ? drawerRef.value : hambRef.value)?.focus?.())
+useBodyLock(mobileDrawerOpen, 'layout-drawer')
+useDialogFocus({
+  open: mobileDrawerOpen,
+  dialogRef: drawerRef,
+  initialFocus: drawerCloseRef,
+  onClose: closeDrawer,
+  restoreFocus: true,
+  trap: true
 })
-function onKey(e) {
-  if (e.key === 'Escape' && drawer.value) closeDrawer()
-}
-if (typeof window !== 'undefined') {
-  window.addEventListener('keydown', onKey)
-}
-onBeforeUnmount(() => {
-  if (typeof window !== 'undefined') window.removeEventListener('keydown', onKey)
+watch(isMobile, (mobile) => {
+  if (!mobile) closeDrawer()
 })
 
 const navGroups = computed(() => {
@@ -118,6 +136,12 @@ async function logout() {
 
 <style scoped>
 .shell { display: flex; min-height: 100vh; }
+.skip-link { position: fixed; top: 8px; left: 8px; z-index: 100; padding: 10px 14px; border-radius: 10px;
+  background: var(--text); color: var(--surface); font-weight: 800; transform: translateY(calc(-100% - 16px)); }
+.skip-link:focus { transform: translateY(0); }
+.drawer-close { display: none; width: var(--tap-size); height: var(--tap-size); margin: 0 0 8px auto; border: 1px solid var(--border);
+  border-radius: 10px; background: var(--surface-2); color: var(--text); font-size: 24px; cursor: pointer; }
+.content h1:focus { outline: 2px solid var(--primary); outline-offset: 4px; }
 .sidebar { width: 240px; background: color-mix(in srgb, var(--surface) 92%, var(--radar-panel)); border-right: 1px solid var(--border);
   display: flex; flex-direction: column; padding: 18px 14px; position: sticky; top: 0; height: 100vh; z-index: 50;
   box-shadow: inset -1px 0 0 color-mix(in srgb, var(--primary) 12%, transparent); }
@@ -183,6 +207,7 @@ async function logout() {
     transform: translateX(-110%); transition: transform .25s ease; box-shadow: var(--shadow-lg);
     overflow-y: auto; -webkit-overflow-scrolling: touch; padding-bottom: calc(18px + env(safe-area-inset-bottom)); outline: none; }
   .sidebar.open { transform: translateX(0); }
+  .drawer-close { display: inline-flex; align-items: center; justify-content: center; }
   .nav-list { gap: 14px; }
   .nav-card { min-height: 48px; padding-block: 9px; }
   .nav-label { white-space: normal; line-height: 1.25; }

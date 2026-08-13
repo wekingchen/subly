@@ -23,8 +23,8 @@ defineProps({
   white-space: nowrap;
   flex-shrink: 0;
 }
-.status-chip.ok { background: color-mix(in srgb, var(--success) 16%, transparent); color: var(--success); }
-.status-chip.soon { background: color-mix(in srgb, var(--warning) 18%, transparent); color: var(--warning); }
-.status-chip.overdue { background: color-mix(in srgb, var(--danger) 18%, transparent); color: var(--danger); }
+.status-chip.ok { background: color-mix(in srgb, var(--success) 16%, transparent); color: var(--success-text); }
+.status-chip.soon { background: color-mix(in srgb, var(--warning) 18%, transparent); color: var(--warning-text); }
+.status-chip.overdue { background: color-mix(in srgb, var(--danger) 18%, transparent); color: var(--danger-text); }
 .status-chip.oneTime { background: color-mix(in srgb, var(--text-soft) 16%, transparent); color: var(--text-soft); }
 </style>
