@@ -34,7 +34,6 @@ def auth_env(monkeypatch):
     main.app.dependency_overrides[get_db] = lambda: db
     monkeypatch.setattr(auth.activity, "log", lambda *args, **kwargs: None)
     monkeypatch.setattr(security.settings, "jwt_secret", "test-secret-" * 4, raising=False)
-    monkeypatch.setattr(security.settings, "jwt_algorithm", "HS256", raising=False)
     monkeypatch.setattr(auth.settings, "require_admin_approval", True, raising=False)
     monkeypatch.setattr(auth.settings, "auth_cookie_name", "subly_refresh", raising=False)
     monkeypatch.setattr(auth.settings, "auth_cookie_secure", False, raising=False)
@@ -166,10 +165,11 @@ def test_refresh_prefers_cookie_and_logout_clears_it(auth_env):
 def test_legacy_refresh_token_without_jti_can_migrate_only_once(auth_env):
     client, db = auth_env
     user = add_user(db)
-    legacy_token = security._create_token(
-        str(user.id),
-        timedelta(days=14),
-        "refresh",
+    assert user.id == 1
+    legacy_token = (
+        "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9."
+        "eyJzdWIiOiIxIiwiaWF0IjoxNzA0MDY3MjAwLCJleHAiOjQxMDI0NDQ4MDAsInR5cGUiOiJyZWZyZXNoIn0."
+        "knRI8yySL6uM5-uSf51miBwbAV9uF-YmeDM3fKhqmN8"
     )
 
     migrated = client.post("/api/auth/refresh", json={"refresh_token": legacy_token})

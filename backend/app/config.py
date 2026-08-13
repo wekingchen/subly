@@ -11,7 +11,6 @@ class Settings(BaseSettings):
     # SQLite 数据库文件路径（容器内默认放在持久化的 /app/data 卷里，无需任何配置）
     db_path: str = "data/subly.db"
     jwt_secret: str = "change-me"
-    jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 60
     refresh_token_expire_days: int = 14
     auth_cookie_name: str = "subly_refresh"

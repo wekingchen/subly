@@ -1,12 +1,14 @@
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
-from jose import JWTError, jwt
+import jwt
+from jwt.exceptions import InvalidTokenError
 from passlib.context import CryptContext
 
 from app.config import settings
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+JWT_ALGORITHM = "HS256"
 
 
 def hash_password(password: str) -> str:
@@ -20,7 +22,7 @@ def verify_password(plain: str, hashed: str) -> bool:
 def _create_token(sub: str, expires: timedelta, token_type: str, **claims) -> str:
     now = datetime.now(timezone.utc)
     payload = {"sub": sub, "type": token_type, "iat": now, "exp": now + expires, **claims}
-    return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
+    return jwt.encode(payload, settings.jwt_secret, algorithm=JWT_ALGORITHM)
 
 
 def create_access_token(user_id: int) -> str:
@@ -40,19 +42,19 @@ def create_refresh_token(user_id: int, jti: str | None = None) -> str:
 
 def decode_refresh_token(token: str) -> tuple[int, str] | None:
     try:
-        payload = jwt.decode(token, settings.jwt_secret, algorithms=[settings.jwt_algorithm])
+        payload = jwt.decode(token, settings.jwt_secret, algorithms=[JWT_ALGORITHM])
         if payload.get("type") != "refresh" or not payload.get("jti"):
             return None
         return int(payload["sub"]), str(payload["jti"])
-    except (JWTError, ValueError, KeyError):
+    except (InvalidTokenError, TypeError, ValueError, KeyError):
         return None
 
 
 def decode_token(token: str, expected_type: str = "access") -> int | None:
     try:
-        payload = jwt.decode(token, settings.jwt_secret, algorithms=[settings.jwt_algorithm])
+        payload = jwt.decode(token, settings.jwt_secret, algorithms=[JWT_ALGORITHM])
         if payload.get("type") != expected_type:
             return None
         return int(payload["sub"])
-    except (JWTError, ValueError, KeyError):
+    except (InvalidTokenError, TypeError, ValueError, KeyError):
         return None

@@ -40,6 +40,7 @@
 - 内置服务库新增「智谱 GLM」（AI）与「火山引擎 / 豆包」（AI + VPS，因火山引擎同时提供豆包大模型与火山云服务器）。
 
 ### Changed
+- 依赖安全基线完成收口：前端锁文件将 `brace-expansion`、`postcss` 与 `nanoid` 更新到已修复版本；后端从 `python-jose[cryptography]` 迁移到普通 `PyJWT`，认证算法在代码内固定为 HS256，并移除不再需要的 `ecdsa` / `rsa` / `pyasn1` / `cryptography` 依赖链。GitHub Actions 的 `pip-audit --strict` 与 `npm audit --audit-level=high` 改为 PR、main、tag 和手动发布都必须通过的 `verify` 硬门禁，最终镜像继续由双架构 Trivy 扫描。
 - 交互触控目标统一以 `--tap-size: 44px` 为事实源，粗指针设备不再依赖窄屏断点；状态图形色与文字色分离，提升 light、dark 与彩色主题下的小字对比度。
 - 统一财务成本与汇率契约：Dashboard 与 Reports 共用唯一月化函数，界面明确显示月化 / 年化成本；`amount_in_base` 仅表示单次金额折合，支出排行改用 `monthly_cost_in_base`。财务与 UI 换算缺汇率时不再把原币金额伪装成基准币，相关汇总返回完整性元数据并提示缺失币种。
 
@@ -48,7 +49,7 @@
 - 修复发布镜像被 `cryptography` 的可修复 High 漏洞（CVE-2026-69247 / CVE-2026-69249）阻断：将依赖从 `48.0.1` 升级到 `50.0.0`，满足 Trivy 双架构发布门禁。
 - 修复旧数据卷升级后 SQLite 启动报 `attempt to write a readonly database`：容器入口先修复 `/app/data` 中历史 root-owned 目录和文件的 ownership，再通过 `gosu` 以 UID/GID `10001` 启动 Uvicorn；CI 使用真实 root-owned bind mount 验证数据库可写、PID 1 已降权、浏览器 E2E 与双架构发布均正常。
 - 容器入口权限校验收紧：`chown` 改为按设备号过滤、不跨文件系统（避免修改嵌套挂载到其他卷的内容）；启动前校验 `/app/data` 整棵树的可写与目录可搜索权限，遍历失败不再被静默吞掉；非 root 运行且 UID 不为 `10001` 时直接拒绝启动，错误信息统一指向 `10001:10001`。CI 增加非 root UID 校验。
-- 修复发布镜像被 Starlette 高危 DoS 漏洞阻断：将 FastAPI 升级至 `0.133.1` 并显式固定已修复的 Starlette `1.3.1`，保留 Trivy 对可修复 High/Critical 项的发布硬门禁，不以忽略规则绕过；`pip-audit` 当前仅剩 ecdsa 无可用修复版本项。
+- 修复发布镜像被 Starlette 高危 DoS 漏洞阻断：将 FastAPI 升级至 `0.133.1` 并显式固定已修复的 Starlette `1.3.1`，保留 Trivy 对可修复 High/Critical 项的发布硬门禁，不以忽略规则绕过；后续通过迁移到 PyJWT 移除了当时剩余的 ecdsa 无修复漏洞。
 - 浏览器会话与响应头安全收口：新前端不再把 Token 写入 `localStorage`，Access Token 仅驻留页面内存，Refresh Token 使用 `Path=/api/auth` 的 HttpOnly/SameSite Cookie，并以 `refresh_sessions.jti` 实现服务端一次性轮换：刷新原子消费旧 session，logout 撤销当前 session 后删除 Cookie，旧 token 重放返回 401；旧 localStorage Refresh Token 仅在 Cookie 401 后迁移一次（旧版无 jti token 用 SHA-256 指纹防重复消费），明确 401/403 才删除，网络/5xx 保留供下次重试；logout 网络失败时不清本地状态并提示重试，避免假退出。后端暂时保留 body/响应体 refresh token 兼容桥供旧页面迁移；移除 wildcard+credentials CORS，并为 SPA、API 文档和通用响应补 CSP、nosniff、Referrer、Frame、Permissions 安全头。
 - 数据库结构迁移改为 fail-fast：旧库补必需列时若 DDL 失败，记录表/列上下文并终止启动，不再打印“跳过”后带着半迁移结构继续运行；缺表与已有列仍保持幂等跳过，历史数据回填/清理维持兼容告警策略。
 - 认证安全闭环：登录、Refresh Token 与受保护接口统一检查邮箱验证、管理员审核和账号启用状态，撤销审核/禁用后旧 Access Token 与 Refresh Token 均立即失效；登录、注册和邮箱验证码入口新增线程安全的单进程滑动窗口限流并返回 `Retry-After`，默认 Caddy compose 信任其代理头以按真实客户端区分限流桶；启动时拒绝空值、占位值或过短的 `JWT_SECRET`，首次创建管理员时拒绝默认/弱密码（已有管理员不受环境变量旧值影响）；SMTP 验证码改为发送成功后再提交用户，失败不再留下占用用户名/邮箱的半注册账号，客户端错误不回显底层 SMTP 异常；验证码过期后可凭相同用户名、邮箱和原密码重新注册并签发新验证码，不再陷入唯一约束死锁。
@@ -68,9 +69,9 @@
 - 实时日志时间按容器 `TZ` / `settings.tz`（默认 `Asia/Shanghai`）显示：`/api/logs` 现在返回带 UTC 时区标记的 `created_at`，前端按系统时区格式化。
 
 ### Changed
-- Docker 与发布链路加固：前端镜像构建只使用 `npm ci`，新增 `.dockerignore`，运行时切换为固定 UID/GID `10001` 的非 root 用户；PR 只运行后端/前端测试、lint、构建、Compose 与非阻塞依赖审计，main/tag/手动发布才构建 amd64/arm64 归档、执行 Trivy 可修复 High/Critical 门禁与 Chromium E2E；双架构发布归档只构建一次，扫描通过后直接推送同一批产物并组装 manifest，避免二次构建漂移；同一 ref 的旧发布会被并发取消以防旧构建回写 `latest`，手动发布仅允许从 `main` 运行；`v*` tag 必须指向 `main` 历史且只写版本 tag，不再用旧提交回滚 `latest`；pip/npm 审计失败改为 warning，避免成功 job 携带误导性的 error annotation；`actions/upload-artifact` 升至 v7、`actions/download-artifact` 升至 v8，清除旧 Action 的 Node.js 20 弃用告警。为遵守远端只保留 `main` 的仓库约束，移除 Dependabot 自动 version-update PR 配置，pip/npm/GitHub Actions/Docker 基础镜像升级统一人工规划，依赖风险继续由 audit 日志与发布产物 Trivy 覆盖。同步将 `python-jose` 升至 `3.5.0`、`python-multipart` 升至 `0.0.31`、`cryptography` 升至 `50.0.0`、FastAPI 升至 `0.133.1` 并固定 Starlette `1.3.1`。
+- Docker 与发布链路加固：前端镜像构建只使用 `npm ci`，新增 `.dockerignore`，运行时切换为固定 UID/GID `10001` 的非 root 用户；PR 运行后端/前端测试、lint、构建、Compose 与阻断式语言依赖审计，main/tag/手动发布才构建 amd64/arm64 归档、执行 Trivy 可修复 High/Critical 门禁与 Chromium E2E；双架构发布归档只构建一次，扫描通过后直接推送同一批产物并组装 manifest，避免二次构建漂移；同一 ref 的旧发布会被并发取消以防旧构建回写 `latest`，手动发布仅允许从 `main` 运行；`v*` tag 必须指向 `main` 历史且只写版本 tag，不再用旧提交回滚 `latest`；`actions/upload-artifact` 升至 v7、`actions/download-artifact` 升至 v8，清除旧 Action 的 Node.js 20 弃用告警。为遵守远端只保留 `main` 的仓库约束，移除 Dependabot 自动 version-update PR 配置，pip/npm/GitHub Actions/Docker 基础镜像升级统一人工规划，依赖风险由 `verify` 阻断式 audit 与发布产物 Trivy 分层覆盖。同步将 `python-multipart` 升至 `0.0.31`、FastAPI 升至 `0.133.1` 并固定 Starlette `1.3.1`；JWT 依赖的最终状态见本轮 PyJWT 迁移记录。
 - 图标抓取流式读取加 wall-clock deadline（单次读超时的 3 倍，下限 3 秒）：httpx 的 read timeout 只限单次读空闲，慢速分块响应可长期占住抓取并发，现超总时长即中止并记 provider failure 触发冷却（避免后续 slug 反复重试同一慢 provider）。
-- 清理自有代码中已弃用的 `datetime.utcnow()`，改为 `datetime.now(timezone.utc)`（存 naive UTC 列时用 `.replace(tzinfo=None)` 保持一致），消除 DeprecationWarning；上游 jose / passlib 的弃用告警待其发版。
+- 清理自有代码中已弃用的 `datetime.utcnow()`，改为 `datetime.now(timezone.utc)`（存 naive UTC 列时用 `.replace(tzinfo=None)` 保持一致），消除 DeprecationWarning；JWT 已迁移到 PyJWT，剩余 passlib 上游弃用告警待其发版。
 - README、Docker Hub、NAS 与技术文档统一项目名表述：正式名称使用 `Subly`，中文定位调整为“你的自托管续费雷达”。
 - 桌面端订阅卡片动作区降权为更轻的续费雷达工具条，并补充「续费」仅更新记录与到期日、不触发付款的说明，避免误认为支付入口。
 - 桌面端订阅卡片仅保留「续费」快捷操作，编辑与删除收进 `⋯` 菜单，降低低频 / 高危操作对卡片主体的干扰。

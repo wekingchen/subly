@@ -134,7 +134,6 @@ docker compose up -d --build
 | `EXCHANGE_API_KEY` | 空 | 可选汇率 API key |
 | `LOG_LEVEL` | `INFO` | 后端日志级别，输出到 stdout，可用 `docker logs` 查看 |
 | `SLOW_REQUEST_MS` | `1000` | 超过该毫秒数的请求额外记录 `slow_request` |
-| `JWT_ALGORITHM` | `HS256` | JWT 算法，一般不需要修改 |
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | `60` | Access Token 有效期 |
 | `REFRESH_TOKEN_EXPIRE_DAYS` | `14` | Refresh Token 有效期 |
 | `AUTH_COOKIE_NAME` | `subly_refresh` | HttpOnly Refresh Cookie 名称，一般无需修改 |
@@ -152,7 +151,7 @@ docker compose up -d --build
 | `ICON_FETCH_CONCURRENCY` | `6` | 冷缓存时 favicon 下载并发数 |
 | `ICON_FETCH_SVG_ENABLED` | `true` | 是否接受并消毒缓存远端 SVG favicon |
 
-浏览器会话中，Access Token 只保存在当前页面内存，Refresh Token 使用 HttpOnly Cookie，并由服务端 `refresh_sessions` 一次性消费/轮换；刷新后的旧 Token 和 logout 后的当前 Token 都不能重放。旧版本 `localStorage` 中的 Refresh Token 会在首次加载时迁移一次并立即删除；服务端退出请求网络失败时保留当前登录态并提示重试，避免 Cookie 仍在却显示“已退出”。生产与开发均按同源部署，不再开放 wildcard CORS；SPA 响应带 CSP、`nosniff`、Referrer、Frame 与 Permissions 安全头。私有 iCal 原始 Token 只在生成/重置时显示一次，数据库仅保存 SHA-256；Feed、Token 管理接口、HTML 与 Service Worker 禁止持久缓存，Vite 哈希资源才使用长期 immutable 缓存。
+认证令牌由 PyJWT 签发与验证，算法在代码中固定为 HS256，不接受环境变量扩展允许列表。浏览器会话中，Access Token 只保存在当前页面内存，Refresh Token 使用 HttpOnly Cookie，并由服务端 `refresh_sessions` 一次性消费/轮换；刷新后的旧 Token 和 logout 后的当前 Token 都不能重放。旧版本 `localStorage` 中的 Refresh Token 会在首次加载时迁移一次并立即删除；服务端退出请求网络失败时保留当前登录态并提示重试，避免 Cookie 仍在却显示“已退出”。生产与开发均按同源部署，不再开放 wildcard CORS；SPA 响应带 CSP、`nosniff`、Referrer、Frame 与 Permissions 安全头。私有 iCal 原始 Token 只在生成/重置时显示一次，数据库仅保存 SHA-256；Feed、Token 管理接口、HTML 与 Service Worker 禁止持久缓存，Vite 哈希资源才使用长期 immutable 缓存。
 
 Bark 推送的 Device Key、服务器、提示音、分组与 TTL 均在网页「设置」里按用户配置。iOS 15+ 可显示订阅图片图标：绝对 HTTP(S) 图标可直接使用；上传图标和内置图标需要配置 `APP_PUBLIC_URL`，且该地址必须能被接收 Bark 的设备访问。未配置或图标不可用时提醒仍会正常送达，只显示 Bark 默认图标；Emoji/普通文本不会作为 Bark 图标发送。真实提醒点击地址仍取订阅自身 `url`。完整示例见 [.env.example](./.env.example)。
 
@@ -184,7 +183,7 @@ cd backend
 python -m pip install -r requirements-dev.txt   # 包含运行时依赖、pytest、pip-audit
 python -m pytest
 python -m ruff check app                         # 低噪声正确性检查
-python -m pip_audit -r requirements.txt          # 漏洞可见性检查，发现项需结合兼容性处理
+python -m pip_audit --strict -r requirements.txt # 阻断式漏洞审计，必须零已知漏洞
 ```
 
 前端：
@@ -201,7 +200,7 @@ npm audit --audit-level=high
 
 测试包含后端数据库/API 回归、前端 Vitest 工具与会话迁移单测，以及 Chromium Playwright smoke：真实验证登录、HttpOnly Cookie 刷新恢复、旧 `localStorage` Token 一次性迁移、退出、CORS 和关键页面 CSP。外网通知/图标 provider 仍以 stub 或专项运行验收为主。
 
-GitHub Actions 对 PR 运行 Ruff、ESLint、后端测试、前端测试/构建、两份 compose 配置校验和非阻塞依赖审计；推送到 `main`、`v*` tag 或从 `main` 手动发布时，才分别构建 amd64/arm64 发布归档供 Trivy 扫描，并用通过门禁的 amd64 产物运行 Chromium E2E。门禁通过后直接发布同一批已扫描归档，不再二次重建；仅存在修复版本的 High/Critical 镜像漏洞阻断发布。`pip-audit` / `npm audit` 发现问题时保留日志并显示 warning；为保持仓库只存在 `main`，不启用 Dependabot 自动 version-update PR，Python、npm、GitHub Actions 与 Docker 基础镜像升级统一人工规划，发布产物继续由 Trivy 覆盖可修复的 High/Critical 漏洞。手动镜像发布只允许从 `main` 分支运行；`v*` tag 必须指向 `main` 历史，只发布对应版本 tag，不回写 `latest`，避免未合并代码发布或旧提交回滚正式镜像。
+GitHub Actions 对 PR 运行 Ruff、ESLint、后端测试、前端测试/构建、两份 compose 配置校验和阻断式依赖审计；`pip-audit --strict` 发现任何已知 Python 漏洞或依赖解析失败、`npm audit --audit-level=high` 发现 High/Critical 漏洞时，`verify` 立即失败。推送到 `main`、`v*` tag 或从 `main` 手动发布时，才分别构建 amd64/arm64 发布归档供 Trivy 扫描，并用通过门禁的 amd64 产物运行 Chromium E2E。门禁通过后直接发布同一批已扫描归档，不再二次重建；Trivy 继续负责最终镜像中存在修复版本的 High/Critical 系统包与运行时依赖漏洞。为保持仓库只存在 `main`，不启用 Dependabot 自动 version-update PR，Python、npm、GitHub Actions 与 Docker 基础镜像升级统一人工规划。手动镜像发布只允许从 `main` 分支运行；`v*` tag 必须指向 `main` 历史，只发布对应版本 tag，不回写 `latest`，避免未合并代码发布或旧提交回滚正式镜像。
 
 ---
 

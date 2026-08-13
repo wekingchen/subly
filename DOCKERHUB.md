@@ -94,7 +94,6 @@ volumes:
 | `EXCHANGE_API_BASE` / `EXCHANGE_API_URL` / `EXCHANGE_API_KEY` | Exchange-rate source and optional API key. |
 | `LOG_LEVEL` | Backend log level. Default `INFO`. Logs go to stdout / `docker logs`. |
 | `SLOW_REQUEST_MS` | Requests slower than this threshold emit `slow_request` warnings. Default `1000`. |
-| `JWT_ALGORITHM` | JWT algorithm. Default `HS256`. Usually leave unchanged. |
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | Access token lifetime. Default `60`. |
 | `REFRESH_TOKEN_EXPIRE_DAYS` | Refresh token lifetime. Default `14`. |
 | `AUTH_COOKIE_NAME` | HttpOnly refresh cookie name. Default `subly_refresh`. |
@@ -107,9 +106,9 @@ volumes:
 | `ICON_FETCH_CONCURRENCY` | Cold-cache favicon download concurrency. Default `6`. |
 | `ICON_FETCH_SVG_ENABLED` | Accept and sanitize remote SVG favicons. Default `true`. |
 
-Authentication endpoints use an in-memory rate limit for the default single-worker deployment. SMTP delivery failures do not leave a reserved username/email; expired pending registrations can restart with the same username, email, and password. Disabled, unapproved, or unverified users cannot continue with existing access/refresh tokens. Browser access tokens stay in memory, refresh tokens use an HttpOnly cookie backed by one-time server-side refresh sessions, replayed/ logged-out tokens are rejected, legacy localStorage tokens migrate once, wildcard CORS is removed, and HTML responses carry CSP/security headers.
+Authentication tokens use PyJWT with an internal HS256-only allowlist; the algorithm is not configurable. Authentication endpoints use an in-memory rate limit for the default single-worker deployment. SMTP delivery failures do not leave a reserved username/email; expired pending registrations can restart with the same username, email, and password. Disabled, unapproved, or unverified users cannot continue with existing access/refresh tokens. Browser access tokens stay in memory, refresh tokens use an HttpOnly cookie backed by one-time server-side refresh sessions, replayed/ logged-out tokens are rejected, legacy localStorage tokens migrate once, wildcard CORS is removed, and HTML responses carry CSP/security headers.
 
-认证入口按默认单 worker 部署使用内存限流；SMTP 发送失败不会占用用户名/邮箱，验证码过期后可用相同注册信息重新获取，禁用、未审核或未验证用户的现有 Access/Refresh Token 也会被拒绝。浏览器 Access Token 仅驻留内存，Refresh Token 使用 HttpOnly Cookie 与一次性服务端 session，刷新后的旧 token 和 logout 后 token 均不可重放；旧 localStorage Token 首次加载后自动迁移并删除。同源部署不开放 wildcard CORS，HTML 响应带 CSP 与通用安全头。
+认证令牌使用 PyJWT，代码内仅允许 HS256 且不暴露算法配置；认证入口按默认单 worker 部署使用内存限流；SMTP 发送失败不会占用用户名/邮箱，验证码过期后可用相同注册信息重新获取，禁用、未审核或未验证用户的现有 Access/Refresh Token 也会被拒绝。浏览器 Access Token 仅驻留内存，Refresh Token 使用 HttpOnly Cookie 与一次性服务端 session，刷新后的旧 token 和 logout 后 token 均不可重放；旧 localStorage Token 首次加载后自动迁移并删除。同源部署不开放 wildcard CORS，HTML 响应带 CSP 与通用安全头。
 
 Configure Bark Device Key, server, sound, group, and optional non-negative TTL in the web Settings page. On iOS 15+, renewal pushes can use each subscription's image icon. Absolute HTTP(S) icons work directly; uploaded and built-in icons need `APP_PUBLIC_URL` set to an address reachable by the receiving device. Missing or unusable icons are omitted, and real renewal click-through still uses the subscription's own `url`.
 
@@ -121,9 +120,9 @@ Configure Bark Device Key, server, sound, group, and optional non-negative TTL i
 
 - `/app/data` — SQLite database file, uploaded icons, and built-in icon-library cache. **Persist this directory.** The entrypoint repairs ownership of legacy root-owned volume contents, then immediately drops to UID/GID `10001` for Uvicorn. Named volumes and bind mounts are supported when the host filesystem allows ownership changes. Run with the default entrypoint (root repairs then drops to `10001`) or with `user: "10001:10001"`; any other non-root UID is rejected at startup.
 
-Required schema migrations fail fast instead of starting with a partial database structure. Pull requests run backend/frontend tests, lint, builds, Compose validation, and advisory dependency audits. Main/tag/manual release runs build amd64/arm64 archives once, scan those exact artifacts with a Trivy gate for fixable High/Critical findings, run Chromium smoke tests, then publish the same artifacts. Release tags must point into main history and publish only their version tag, so tagging an older commit cannot roll back `latest`. To keep the repository on a single `main` branch, automated Dependabot version-update pull requests are disabled. Python, npm, GitHub Actions, and base-image upgrades are planned manually, while release-image Trivy scans continue to cover fixable High/Critical vulnerabilities.
+Required schema migrations fail fast instead of starting with a partial database structure. Pull requests run backend/frontend tests, lint, builds, Compose validation, and blocking dependency audits; any known Python vulnerability, dependency-resolution failure, or High/Critical npm finding fails verification. Main/tag/manual release runs build amd64/arm64 archives once, scan those exact artifacts with a Trivy gate for fixable High/Critical findings, run Chromium smoke tests, then publish the same artifacts. Release tags must point into main history and publish only their version tag, so tagging an older commit cannot roll back `latest`. To keep the repository on a single `main` branch, automated Dependabot version-update pull requests are disabled. Python, npm, GitHub Actions, and base-image upgrades are planned manually, while release-image Trivy scans continue to cover fixable High/Critical vulnerabilities.
 
-必需结构迁移失败会直接停止启动，避免半迁移运行。PR 运行后端/前端测试、lint、构建、Compose 校验与提示性依赖审计；main/tag/手动发布才分别构建 amd64/arm64 归档，对同一批产物执行可修复 High/Critical 的 Trivy 门禁与 Chromium smoke，通过后直接发布而不二次重建。发布 tag 必须指向 `main` 历史且只写对应版本 tag，给旧提交补 tag 不会回滚 `latest`。为保持仓库只存在 `main`，不启用 Dependabot 自动 version-update PR；Python、npm、GitHub Actions 与基础镜像升级统一人工规划，发布产物继续由 Trivy 覆盖可修复的 High/Critical 漏洞。
+必需结构迁移失败会直接停止启动，避免半迁移运行。PR 运行后端/前端测试、lint、构建、Compose 校验与阻断式依赖审计；任何已知 Python 漏洞、依赖解析失败或 High/Critical npm 漏洞都会使验证失败；main/tag/手动发布才分别构建 amd64/arm64 归档，对同一批产物执行可修复 High/Critical 的 Trivy 门禁与 Chromium smoke，通过后直接发布而不二次重建。发布 tag 必须指向 `main` 历史且只写对应版本 tag，给旧提交补 tag 不会回滚 `latest`。为保持仓库只存在 `main`，不启用 Dependabot 自动 version-update PR；Python、npm、GitHub Actions 与基础镜像升级统一人工规划，发布产物继续由 Trivy 覆盖可修复的 High/Critical 漏洞。
 
 ## Features / 功能
 
