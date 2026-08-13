@@ -73,7 +73,9 @@ app = FastAPI(title="Subly API", version="2.1.0", lifespan=lifespan)
 _SPA_CSP = (
     "default-src 'self'; "
     "script-src 'self'; "
-    "style-src 'self' 'unsafe-inline'; "
+    "style-src 'self'; "
+    "style-src-elem 'self'; "
+    "style-src-attr 'none'; "
     "img-src 'self' data: blob: https: http:; "
     "font-src 'self' data:; "
     "connect-src 'self'; "
@@ -125,7 +127,7 @@ def _apply_cache_headers(request: Request, response) -> None:
     elif path == "/sw.js" or "text/html" in content_type:
         response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
         response.headers["Pragma"] = "no-cache"
-    elif path in {"/manifest.webmanifest", "/offline.html"}:
+    elif path in {"/manifest.webmanifest", "/offline.html", "/offline.css", "/theme-bootstrap.js"}:
         response.headers["Cache-Control"] = "no-cache"
 
 

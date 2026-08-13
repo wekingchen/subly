@@ -7,11 +7,12 @@
   >
     <div
       class="cat-head"
+      :class="{ sortable: sortEnabled && categorySortable }"
       :draggable="sortEnabled && categorySortable"
       @dragstart="emit('category-drag-start', { key: group.key, event: $event })"
       @dragend="emit('drag-end')"
     >
-      <span v-if="categorySortable" class="grip">⠿</span>
+      <span v-if="sortEnabled && categorySortable" class="grip">⠿</span>
       <span class="cat-ico">{{ group.icon }}</span>
       <span class="cat-name">{{ group.name }}</span>
       <span class="cat-count">{{ group.items.length }}</span>
@@ -105,8 +106,9 @@ function forwardCardDrop(payload) {
 <style scoped>
 .cat-group { margin-bottom: 22px; border-radius: 14px; transition: outline .12s; outline: 2px dashed transparent; }
 .cat-group.drop-cat { outline-color: var(--primary); outline-offset: 4px; }
-.cat-head { display: flex; align-items: center; gap: 8px; padding: 6px 4px 12px; cursor: grab; }
-.cat-head .grip { color: var(--text-soft); cursor: grab; }
+.cat-head { display: flex; align-items: center; gap: 8px; padding: 6px 4px 12px; }
+.cat-head.sortable, .cat-head.sortable .grip { cursor: grab; }
+.cat-head .grip { color: var(--text-soft); }
 .cat-ico { font-size: 18px; }
 .cat-name { font-weight: 700; font-size: 16px; }
 .cat-count { background: var(--surface-2); color: var(--text-soft); border-radius: 20px;

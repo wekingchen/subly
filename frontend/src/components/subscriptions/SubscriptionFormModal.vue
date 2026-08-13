@@ -177,6 +177,12 @@
         </div>
       </div>
 
+      <details class="advanced-settings" :open="advancedOpen" @toggle="advancedOpen = $event.currentTarget.open">
+        <summary>
+          <span>{{ t('sub.moreSettings') }}</span>
+          <small>{{ t('sub.moreSettingsTip') }}</small>
+        </summary>
+
       <div class="block">
         <div class="block-t">{{ t('sub.secFamily') }}</div>
         <div class="chips">
@@ -217,6 +223,7 @@
         <div class="block-t">{{ t('sub.secCalendar') }}</div>
         <label class="rb"><input type="checkbox" v-model="form.show_in_calendar" name="show_in_calendar" /> {{ t('sub.showInCalendar') }}</label>
       </div>
+      </details>
 
       <p v-if="formErr" class="err" role="alert">{{ formErr }}</p>
       <div class="modal-foot">
@@ -268,6 +275,7 @@ const suggestions = ref([])
 const showIconLibrary = ref(false)
 const visibleIconCount = ref(0)
 const showBrowser = ref(false)
+const advancedOpen = ref(false)
 const saving = ref(false)
 const iconBusy = ref(false)
 const dialogRef = ref(null)
@@ -298,6 +306,7 @@ function normalizeKeepaliveScope() {
 
 function resetTransientState() {
   formErr.value = ''
+  advancedOpen.value = false
   newMember.value = ''
   iconUrl.value = ''
   newBundleName.value = ''
@@ -315,6 +324,7 @@ function initializeForm(subscription) {
   resetTransientState()
   if (subscription) {
     suppressAuto = true
+    advancedOpen.value = true
     form.value = cloneSubscriptionForEdit(subscription)
     normalizeKeepaliveScope()
     bundleMode.value = subscription.bundle_id ? 'join' : 'none'
@@ -457,6 +467,12 @@ async function save() {
 .auto-tip { color: var(--primary); font-size: 11px; }
 .block { border: 1px solid var(--border); border-radius: 10px; padding: 12px; margin-bottom: 12px; }
 .block-t { font-size: 13px; font-weight: 600; color: var(--primary); margin-bottom: 6px; }
+.advanced-settings { margin-bottom: 12px; }
+.advanced-settings > summary { display: flex; flex-direction: column; gap: 3px; min-height: var(--tap-size); justify-content: center;
+  padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-2); cursor: pointer; }
+.advanced-settings > summary span { font-weight: 700; color: var(--primary); }
+.advanced-settings > summary small { color: var(--text-soft); font-size: 12px; }
+.advanced-settings[open] > summary { margin-bottom: 12px; }
 .icon-pick { display: flex; align-items: flex-end; }
 .ico-lg { width: 40px; height: 40px; border-radius: 8px; object-fit: contain; border: 1px solid var(--border); }
 .ico-lg.service-icon-fallback { display: flex; align-items: center; justify-content: center; font-size: 24px; }

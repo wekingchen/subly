@@ -112,8 +112,8 @@
               </div>
             </div>
             <div class="legend">
-              <div v-for="(b, i) in insights.breakdown" :key="b.category" class="lg">
-                <span class="dot" :style="{ background: color(i) }"></span>
+              <div v-for="b in insights.breakdown" :key="categoryVisualKey(b)" class="lg">
+                <span class="dot" :style="{ background: categoryColor(b) }"></span>
                 <span class="lg-n">{{ b.category }}</span>
                 <span class="lg-p muted mono-data">{{ b.percent }}%</span>
               </div>
@@ -125,10 +125,10 @@
         <div class="card chart-card">
           <h3 class="panel-title"><span class="panel-signal"></span>{{ t('reports.spendTrend') }}</h3>
           <div v-if="insights.breakdown?.length" class="bars">
-            <div v-for="(b, i) in insights.breakdown" :key="b.category" class="bar-row">
+            <div v-for="b in insights.breakdown" :key="categoryVisualKey(b)" class="bar-row">
               <div class="bar-label" :title="b.category">{{ b.category }}</div>
               <div class="bar-track">
-                <div class="bar-fill" :style="{ width: barW(b) + '%', background: color(i) }"></div>
+                <div class="bar-fill" :style="{ width: barW(b) + '%', background: categoryColor(b) }"></div>
               </div>
               <div class="bar-val mono-data">{{ money(b.monthly) }}</div>
             </div>
@@ -287,7 +287,7 @@
           <table>
             <thead><tr><th>{{ t('reports.category') }}</th><th>{{ t('reports.count') }}</th><th>{{ t('reports.monthly') }}</th></tr></thead>
             <tbody>
-              <tr v-for="r in detail.recurring" :key="r.category">
+              <tr v-for="r in detail.recurring" :key="categoryVisualKey(r)">
                 <td>{{ r.category }}</td><td class="mono-data">{{ r.count }}</td><td class="mono-data money-cell">{{ money(r.monthly) }}</td>
               </tr>
               <tr v-if="!detail.recurring?.length"><td colspan="3" class="muted">{{ t('reports.empty') }}</td></tr>
@@ -295,7 +295,7 @@
           </table>
           </div>
           <div v-else class="ledger">
-            <div v-for="r in detail.recurring" :key="r.category" class="ld-row">
+            <div v-for="r in detail.recurring" :key="categoryVisualKey(r)" class="ld-row">
               <div class="ld-main">
                 <div class="ld-n">{{ r.category }}</div>
                 <div class="ld-meta">{{ r.count }} {{ t('reports.countUnit') }}</div>
@@ -313,7 +313,7 @@
           <table>
             <thead><tr><th>{{ t('reports.category') }}</th><th>{{ t('reports.count') }}</th><th>{{ t('reports.amount') }}</th></tr></thead>
             <tbody>
-              <tr v-for="r in detail.one_time" :key="r.category">
+              <tr v-for="r in detail.one_time" :key="categoryVisualKey(r)">
                 <td>{{ r.category }}</td><td class="mono-data">{{ r.count }}</td><td class="mono-data money-cell">{{ money(r.total) }}</td>
               </tr>
               <tr v-if="!detail.one_time?.length"><td colspan="3" class="muted">{{ t('reports.empty') }}</td></tr>
@@ -321,7 +321,7 @@
           </table>
           </div>
           <div v-else class="ledger">
-            <div v-for="r in detail.one_time" :key="r.category" class="ld-row">
+            <div v-for="r in detail.one_time" :key="categoryVisualKey(r)" class="ld-row">
               <div class="ld-main">
                 <div class="ld-n">{{ r.category }}</div>
                 <div class="ld-meta">{{ r.count }} {{ t('reports.countUnit') }}</div>
@@ -366,6 +366,7 @@ import SignalDot from '../components/SignalDot.vue'
 import TrendChart from '../components/TrendChart.vue'
 import { useBreakpoint } from '../composables/useBreakpoint'
 import { useAuth } from '../stores/auth'
+import { categoryColor, categoryVisualKey } from '../utils/categoryVisual'
 import { daysLeft } from '../utils/date'
 import { createRequestGuard } from '../utils/dataRequest'
 import { emojiOf } from '../utils/icon'
@@ -422,8 +423,6 @@ function catName(id) {
   return c ? c.name : t('sub.uncategorized')
 }
 
-const PALETTE = ['#5b5bd6', '#06b6d4', '#16a34a', '#f59e0b', '#ef4444', '#a855f7', '#0ea5e9', '#ec4899', '#14b8a6', '#f97316', '#8b5cf6', '#22c55e']
-function color(i) { return PALETTE[i % PALETTE.length] }
 function money(value, currency = cur.value, options = {}) { return formatMoney(value, currency, options) }
 function cleanText(value) {
   if (value === null || value === undefined) return ''
@@ -439,10 +438,10 @@ const donutStyle = computed(() => {
   if (!bd.length) return { background: 'var(--border)' }
   let acc = 0
   const stops = []
-  bd.forEach((b, i) => {
+  bd.forEach((b) => {
     const start = acc
     acc += b.percent
-    stops.push(`${color(i)} ${start}% ${acc}%`)
+    stops.push(`${categoryColor(b)} ${start}% ${acc}%`)
   })
   if (acc < 100) stops.push(`var(--border) ${acc}% 100%`)
   return { background: `conic-gradient(${stops.join(',')})` }

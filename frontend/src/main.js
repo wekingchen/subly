@@ -5,10 +5,6 @@ import router from './router'
 import i18n from './i18n'
 import './styles/theme.css'
 
-// 初始化主题
-const savedTheme = 'light'
-document.documentElement.setAttribute('data-theme', savedTheme)
-
 createApp(App).use(createPinia()).use(router).use(i18n).mount('#app')
 
 if (import.meta.env.PROD && 'serviceWorker' in navigator) {

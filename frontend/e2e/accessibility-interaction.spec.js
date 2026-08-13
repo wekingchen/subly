@@ -59,6 +59,34 @@ test('移动抽屉隔离背景、约束焦点并正确回焦', async ({ page }) 
   await expect(main).not.toHaveAttribute('inert', '')
 })
 
+test('设置分区支持深链、历史导航和移动端安全滚动', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+  await login(page)
+  await page.goto('/settings#calendar-feed')
+  await expect(page).toHaveURL(/\/settings#calendar-feed$/)
+
+  const nav = page.getByRole('navigation', { name: '设置分区' })
+  const calendarLink = nav.getByRole('link', { name: '日历订阅' })
+  await expect(calendarLink).toHaveAttribute('aria-current', 'location')
+  const calendarTarget = page.locator('#calendar-feed')
+  await expect(calendarTarget).toBeInViewport()
+
+  await nav.getByRole('link', { name: '通知通道' }).click()
+  await expect(page).toHaveURL(/\/settings#notifications$/)
+  await expect(nav.getByRole('link', { name: '通知通道' })).toHaveAttribute('aria-current', 'location')
+  const notificationsTarget = page.locator('#notifications')
+  await expect(notificationsTarget).toBeInViewport()
+  const positions = await page.evaluate(() => ({
+    targetTop: globalThis.document.querySelector('#notifications').getBoundingClientRect().top,
+    navBottom: globalThis.document.querySelector('.settings-nav').getBoundingClientRect().bottom
+  }))
+  expect(positions.targetTop).toBeGreaterThanOrEqual(positions.navBottom)
+
+  await page.goBack()
+  await expect(page).toHaveURL(/\/settings#calendar-feed$/)
+  await expect(calendarLink).toHaveAttribute('aria-current', 'location')
+})
+
 test('文件导入保持单一键盘入口，家庭成员删除满足触控尺寸', async ({ page }) => {
   await login(page)
   await page.goto('/settings')
@@ -70,6 +98,7 @@ test('文件导入保持单一键盘入口，家庭成员删除满足触控尺�
 
   await page.goto('/subscriptions')
   await page.getByRole('button', { name: /添加订阅/ }).first().click()
+  await page.getByText('更多设置', { exact: true }).click()
   await page.getByLabel('成员名称').fill('尺寸验收成员')
   await page.getByRole('button', { name: '添加成员' }).click()
   const removeMember = page.getByRole('button', { name: '删除家庭成员“尺寸验收成员”' })

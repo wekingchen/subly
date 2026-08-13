@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { buildFutureTrend, monthKeyAt, normalizeTrendMonths } from './trend'
+import { buildFutureTrend, buildTrendViewModel, monthKeyAt, normalizeTrendMonths } from './trend'
 
 describe('trend month helpers', () => {
   it('normalizes supported windows and falls back to six months', () => {
@@ -12,6 +12,22 @@ describe('trend month helpers', () => {
   it('builds month keys across year boundaries', () => {
     expect(monthKeyAt(new Date(2026, 10, 15), 0)).toBe('2026-11')
     expect(monthKeyAt(new Date(2026, 10, 15), 2)).toBe('2027-01')
+  })
+})
+
+describe('buildTrendViewModel', () => {
+  it('合并同月来源、生成金额轴数据与跨年标签', () => {
+    const rows = buildTrendViewModel(
+      [{ month: '2026-12', amount: 10 }, { month: '2026-12', amount: 5 }],
+      [{ month: '2026-12', amount: 20 }, { month: '2027-01', amount: 8 }],
+      { baseCurrency: 'CNY', currentMonth: '2026-12' }
+    )
+
+    expect(rows.map((row) => row.month)).toEqual(['2026-12', '2027-01'])
+    expect(rows[0]).toMatchObject({ history: 15, future: 20, total: 35, current: true, yearLabel: '2026' })
+    expect(rows[1].yearLabel).toBe('2027')
+    expect(rows[0].ariaLabel).toContain('历史付款')
+    expect(rows[0].ariaLabel).toContain('合计')
   })
 })
 

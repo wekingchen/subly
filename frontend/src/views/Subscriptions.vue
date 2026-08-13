@@ -13,9 +13,15 @@
     </section>
 
     <SubscriptionToolbar
-      :filter="filter"
-      :has-items="visibleSubscriptionCount > 0"
-      @filter-change="setFilter"
+      :query="query"
+      :type-filter="typeFilter"
+      :risk-filter="riskFilter"
+      :has-active-filters="hasActiveFilters"
+      :has-items="subs.length > 0"
+      @query-change="query = $event"
+      @type-change="typeFilter = $event"
+      @risk-change="riskFilter = $event"
+      @clear-filters="clearFilters"
     />
 
     <DataState
@@ -29,21 +35,22 @@
       @retry="load"
     />
 
-    <div v-if="dataState === 'empty'" class="card empty-ledger">
+    <div v-if="dataState === 'empty' || (canShowSubscriptions && filteredSubs.length === 0)" class="card empty-ledger">
       <div class="empty-orbit" aria-hidden="true"><span></span></div>
       <div>
-        <h2>{{ filter ? t('sub.emptyFilteredTitle') : t('sub.emptyTitle') }}</h2>
-        <p class="muted">{{ filter ? t('sub.emptyFilteredDesc') : t('sub.emptyDesc') }}</p>
+        <h2>{{ hasActiveFilters ? t('sub.emptyFilteredTitle') : t('sub.emptyTitle') }}</h2>
+        <p class="muted">{{ hasActiveFilters ? t('sub.emptyFilteredDesc') : t('sub.emptyDesc') }}</p>
       </div>
-      <button class="btn" @click="openNew">+ {{ t('sub.add') }}</button>
+      <button v-if="hasActiveFilters" class="btn ghost" type="button" @click="clearFilters">{{ t('sub.clearFilters') }}</button>
+      <button v-else class="btn" type="button" @click="openNew">+ {{ t('sub.add') }}</button>
     </div>
 
     <!-- 按分类分组 -->
     <SubscriptionCategoryGroup
-      v-for="g in dataState === 'loading' || dataState === 'error' || (dataState !== 'stale' && loadedFilter !== filter) ? [] : grouped"
+      v-for="g in canShowSubscriptions ? grouped : []"
       :key="g.key"
       :group="g"
-      :sort-enabled="!filter"
+      :sort-enabled="!hasActiveFilters"
       :category-sortable="canSortCategory(g.key)"
       :drop-active="dragOverCat === g.key"
       :drag-over-sub-id="dragOverSub"
@@ -94,7 +101,7 @@
     <SubscriptionActionMenuLayer
       :target="actionTarget"
       :anchor="actionAnchor"
-      :show-move="!filter"
+      :show-move="!hasActiveFilters"
       @close="closeCardActions"
       @move="moveFromActions"
       @edit="editFromActions"
@@ -121,7 +128,7 @@
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import api from '../api'
 import AppToastRegion from '../components/AppToastRegion.vue'
@@ -138,6 +145,7 @@ import { useSubscriptionActions } from '../composables/useSubscriptionActions'
 import { useToasts } from '../composables/useToasts'
 import { amountOf, hasBaseEquivalent } from '../utils/money'
 import { useDataRequest } from '../utils/dataRequest'
+import { filterSubscriptions, hasSubscriptionFilters } from '../utils/subscriptionFiltering'
 import { buildGroupedSubscriptions, buildSubscriptionOrderState, categoryOrderToPersistedIds, getCategoryMeta, getSubscriptionCategoryKey, moveCategoryByOffset, moveCategoryToTarget, moveValueByOffset, moveValueToTarget, UNCATEGORIZED_KEY } from '../utils/subscriptionOrdering'
 
 const { t } = useI18n()
@@ -145,16 +153,26 @@ const auth = useAuth()
 const dataRequest = useDataRequest({ initialData: [] })
 const subs = dataRequest.data
 const dataState = computed(() => dataRequest.state())
-const visibleSubscriptionCount = computed(() => (
-  loadedFilter.value === filter.value || dataRequest.stale.value ? subs.value.length : 0
-))
+const canShowSubscriptions = computed(() => dataState.value !== 'loading' && dataState.value !== 'error')
+const query = ref('')
+const typeFilter = ref('')
+const riskFilter = ref('')
+const hasActiveFilters = computed(() => hasSubscriptionFilters({
+  query: query.value,
+  type: typeFilter.value,
+  risk: riskFilter.value
+}))
+const filteredSubs = computed(() => filterSubscriptions(subs.value, {
+  query: query.value,
+  type: typeFilter.value,
+  risk: riskFilter.value
+}))
+const visibleSubscriptionCount = computed(() => canShowSubscriptions.value ? filteredSubs.value.length : 0)
 const currencies = ref([])
 const categories = ref([])
 const methods = ref([])
 const bundles = ref([])
 const iconLib = ref([])
-const filter = ref('')
-const loadedFilter = ref(null)
 const { toasts, add: toast } = useToasts()
 
 const actionTarget = ref(null)
@@ -259,8 +277,16 @@ function rebuild() {
 }
 
 const grouped = computed(() =>
-  buildGroupedSubscriptions(subs.value, orderMap, catOrder.value, categories.value, { uncategorizedName: t('sub.uncategorized') })
+  buildGroupedSubscriptions(filteredSubs.value, orderMap, catOrder.value, categories.value, { uncategorizedName: t('sub.uncategorized') })
 )
+
+function clearFilters() {
+  query.value = ''
+  typeFilter.value = ''
+  riskFilter.value = ''
+}
+
+watch([query, typeFilter, riskFilter], () => clearDrag())
 
 // 拖拽状态
 let dragCatKey = null
@@ -270,7 +296,7 @@ const dragOverSub = ref(null)
 function clearDrag() { dragCatKey = null; dragCard = null; dragOverCat.value = null; dragOverSub.value = null }
 
 async function moveCat(key, dir) {
-  if (filter.value || !canSortCategory(key)) return
+  if (hasActiveFilters.value || !canSortCategory(key)) return
   const arr = moveCategoryByOffset(catOrder.value, key, dir)
   if (arr === catOrder.value) return
   catOrder.value = arr
@@ -279,7 +305,7 @@ async function moveCat(key, dir) {
 }
 
 async function moveSub(catKey, id, dir) {
-  if (filter.value) return
+  if (hasActiveFilters.value) return
   const current = orderMap[catKey] || []
   const arr = moveValueByOffset(current, id, dir)
   if (arr === current) return
@@ -288,7 +314,7 @@ async function moveSub(catKey, id, dir) {
 }
 
 function onCatDragStart(key, e) {
-  if (filter.value || !canSortCategory(key)) {
+  if (hasActiveFilters.value || !canSortCategory(key)) {
     e.preventDefault()
     return
   }
@@ -302,10 +328,10 @@ function onCatDragStart(key, e) {
   if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move'
 }
 function onCatDragOver(key) {
-  if (!filter.value && canSortCategory(key) && dragCatKey && !dragCard) dragOverCat.value = key
+  if (!hasActiveFilters.value && canSortCategory(key) && dragCatKey && !dragCard) dragOverCat.value = key
 }
 async function onCatDrop(key) {
-  if (filter.value || !canSortCategory(key) || !dragCatKey || dragCard || dragCatKey === key) return clearDrag()
+  if (hasActiveFilters.value || !canSortCategory(key) || !dragCatKey || dragCard || dragCatKey === key) return clearDrag()
   const arr = moveCategoryToTarget(catOrder.value, dragCatKey, key)
   if (arr === catOrder.value) return clearDrag()
   catOrder.value = arr
@@ -316,7 +342,7 @@ async function onCatDrop(key) {
 }
 
 function onCardDragStart(catKey, id, e) {
-  if (filter.value) {
+  if (hasActiveFilters.value) {
     e.preventDefault()
     return
   }
@@ -324,7 +350,7 @@ function onCardDragStart(catKey, id, e) {
   if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move'
 }
 function onCardDragOver(catKey, id, e) {
-  if (!filter.value && dragCard && dragCard.catKey === catKey) {
+  if (!hasActiveFilters.value && dragCard && dragCard.catKey === catKey) {
     e?.stopPropagation()
     dragOverSub.value = id
   }
@@ -332,7 +358,7 @@ function onCardDragOver(catKey, id, e) {
 async function onCardDrop(catKey, id, e) {
   if (!dragCard) return
   e?.stopPropagation()
-  if (filter.value || dragCard.catKey !== catKey || dragCard.id === id) return clearDrag()
+  if (hasActiveFilters.value || dragCard.catKey !== catKey || dragCard.id === id) return clearDrag()
   const current = orderMap[catKey] || []
   const arr = moveValueToTarget(current, dragCard.id, id)
   if (arr === current) return clearDrag()
@@ -342,19 +368,11 @@ async function onCardDrop(catKey, id, e) {
 }
 
 async function load() {
-  const requestedFilter = filter.value
-  const params = requestedFilter ? { billing_type: requestedFilter } : {}
-  const result = await dataRequest.run(async () => (await api.get('/api/subscriptions', { params })).data)
-  if (!result.applied || result.error || filter.value !== requestedFilter) return result
-  loadedFilter.value = requestedFilter
+  const result = await dataRequest.run(async () => (await api.get('/api/subscriptions')).data)
+  if (!result.applied || result.error) return result
   if (expandedSubId.value && !subs.value.some((s) => s.id === expandedSubId.value)) expandedSubId.value = null
   rebuild()
   return result
-}
-async function setFilter(f) {
-  filter.value = f
-  const result = await load()
-  if (result?.error && loadedFilter.value !== f) filter.value = loadedFilter.value ?? ''
 }
 
 function openNew() {

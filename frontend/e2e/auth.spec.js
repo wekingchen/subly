@@ -7,6 +7,9 @@ function expectSpaCsp(response) {
   const csp = response?.headers()['content-security-policy']
   expect(csp).toContain("default-src 'self'")
   expect(csp).toContain("script-src 'self'")
+  expect(csp).toContain("style-src 'self'")
+  expect(csp).toContain("style-src-attr 'none'")
+  expect(csp).not.toContain("'unsafe-inline'")
   expect(csp).toContain("frame-ancestors 'none'")
 }
 

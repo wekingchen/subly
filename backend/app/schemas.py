@@ -1,6 +1,7 @@
 from datetime import date, datetime
 from ipaddress import AddressValueError, ip_address
 from socket import inet_aton, inet_ntoa
+from typing import Literal
 from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
@@ -194,7 +195,7 @@ class UserOut(BaseModel):
 
 
 class UserUpdate(BaseModel):
-    theme: str | None = None
+    theme: Literal["light", "dark", "ocean", "forest", "purple"] | None = None
     base_currency: str | None = None
 
     @field_validator("base_currency")
@@ -463,7 +464,10 @@ class DashboardOut(BaseModel):
 
 
 class InsightBreakdown(BaseModel):
+    category_id: int | None = None
     category: str
+    category_color: str | None = None
+    category_icon: str | None = None
     monthly: float
     percent: float
 
@@ -476,13 +480,19 @@ class InsightsOut(BaseModel):
 
 
 class CategoryMonthlyCost(BaseModel):
+    category_id: int | None = None
     category: str
+    category_color: str | None = None
+    category_icon: str | None = None
     count: int
     monthly: float
 
 
 class CategoryOneTimeCost(BaseModel):
+    category_id: int | None = None
     category: str
+    category_color: str | None = None
+    category_icon: str | None = None
     count: int
     total: float
 

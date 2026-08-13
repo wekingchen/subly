@@ -1,7 +1,7 @@
 from datetime import date, timedelta
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.billing import is_renewal_within_end_date, is_subscription_current, monthly_cost
@@ -50,6 +50,35 @@ def _completeness(included_count: int, total_count: int, missing_currencies: set
     }
 
 
+def _category_meta(db: Session, user_id: int) -> dict[int, dict]:
+    categories = db.scalars(
+        select(Category).where(
+            or_(Category.is_system.is_(True), Category.user_id == user_id)
+        )
+    ).all()
+    return {
+        category.id: {
+            "category_id": category.id,
+            "category": category.name,
+            "category_color": category.color,
+            "category_icon": category.icon,
+        }
+        for category in categories
+    }
+
+
+def _category_for(category_id: int | None, categories: dict[int, dict]) -> dict:
+    return categories.get(
+        category_id,
+        {
+            "category_id": None,
+            "category": "未分类 / Uncategorized",
+            "category_color": None,
+            "category_icon": None,
+        },
+    )
+
+
 @router.get("/insights", response_model=InsightsOut)
 def insights(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """支出洞察：按分类的月度支出占比。"""
@@ -63,8 +92,8 @@ def insights(user: User = Depends(get_current_user), db: Session = Depends(get_d
         )
     ).all()
     subs = [s for s in subs if is_subscription_current(date.today(), s.end_date)]
-    cats = {c.id: c.name for c in db.scalars(select(Category)).all()}
-    by_cat: dict[str, float] = {}
+    categories = _category_meta(db, user.id)
+    by_cat: dict[int | None, dict] = {}
     included_count = 0
     missing_currencies: set[str] = set()
     for s in subs:
@@ -72,14 +101,20 @@ def insights(user: User = Depends(get_current_user), db: Session = Depends(get_d
         if cost is None:
             missing_currencies.add(s.currency)
             continue
-        name = cats.get(s.category_id, "未分类 / Uncategorized")
-        by_cat[name] = by_cat.get(name, 0.0) + cost
+        meta = _category_for(s.category_id, categories)
+        key = meta["category_id"]
+        bucket = by_cat.setdefault(key, {**meta, "monthly": 0.0})
+        bucket["monthly"] += cost
         included_count += 1
-    total = sum(by_cat.values())
+    total = sum(bucket["monthly"] for bucket in by_cat.values())
     breakdown = sorted(
         (
-            {"category": k, "monthly": round(v, 2), "percent": round(v / total * 100, 1) if total else 0}
-            for k, v in by_cat.items()
+            {
+                **bucket,
+                "monthly": round(bucket["monthly"], 2),
+                "percent": round(bucket["monthly"] / total * 100, 1) if total else 0,
+            }
+            for bucket in by_cat.values()
         ),
         key=lambda x: x["monthly"],
         reverse=True,
@@ -216,7 +251,7 @@ def recent_payments(
     subs = db.scalars(
         select(Subscription).where(Subscription.user_id == user.id)
     ).all()
-    cats = {c.id: c.name for c in db.scalars(select(Category)).all()}
+    categories = _category_meta(db, user.id)
     rows = []
     included_count = 0
     missing_currencies: set[str] = set()
@@ -236,7 +271,7 @@ def recent_payments(
                 "plan": s.plan,
                 "remark": s.remark,
                 "icon": s.icon,
-                "category": cats.get(s.category_id),
+                "category": _category_for(s.category_id, categories)["category"],
                 "date": paid_on,
                 "amount": round(s.amount, 2),
                 "currency": s.currency,
@@ -266,23 +301,21 @@ def category_detail(user: User = Depends(get_current_user), db: Session = Depend
             Subscription.is_paused.is_(False),
         )
     ).all()
-    cats = {c.id: c.name for c in db.scalars(select(Category)).all()}
+    categories = _category_meta(db, user.id)
 
-    def cat_name(s):
-        return cats.get(s.category_id, "未分类 / Uncategorized")
-
-    recurring_map: dict[str, dict] = {}
-    onetime_map: dict[str, dict] = {}
+    recurring_map: dict[int | None, dict] = {}
+    onetime_map: dict[int | None, dict] = {}
     included_count = 0
     total_count = 0
     missing_currencies: set[str] = set()
     for s in subs:
-        name = cat_name(s)
+        meta = _category_for(s.category_id, categories)
+        key = meta["category_id"]
         if s.billing_type == "recurring":
             if not is_subscription_current(date.today(), s.end_date):
                 continue
             total_count += 1
-            d = recurring_map.setdefault(name, {"category": name, "count": 0, "monthly": 0.0})
+            d = recurring_map.setdefault(key, {**meta, "count": 0, "monthly": 0.0})
             d["count"] += 1
             cost = _monthly_cost_in_base(db, s, base)
             if cost is None:
@@ -292,7 +325,7 @@ def category_detail(user: User = Depends(get_current_user), db: Session = Depend
             included_count += 1
         else:
             total_count += 1
-            d = onetime_map.setdefault(name, {"category": name, "count": 0, "total": 0.0})
+            d = onetime_map.setdefault(key, {**meta, "count": 0, "total": 0.0})
             d["count"] += 1
             amount_in_base = _base_amount(db, s, base)
             if amount_in_base is None:

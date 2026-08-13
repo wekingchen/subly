@@ -6,15 +6,20 @@
         <p class="muted">{{ t('iconLib.subtitle') }}</p>
       </div>
       <div class="row actions-top">
-        <button type="button" class="btn ghost" @click="load">{{ t('iconLib.refresh') }}</button>
+        <button type="button" class="btn ghost" :disabled="loading" @click="load">{{ t('iconLib.refresh') }}</button>
         <button type="button" class="btn ghost" :disabled="startJob || job?.status === 'running'" @click="startPrewarm('missing', true)">{{ t('iconLib.fetchMissing') }}</button>
         <button type="button" class="btn ghost" :disabled="startJob || job?.status === 'running'" @click="startPrewarm('all', true)">{{ t('iconLib.fetchAll') }}</button>
         <button type="button" class="btn" @click="openNew">+ {{ t('iconLib.add') }}</button>
       </div>
     </div>
 
-    <div v-if="loading" class="muted">{{ t('common.loading') }}</div>
+    <div v-if="loading && !loaded" class="muted">{{ t('common.loading') }}</div>
+    <div v-else-if="loadError && !loaded" class="card load-error" role="alert">
+      <p>{{ t('iconLib.loadFailed') }}</p>
+      <button type="button" class="btn ghost" @click="load">{{ t('iconLib.refresh') }}</button>
+    </div>
     <template v-else>
+      <p v-if="loadError" class="feedback err" role="status">{{ t('iconLib.refreshFailed') }}</p>
       <div class="grid stats">
         <div class="card stat"><b>{{ items.length }}</b><span>{{ t('iconLib.total') }}</span></div>
         <div class="card stat ok"><b>{{ activeCount }}</b><span>{{ t('iconLib.active') }}</span></div>
@@ -28,7 +33,7 @@
           <h3>{{ t('iconLib.progress') }}</h3>
           <span class="tag" :class="job.status">{{ job.status === 'running' ? t('iconLib.running') : t('iconLib.done') }}</span>
         </div>
-        <div class="progress-line"><div class="progress-fill" :style="{ width: progressPct + '%' }"></div></div>
+        <div class="progress-line" role="progressbar" :aria-label="t('iconLib.progress')" aria-valuemin="0" aria-valuemax="100" :aria-valuenow="progressPct"><div class="progress-fill" :style="{ width: progressPct + '%' }"></div></div>
         <div class="progress-meta">
           <span>{{ job.done }} / {{ job.total }}</span>
           <span>{{ t('iconLib.success') }} {{ job.success }}</span>
@@ -68,7 +73,12 @@
         <input id="icon-search" v-model.trim="q" name="search" :placeholder="t('iconLib.searchPh')" class="search" />
       </div>
 
-      <div class="card table-card">
+      <div class="result-summary" role="status">
+        <span>{{ t('iconLib.resultCount', { shown: shown.length, total: items.length }) }}</span>
+        <button v-if="hasFilters" type="button" class="btn sm ghost" @click="clearFilters">{{ t('iconLib.clearFilters') }}</button>
+      </div>
+
+      <div v-if="isDesktop" class="card table-card">
         <table>
           <thead><tr>
             <th>{{ t('iconLib.icon') }}</th>
@@ -86,7 +96,7 @@
               <td><a :href="svc.website || `https://${svc.domain}`" target="_blank" rel="noopener">{{ svc.domain }}</a></td>
               <td>
                 <div class="cat-tags">
-                  <span v-for="label in serviceCategoryLabels(svc)" :key="label" class="tag">{{ label }}</span>
+                  <span v-for="label in getServiceCategoryLabels(svc, categories)" :key="label" class="tag">{{ label }}</span>
                 </div>
               </td>
               <td><code>{{ svc.slug }}</code><div class="muted small">{{ svc.cached ? `${t('iconLib.cached')} ${svc.cached_ext || ''}` : t('iconLib.missing') }}</div></td>
@@ -98,10 +108,35 @@
                 <button v-else type="button" class="btn sm ghost" :disabled="isRowBusy(svc.id)" @click="restore(svc)">{{ t('iconLib.activate') }}</button>
               </td>
             </tr>
-            <tr v-if="!shown.length"><td colspan="7" class="muted" style="text-align:center">{{ t('iconLib.missing') }}</td></tr>
+            <tr v-if="!shown.length"><td colspan="7" class="muted table-empty">{{ t('iconLib.noFilterResults') }}</td></tr>
           </tbody>
         </table>
       </div>
+
+      <div v-else-if="shown.length" class="service-cards" role="list">
+        <article v-for="svc in shown" :key="svc.id" class="card service-card" role="listitem">
+          <div class="service-card-head">
+            <ServiceIcon :src="svc.icon" :name="svc.name" class="svc-ico card-icon" loading="lazy" decoding="async" />
+            <div class="service-card-title">
+              <b>{{ svc.name }}</b>
+              <span class="muted small">{{ svc.source === 'builtin' ? t('iconLib.builtin') : t('iconLib.custom') }}</span>
+            </div>
+            <span class="tag" :class="svc.is_active ? 'ok' : 'off'">{{ svc.is_active ? t('iconLib.active') : t('iconLib.inactive') }}</span>
+          </div>
+          <a class="service-domain" :href="svc.website || `https://${svc.domain}`" target="_blank" rel="noopener">{{ svc.domain }}</a>
+          <div class="cat-tags">
+            <span v-for="(label, index) in getServiceCategoryLabels(svc, categories)" :key="`${getServiceCategoryKeys(svc)[index]}-${index}`" class="tag">{{ label }}</span>
+          </div>
+          <div class="service-meta"><code>{{ svc.slug }}</code><span class="muted small">{{ svc.cached ? `${t('iconLib.cached')} ${svc.cached_ext || ''}` : t('iconLib.missing') }}</span></div>
+          <div class="acts">
+            <button type="button" class="btn sm ghost" :disabled="isRowBusy(svc.id)" @click="openEdit(svc)">{{ t('iconLib.edit') }}</button>
+            <button type="button" class="btn sm ghost" :disabled="isRowBusy(svc.id)" @click="fetchOne(svc)">{{ t('iconLib.fetchOne') }}</button>
+            <button v-if="svc.is_active" type="button" class="btn sm danger" :disabled="isRowBusy(svc.id)" @click="deactivate(svc)">{{ t('iconLib.deactivate') }}</button>
+            <button v-else type="button" class="btn sm ghost" :disabled="isRowBusy(svc.id)" @click="restore(svc)">{{ t('iconLib.activate') }}</button>
+          </div>
+        </article>
+      </div>
+      <div v-else class="card empty-services"><p class="muted">{{ t('iconLib.noFilterResults') }}</p></div>
     </template>
 
     <AppModal v-model="showForm" :title="editing ? t('iconLib.formTitleEdit') : t('iconLib.formTitleNew')" :close-label="t('common.close')" :pending="saving">
@@ -165,9 +200,14 @@ import api from '../api'
 import ServiceIcon from '../components/ServiceIcon.vue'
 import AppModal from '../components/AppModal.vue'
 import { useConfirm } from '../composables/useConfirm'
+import { useBreakpoint } from '../composables/useBreakpoint'
+import { getServiceCategoryKeys, getServiceCategoryLabels } from '../utils/serviceLibrary'
 
 const { t } = useI18n()
+const isDesktop = useBreakpoint('(min-width: 721px)')
 const loading = ref(true)
+const loaded = ref(false)
+const loadError = ref(false)
 const items = ref([])
 const categories = ref([])
 const q = ref('')
@@ -195,33 +235,29 @@ const cachedCount = computed(() => items.value.filter((x) => x.cached).length)
 const missingCount = computed(() => items.value.length - cachedCount.value)
 const progressPct = computed(() => job.value?.total ? Math.round((job.value.done / job.value.total) * 100) : 0)
 
+const hasFilters = computed(() => activeFilter.value !== 'all' || cacheFilter.value !== 'all' || Boolean(categoryFilter.value || q.value))
+
+function clearFilters() {
+  activeFilter.value = 'all'
+  cacheFilter.value = 'all'
+  categoryFilter.value = ''
+  q.value = ''
+}
+
 const shown = computed(() => {
   let out = items.value.slice()
   if (activeFilter.value === 'active') out = out.filter((x) => x.is_active)
   if (activeFilter.value === 'inactive') out = out.filter((x) => !x.is_active)
   if (cacheFilter.value === 'cached') out = out.filter((x) => x.cached)
   if (cacheFilter.value === 'missing') out = out.filter((x) => !x.cached)
-  if (categoryFilter.value) out = out.filter((x) => serviceCategoryKeys(x).includes(categoryFilter.value))
+  if (categoryFilter.value) out = out.filter((x) => getServiceCategoryKeys(x).includes(categoryFilter.value))
   const s = q.value.toLowerCase()
   if (s) out = out.filter((x) => x.name.toLowerCase().includes(s) || x.domain.toLowerCase().includes(s) || x.slug.toLowerCase().includes(s))
   return out
 })
 
-function serviceCategoryKeys(svc) {
-  const keys = Array.isArray(svc?.category_keys) ? svc.category_keys : []
-  const clean = keys.map((x) => String(x || '').trim()).filter(Boolean)
-  return clean.length ? clean : [svc?.category || 'other']
-}
-
-function serviceCategoryLabels(svc) {
-  const labels = Array.isArray(svc?.category_labels) ? svc.category_labels : []
-  const clean = labels.map((x) => String(x || '').trim()).filter(Boolean)
-  if (clean.length) return clean
-  return serviceCategoryKeys(svc).map((key) => categories.value.find((c) => c.key === key)?.label || svc?.category_label || key)
-}
-
 function selectedCategoryKeys() {
-  const keys = Array.isArray(form.value.category_keys) ? form.value.category_keys : serviceCategoryKeys(form.value)
+  const keys = Array.isArray(form.value.category_keys) ? form.value.category_keys : getServiceCategoryKeys(form.value)
   return keys.map((x) => String(x || '').trim()).filter(Boolean)
 }
 
@@ -231,14 +267,24 @@ function blank() {
 }
 
 async function load() {
+  if (loading.value && loaded.value) return
   loading.value = true
-  const [svc, cat] = await Promise.all([
-    api.get('/api/admin/icon-services'),
-    api.get('/api/admin/icon-services/categories')
-  ])
-  items.value = svc.data
-  categories.value = cat.data
-  loading.value = false
+  loadError.value = false
+  try {
+    const [svc, cat] = await Promise.allSettled([
+      api.get('/api/admin/icon-services'),
+      api.get('/api/admin/icon-services/categories')
+    ])
+    if (svc.status === 'rejected') {
+      loadError.value = true
+      return
+    }
+    items.value = svc.value.data
+    loaded.value = true
+    if (cat.status === 'fulfilled') categories.value = cat.value.data
+  } finally {
+    loading.value = false
+  }
 }
 
 function isRowBusy(id) { return rowBusyIds.value.has(id) }
@@ -256,7 +302,7 @@ function openEdit(svc) {
   if (!svc || saving.value || isRowBusy(svc.id)) return
   editing.value = svc
   formErr.value = ''
-  form.value = { ...svc, category_keys: serviceCategoryKeys(svc) }
+  form.value = { ...svc, category_keys: getServiceCategoryKeys(svc) }
   showForm.value = true
 }
 
@@ -377,7 +423,17 @@ h1 { margin:0; }
 .seg { background:var(--surface-2); border-radius:10px; padding:3px; }
 .seg button { padding:6px 10px; border-radius:8px; }
 .search { max-width:280px; }
+.result-summary { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 0 0 10px; color: var(--text-soft); font-size: 13px; }
 .table-card { overflow:auto; }
+.table-empty { text-align: center; }
+.service-cards { display: grid; gap: 12px; }
+.service-card { display: grid; gap: 12px; }
+.service-card-head { display: flex; align-items: center; gap: 10px; }
+.service-card-title { display: flex; flex: 1; flex-direction: column; min-width: 0; }
+.card-icon { width: 44px !important; height: 44px !important; }
+.service-domain { overflow-wrap: anywhere; }
+.service-meta { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.empty-services { text-align: center; }
 .svc-ico { width:30px; height:30px; border-radius:8px; border:1px solid var(--border); object-fit:contain; background:var(--surface-2); }
 .small { font-size:12px; }
 .acts { display:flex; gap:6px; flex-wrap:wrap; }
@@ -396,7 +452,6 @@ h1 { margin:0; }
 .modal-actions { display:flex; gap:8px; justify-content:flex-end; margin-top:16px; }
 @media (max-width: 900px) { .stats { grid-template-columns: repeat(2, 1fr); } .head { flex-direction:column; } }
 @media (max-width: 720px) {
-  table { min-width: 820px; }
   .actions-top { width: 100%; }
   .actions-top .btn { flex: 1 1 calc(50% - 6px); min-height: 44px; }
   .bar { flex-direction: column; align-items: stretch; }

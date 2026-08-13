@@ -37,6 +37,9 @@ def test_docs_receive_compatible_csp_without_weakening_spa_policy():
     spa_csp = spa.headers["Content-Security-Policy"]
     assert "script-src 'self';" in spa_csp
     assert "script-src 'self' 'unsafe-inline'" not in spa_csp
+    assert "style-src 'self';" in spa_csp
+    assert "style-src-attr 'none'" in spa_csp
+    assert "'unsafe-inline'" not in spa_csp
     assert "object-src 'none'" in spa_csp
     assert "frame-ancestors 'none'" in spa_csp
     assert "worker-src 'self'" in spa_csp
@@ -65,6 +68,8 @@ def test_cache_headers_separate_private_pages_and_hashed_assets():
         ("/settings", "text/html", "no-store, no-cache, must-revalidate", "no-cache"),
         ("/manifest.webmanifest", "application/manifest+json", "no-cache", None),
         ("/offline.html", "text/html", "no-store, no-cache, must-revalidate", "no-cache"),
+        ("/offline.css", "text/css", "no-cache", None),
+        ("/theme-bootstrap.js", "text/javascript", "no-cache", None),
     ]
 
     for path, media_type, expected, pragma in cases:

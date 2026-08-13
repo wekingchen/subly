@@ -1,11 +1,11 @@
 """Reports 接口测试：聚焦按月聚合的 payment-history 趋势数据。"""
 from datetime import date
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
 from app.database import Base
-from app.models import ExchangeRate, RenewalHistory, Subscription, User
+from app.models import Category, ExchangeRate, RenewalHistory, Subscription, User
 from app.routers import dashboard, reports
 
 
@@ -267,6 +267,60 @@ def test_current_reports_and_dashboard_respect_inclusive_end_date(monkeypatch):
 
         history = reports.payment_history(months=1, user=user, db=db)
         assert history["history"][0]["amount"] == 20
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_category_reports_keep_same_name_categories_separate_and_private():
+    """分类按 ID 聚合；同名分类不合并，越权分类引用不泄露名称。"""
+    db, engine = make_db()
+    try:
+        user = add_user(db)
+        other = add_user(db, username="bob")
+        seed_cny_rate(db)
+        first = Category(user_id=user.id, name="同名分类", icon="A", color="#123456")
+        second = Category(user_id=user.id, name="同名分类", icon="B", color="#654321")
+        foreign = Category(user_id=other.id, name="他人私有分类", icon="X", color="#abcdef")
+        db.add_all([first, second, foreign])
+        db.flush()
+        common = {
+            "user_id": user.id,
+            "amount": 10,
+            "currency": "CNY",
+            "billing_type": "recurring",
+            "cycle": "month",
+            "cycle_count": 1,
+            "start_date": date.today(),
+            "next_renewal_date": date.today(),
+            "is_active": True,
+            "is_paused": False,
+        }
+        db.add_all([
+            Subscription(name="分类一", category_id=first.id, **common),
+            Subscription(name="分类二", category_id=second.id, **common),
+            Subscription(name="越权脏引用", category_id=foreign.id, **common),
+        ])
+        db.commit()
+
+        insights = reports.insights(user=user, db=db)
+        assert len(insights["breakdown"]) == 3
+        own_rows = [row for row in insights["breakdown"] if row["category"] == "同名分类"]
+        assert {row["category_id"] for row in own_rows} == {first.id, second.id}
+        assert {row["category_color"] for row in own_rows} == {"#123456", "#654321"}
+        uncategorized = next(row for row in insights["breakdown"] if row["category_id"] is None)
+        assert uncategorized["category"] == "未分类 / Uncategorized"
+        assert all(row["category"] != "他人私有分类" for row in insights["breakdown"])
+
+        detail = reports.category_detail(user=user, db=db)
+        assert {row["category_id"] for row in detail["recurring"]} == {first.id, second.id, None}
+
+        dirty = db.scalar(select(Subscription).where(Subscription.name == "越权脏引用"))
+        dirty.last_renewed_at = date.today()
+        db.commit()
+        recent = reports.recent_payments(user=user, db=db)
+        dirty_row = next(row for row in recent["items"] if row["name"] == "越权脏引用")
+        assert dirty_row["category"] == "未分类 / Uncategorized"
     finally:
         db.close()
         engine.dispose()

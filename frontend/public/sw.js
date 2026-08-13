@@ -1,7 +1,8 @@
 const CACHE_PREFIX = 'subly-static-'
-const CACHE_NAME = `${CACHE_PREFIX}v2`
+const CACHE_NAME = `${CACHE_PREFIX}v3`
 const PRECACHE = [
   '/offline.html',
+  '/offline.css',
   '/pwa-192.png',
   '/pwa-512.png',
   '/pwa-512-maskable.png'

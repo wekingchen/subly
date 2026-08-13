@@ -89,8 +89,8 @@
           <div v-if="breakdown.length" class="donut-wrap">
             <div class="donut" :style="donutStyle"><div class="donut-hole"></div></div>
             <div class="legend">
-              <div v-for="(b, i) in breakdown.slice(0, 6)" :key="b.category" class="lg">
-                <span class="dot" :style="{ background: color(i) }"></span>
+              <div v-for="b in breakdown.slice(0, 6)" :key="categoryVisualKey(b)" class="lg">
+                <span class="dot" :style="{ background: categoryColor(b) }"></span>
                 <span class="lg-n">{{ b.category }}</span>
                 <span class="muted">{{ b.percent }}%</span>
               </div>
@@ -221,6 +221,7 @@ import { useBodyLock } from '../composables/useBodyLock'
 import { useSubscriptionActions } from '../composables/useSubscriptionActions'
 import { useToasts } from '../composables/useToasts'
 import { icon } from '../icons'
+import { categoryColor, categoryVisualKey } from '../utils/categoryVisual'
 import { daysLeft } from '../utils/date'
 import { createRequestGuard } from '../utils/dataRequest'
 import { emojiOf } from '../utils/icon'
@@ -346,9 +347,6 @@ const dashboardOverlays = computed(() =>
 )
 useBodyLock(dashboardOverlays, 'dashboard-overlays')
 
-const PALETTE = ['#5b5bd6', '#06b6d4', '#16a34a', '#f59e0b', '#ef4444', '#a855f7', '#0ea5e9', '#ec4899']
-function color(i) { return PALETTE[i % PALETTE.length] }
-
 const cur = computed(() => auth.user?.base_currency || 'CNY')
 function fmt(v) { return formatMoney(v, cur.value) }
 const budget = computed(() => auth.user?.monthly_budget ?? null)
@@ -423,9 +421,9 @@ const donutStyle = computed(() => {
   if (!breakdown.value.length) return { background: 'var(--border)' }
   let acc = 0
   const stops = []
-  breakdown.value.forEach((b, i) => {
+  breakdown.value.forEach((b) => {
     const start = acc; acc += b.percent
-    stops.push(`${color(i)} ${start}% ${acc}%`)
+    stops.push(`${categoryColor(b)} ${start}% ${acc}%`)
   })
   if (acc < 100) stops.push(`var(--border) ${acc}% 100%`)
   return { background: `conic-gradient(${stops.join(',')})` }

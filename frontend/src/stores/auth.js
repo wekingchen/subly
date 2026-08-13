@@ -10,6 +10,17 @@ import {
 } from '../auth/session'
 
 let initializePromise = null
+const THEME_KEY = 'subly_theme'
+const THEMES = new Set(['light', 'dark', 'ocean', 'forest', 'purple'])
+const THEME_COLORS = { light: '#f6f8fc', dark: '#07111f', ocean: '#ecfeff', forest: '#f0fdf4', purple: '#faf5ff' }
+
+function applyTheme(value) {
+  const theme = THEMES.has(value) ? value : 'light'
+  document.documentElement.dataset.theme = theme
+  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', THEME_COLORS[theme])
+  try { localStorage.setItem(THEME_KEY, theme) } catch { /* 存储不可用时只更新当前页面。 */ }
+  return theme
+}
 
 export const useAuth = defineStore('auth', {
   state: () => ({ user: null, initialized: false }),
@@ -72,14 +83,14 @@ export const useAuth = defineStore('auth', {
     },
     async fetchMe() {
       const { data } = await api.get('/api/auth/me')
+      data.theme = applyTheme(data.theme)
       this.user = data
-      document.documentElement.setAttribute('data-theme', data.theme || 'light')
       return data
     },
     async updateMe(patch) {
       const { data } = await api.patch('/api/me', patch)
+      data.theme = applyTheme(data.theme)
       this.user = data
-      if (patch.theme) document.documentElement.setAttribute('data-theme', patch.theme)
       return data
     },
     async logout() {

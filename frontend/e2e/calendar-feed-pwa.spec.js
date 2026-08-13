@@ -80,13 +80,15 @@ test('生产 PWA 只缓存离线页与品牌图标', async ({ page, request }) =
     return { keys, paths: paths.sort() }
   })
 
-  expect(cacheState.keys).toEqual(['subly-static-v2'])
+  expect(cacheState.keys).toEqual(['subly-static-v3'])
   expect(cacheState.paths).toEqual([
+    '/offline.css',
     '/offline.html',
     '/pwa-192.png',
     '/pwa-512-maskable.png',
     '/pwa-512.png'
   ])
+  expect(cacheState.paths).not.toContain('/theme-bootstrap.js')
   expect(cacheState.paths.some((path) => path.startsWith('/api/'))).toBe(false)
   expect(cacheState.paths.some((path) => ['/login', '/', '/settings'].includes(path))).toBe(false)
 

@@ -5,6 +5,7 @@ import {
   findCategoryIdByServiceKey,
   getServiceCategoryKeys,
   getServiceCategoryLabel,
+  getServiceCategoryLabels,
   groupServicesByCategory,
   isCarrierCategory,
   isVpsCategory,
@@ -37,6 +38,13 @@ describe('getServiceCategoryLabel', () => {
   it('falls back to legacy label or key', () => {
     expect(getServiceCategoryLabel({ category: 'ai', category_label: 'AI' }, 'ai', 0)).toBe('AI')
     expect(getServiceCategoryLabel({}, 'other', 0)).toBe('other')
+  })
+})
+
+describe('getServiceCategoryLabels', () => {
+  it('优先服务标签并回退管理分类元数据', () => {
+    expect(getServiceCategoryLabels({ category_keys: ['streaming', 'music'], category_labels: ['流媒体', '音乐'] })).toEqual(['流媒体', '音乐'])
+    expect(getServiceCategoryLabels({ category_keys: ['cloud'] }, [{ key: 'cloud', label: '云服务' }])).toEqual(['云服务'])
   })
 })
 

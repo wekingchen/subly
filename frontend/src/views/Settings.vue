@@ -22,9 +22,21 @@
       </div>
     </section>
 
+    <nav class="settings-nav" :aria-label="t('settings.sectionNav')">
+      <RouterLink
+        v-for="item in settingsNavItems"
+        :key="item.id"
+        class="settings-nav-link"
+        :to="{ path: '/settings', hash: `#${item.id}` }"
+        :aria-current="activeSection === item.id ? 'location' : undefined"
+      >
+        {{ t(item.label) }}
+      </RouterLink>
+    </nav>
+
     <div class="grid two">
       <!-- 外观与偏好 -->
-      <div class="card sect panel-card">
+      <div id="preferences" class="card sect panel-card settings-anchor">
         <div class="panel-head">
           <div>
             <div class="panel-title"><span class="panel-signal"></span>{{ t('settings.theme') }}</div>
@@ -65,7 +77,7 @@
       </div>
 
       <!-- 账号与密码 -->
-      <div class="card sect panel-card">
+      <div id="account" class="card sect panel-card settings-anchor">
         <div class="panel-head">
           <div>
             <div class="panel-title"><span class="panel-signal"></span>{{ t('account.title') }}</div>
@@ -110,6 +122,7 @@
       </div>
     </div>
 
+    <section id="rates-and-reference-data" class="settings-group settings-anchor">
     <!-- 常用货币当日汇率 -->
     <div class="card sect panel-card">
       <div class="panel-head">
@@ -144,8 +157,17 @@
       </div>
       <CurrencyManager :base-currency="auth.user?.base_currency || baseCurrency" @changed="handleCurrencyChanged" />
     </section>
+    </section>
 
-    <CalendarFeedManager />
+    <section id="calendar-feed" class="settings-anchor">
+      <CalendarFeedManager />
+    </section>
+
+    <section id="notifications" class="settings-group settings-anchor" aria-labelledby="notifications-title">
+      <div class="section-intro">
+        <h2 id="notifications-title">{{ t('settings.notificationsSection') }}</h2>
+        <p class="muted">{{ t('settings.notificationsSectionTip') }}</p>
+      </div>
 
     <!-- Telegram -->
     <form class="card sect panel-card channel-card" @submit.prevent="saveTg">
@@ -281,8 +303,9 @@
       </div>
       <p v-if="whMsg" class="feedback" :class="whOk ? 'ok' : 'err'" :role="whOk ? 'status' : 'alert'">{{ whMsg }}</p>
     </form>
+    </section>
 
-    <div class="grid two">
+    <div id="backup" class="grid two settings-anchor">
       <!-- 数据备份与恢复 -->
       <div class="card sect panel-card data-card">
         <div class="panel-head compact">
@@ -305,7 +328,7 @@
       </div>
 
       <!-- 管理员：整站备份与恢复 -->
-      <div class="card sect panel-card data-card admin-data" v-if="auth.user?.is_admin">
+      <div id="backup-all" class="card sect panel-card data-card admin-data" v-if="auth.user?.is_admin">
         <div class="panel-head compact">
           <div>
             <div class="panel-title"><span class="panel-signal warn"></span>{{ t('backupAll.title') }}</div>
@@ -327,7 +350,7 @@
     </div>
 
     <!-- 系统信息 -->
-    <div class="card sect panel-card">
+    <div id="system" class="card sect panel-card settings-anchor">
       <div class="panel-head">
         <div>
           <div class="panel-title"><span class="panel-signal"></span>{{ t('sys.title') }}</div>
@@ -351,8 +374,9 @@
 </template>
 
 <script setup>
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { useRoute } from 'vue-router'
 import api from '../api'
 import CalendarFeedManager from '../components/settings/CalendarFeedManager.vue'
 import CategoryManager from '../components/settings/CategoryManager.vue'
@@ -363,6 +387,28 @@ import { formatDateTimeInZone } from '../utils/time'
 
 const { t } = useI18n()
 const auth = useAuth()
+const route = useRoute()
+
+const settingsNavItems = computed(() => [
+  { id: 'preferences', label: 'settings.navPreferences' },
+  { id: 'account', label: 'settings.navAccount' },
+  { id: 'rates-and-reference-data', label: 'settings.navReferenceData' },
+  { id: 'calendar-feed', label: 'settings.navCalendarFeed' },
+  { id: 'notifications', label: 'settings.navNotifications' },
+  { id: 'backup', label: 'settings.navBackup' },
+  ...(auth.user?.is_admin ? [{ id: 'backup-all', label: 'settings.navBackupAll' }] : []),
+  { id: 'system', label: 'settings.navSystem' }
+])
+const activeSection = computed(() => route.hash.slice(1))
+
+async function scrollToSettingsSection(hash) {
+  const id = hash.startsWith('#') ? hash.slice(1) : ''
+  if (!settingsNavItems.value.some((item) => item.id === id)) return
+  await nextTick()
+  document.getElementById(id)?.scrollIntoView({ block: 'start' })
+}
+
+watch(() => route.hash, scrollToSettingsSection)
 
 const themes = [
   { v: 'light', k: 'Light', c: '#ffffff' },
@@ -843,15 +889,25 @@ async function getUpdates() {
 }
 
 onMounted(async () => {
+  const initialHash = route.hash
   await loadCurrencies()
   try { sys.value = (await api.get('/api/system/info')).data }
   catch { sys.value = null }
   loadRates()
+  await scrollToSettingsSection(initialHash)
 })
 </script>
 
 <style scoped>
 .settings-page { display: flex; flex-direction: column; gap: 16px; }
+.settings-nav { position: sticky; top: 8px; z-index: 20; display: flex; gap: 8px; padding: 8px; overflow-x: auto;
+  border: 1px solid var(--border); border-radius: 14px; background: color-mix(in srgb, var(--surface) 92%, transparent); backdrop-filter: blur(12px); }
+.settings-nav-link { flex: 0 0 auto; min-height: var(--tap-size); display: inline-flex; align-items: center; padding: 8px 12px;
+  border-radius: 10px; color: var(--text-soft); font-size: 13px; font-weight: 750; white-space: nowrap; }
+.settings-nav-link:hover { background: var(--surface-2); color: var(--text); }
+.settings-nav-link[aria-current="location"] { background: var(--primary-soft); color: var(--primary); }
+.settings-anchor { scroll-margin-top: 82px; }
+.settings-group { display: flex; flex-direction: column; gap: 16px; }
 .settings-hero { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 24px; align-items: end;
   padding: 24px; background: linear-gradient(135deg, color-mix(in srgb, var(--surface) 88%, var(--radar-panel)), var(--surface)); }
 .settings-hero > * { position: relative; z-index: 1; }
@@ -926,6 +982,8 @@ hr { border: none; border-top: 1px solid var(--border); margin: 16px 0; }
 }
 @media (max-width: 720px) {
   .settings-page { gap: 14px; }
+  .settings-nav { top: calc(54px + env(safe-area-inset-top)); margin-inline: -16px; border-inline: 0; border-radius: 0; }
+  .settings-anchor { scroll-margin-top: calc(124px + env(safe-area-inset-top)); }
   .settings-hero { padding: 18px; }
   .hero-copy p { line-height: 1.6; }
   .hero-metrics { grid-template-columns: 1fr; }

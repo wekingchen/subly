@@ -62,7 +62,8 @@ const zh = {
     secService: '服务', secPrice: '价格信息', secBilling: '计费信息', secClassify: '分类与支付',
     secFamily: '家庭共享', secBundle: '捆绑包', secExtra: '附加信息', secCalendar: '日历',
     iconLibrary: '图标库', iconUrl: '图标 URL', iconUrlImport: '下载',
-    family: '家庭成员', familyAdd: '添加成员', familyPh: '成员名称',
+    family: '家庭成员', familyAdd: '添加成员', familyPh: '成员名称', moreSettings: '更多设置', moreSettingsTip: '家庭共享、捆绑包、官网备注和日历选项',
+    searchLabel: '搜索订阅', searchPlaceholder: '搜索名称、套餐或备注', typeFilter: '订阅类型', riskFilter: '续费风险', riskAll: '全部风险', riskOverdue: '已过期', riskSoon: '7 天内', riskSafe: '安全', clearFilters: '清除筛选',
     bundleNone: '不使用捆绑包', bundleJoin: '加入已有捆绑包', bundleCreate: '创建捆绑包', bundleName: '捆绑包名称',
     showInCalendar: '在日历中显示', website: '官方网站',
     browse: '按分类浏览', browseTitle: '选择服务', searchPh: '搜索服务名…', pickHint: '点击下方服务快速填入名称、图标与官网',
@@ -117,10 +118,13 @@ const zh = {
     recurringSubs: '循环订阅', permanentBuy: '永久购买', count: '数量', countUnit: '项', amount: '金额', date: '日期', type: '类型',
     permanentTotal: '永久购买总额', recurringMonthly: '循环订阅月化成本', noData: '暂无可视化数据',
     incompleteFx: '部分金额因缺少 {currencies} 汇率未计入，当前合计为不完整结果。', rateUnavailable: '缺少汇率', radarAmountIncomplete: '缺少 {currencies} 汇率',
-    finRadar: '财务雷达', reportSubtitle: '月化成本结构、续费风险与近期付款信号', riskRadar: '续费压力', riskTotal: '风险信号'
+    finRadar: '财务雷达', reportSubtitle: '月化成本结构、续费风险与近期付款信号', riskRadar: '续费压力', riskTotal: '风险信号',
+    trendView: '趋势展示方式', trendChartView: '图表', trendTableView: '数据表', trendMonth: '月份'
   },
   settings: {
-    title: '设置', theme: '主题', baseCurrency: '基准货币', monthlyBudget: '月度预算', budgetPh: '不设预算上限', budgetHint: '用于雷达与报表的超支预警，按月化续费成本对比。', budgetClearedOnCurrencyChange: '已切换基准货币，月度预算已清空，请按新币种重新设置。', telegram: 'Telegram 通知',
+    title: '设置', theme: '主题', baseCurrency: '基准货币', monthlyBudget: '月度预算', budgetPh: '不设预算上限', budgetHint: '用于雷达与报表的超支预警，按月化续费成本对比。', budgetClearedOnCurrencyChange: '已切换基准货币，月度预算已清空，请按新币种重新设置。',
+    sectionNav: '设置分区', navPreferences: '偏好', navAccount: '账号', navReferenceData: '汇率与参考数据', navCalendarFeed: '日历订阅', navNotifications: '通知通道', navBackup: '个人备份', navBackupAll: '整站备份', navSystem: '系统信息',
+    notificationsSection: '通知通道', notificationsSectionTip: '按需启用 Telegram、Bark 或 Webhook，每个通道独立保存和测试。', telegram: 'Telegram 通知',
     tgEnabled: '启用 Telegram 通知', botToken: 'Bot Token', adminId: 'Admin ID',
     apiBase: 'TG API 反代（可选）', proxy: 'HTTP 代理（可选）',
     chatId: 'Chat ID', checkBot: '验证机器人', testSend: '发送测试',
@@ -184,6 +188,7 @@ const zh = {
     current: '当前', noJobs: '暂无抓取任务', details: '明细', provider: '来源', errReason: '原因',
     nameReq: '请填写名称', domainReq: '请填写域名', categoryReq: '请至少选择一个分类', slugExists: 'slug 已存在', okCount: '成功 {ok}', failCount: '失败 {fail}',
     overview: '概览', cachedCount: '{n} 已缓存', missingCount: '{n} 未缓存', activeCount: '{n} 启用', inactiveCount: '{n} 停用',
+    resultCount: '显示 {shown} / {total} 项服务', clearFilters: '清除筛选', noFilterResults: '没有符合当前筛选条件的服务', loadFailed: '服务列表加载失败，请重试。', refreshFailed: '刷新失败，当前继续显示上次加载的服务列表。',
     exportList: '导出列表', refresh: '刷新', batch: '批量', selectAll: '全选', batchFetch: '抓取所选'
   },
   common: { loading: '加载中...', processing: '处理中…', skipMain: '跳到主要内容', actions: '操作', confirm: '确认', close: '关闭', networkError: '请求失败，请检查网络后重试' }

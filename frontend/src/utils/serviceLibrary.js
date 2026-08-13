@@ -15,6 +15,16 @@ export function getServiceCategoryLabel(service, key, index) {
   return labels[index] || (service?.category === key ? service.category_label : '') || key
 }
 
+export function getServiceCategoryLabels(service, categories = []) {
+  const labels = Array.isArray(service?.category_labels) ? service.category_labels : []
+  return getServiceCategoryKeys(service).map((key, index) => (
+    labels[index]
+    || categories.find((category) => category.key === key)?.label
+    || (service?.category === key ? service.category_label : '')
+    || key
+  ))
+}
+
 export function findCategoryIdByServiceKey(key, categories) {
   const kw = SERVICE_CATEGORY_KEYWORDS[key]
   if (!kw) return null
