@@ -11,8 +11,12 @@ FROM python:3.12-slim AS backend
 ENV PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1
 WORKDIR /app
 
+# 安装 gosu 并升级基础镜像内已有包的安全补丁（如 openssl/libssl3t64）：
+# Debian 官方镜像 digest 更新滞后于安全修复时，Trivy 门禁会阻断可修复的
+# HIGH/CRITICAL；构建期主动 upgrade 不绕过扫描，且不影响依赖声明。
 RUN apt-get update \
     && apt-get install -y --no-install-recommends gosu \
+    && apt-get upgrade -y \
     && rm -rf /var/lib/apt/lists/*
 
 COPY backend/requirements.txt ./

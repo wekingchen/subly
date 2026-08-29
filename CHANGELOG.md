@@ -47,6 +47,7 @@
 - 统一财务成本与汇率契约：Dashboard 与 Reports 共用唯一月化函数，界面明确显示月化 / 年化成本；`amount_in_base` 仅表示单次金额折合，支出排行改用 `monthly_cost_in_base`。财务与 UI 换算缺汇率时不再把原币金额伪装成基准币，相关汇总返回完整性元数据并提示缺失币种。
 
 ### Fixed
+- 镜像构建阶段在安装 gosu 的同一层执行 `apt-get upgrade -y`：Debian 官方 `python:3.12-slim` 基础镜像的 digest 更新滞后于安全修复时（本次为 OpenSSL HIGH 漏洞 CVE-2026-14456，QUIC DoS，修复版 `3.5.7-1~deb13u2`），构建期直接把仓库源中的修复版带入镜像，不使用任何 Trivy 忽略规则绕过双架构发布门禁；上游镜像更新后可评估移除该升级步骤。
 - 收紧私有日历与 PWA 的日志、缓存和响应头：Uvicorn access log 默认关闭，应用日志只记录 path 不记录 query；Feed 和管理响应统一 `private, no-store` / `noindex` / `no-referrer`，HTML 与 Service Worker 禁止持久缓存，Vite 哈希资源使用长期 immutable，CSP 增加 `worker-src` 与 `manifest-src`；订阅 URL 拒绝控制字符，周期数量增加安全上限，历史脏数据不会再击穿 Feed。
 - 修复发布镜像被 `cryptography` 的可修复 High 漏洞（CVE-2026-69247 / CVE-2026-69249）阻断：将依赖从 `48.0.1` 升级到 `50.0.0`，满足 Trivy 双架构发布门禁。
 - 修复旧数据卷升级后 SQLite 启动报 `attempt to write a readonly database`：容器入口先修复 `/app/data` 中历史 root-owned 目录和文件的 ownership，再通过 `gosu` 以 UID/GID `10001` 启动 Uvicorn；CI 使用真实 root-owned bind mount 验证数据库可写、PID 1 已降权、浏览器 E2E 与双架构发布均正常。
