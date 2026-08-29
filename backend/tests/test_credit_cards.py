@@ -77,7 +77,10 @@ def test_credit_card_crud_normalizes_reminders_and_derives_dates(credit_card_api
     body = created.json()
     assert body["remind_days_before"] == [7, 3, 1, 0]
     assert body["last_four"] == "1234"
-    today = date.today()
+    # 派生日期以业务时区为事实源（scheduler._local_today，settings.tz），
+    # 不能用 date.today()：CI 与本地时区不同时会产生 ±1 天的边界偏差。
+    from app.services.scheduler import _local_today
+    today = _local_today()
     expected_due = next_due_date(today, 28)
     expected_statement = statement_date_for_due(expected_due, 10, 28)
     assert body["next_due_date"] == expected_due.isoformat()
