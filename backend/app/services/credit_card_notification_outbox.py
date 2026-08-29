@@ -1,4 +1,4 @@
-"""订阅通知 Outbox：业务适配与可靠投递入口。"""
+"""信用卡计划还款通知 Outbox 业务适配。"""
 
 import secrets
 from datetime import date, datetime
@@ -7,21 +7,19 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
 from app import activity, database
-from app.billing import is_renewal_within_end_date
-from app.models import NotificationLog, NotificationOutbox, SchedulerState, Subscription, User
-from app.services import (  # noqa: F401 - 保留模块锚点供测试 monkeypatch
-    bark,
-    notification_transport,
-    reliable_outbox,
-    telegram,
-    webhook,
+from app.credit_card_rules import next_due_date
+from app.models import (
+    CreditCard,
+    CreditCardNotificationLog,
+    CreditCardNotificationOutbox,
+    SchedulerState,
+    User,
 )
+from app.services import notification_transport, reliable_outbox
 
+CHECKPOINT_KEY = "credit_card_reminder_scan"
 OUTBOX_STATES = reliable_outbox.OUTBOX_STATES
 RETRYABLE_STATES = reliable_outbox.RETRYABLE_STATES
-MAX_ATTEMPTS = reliable_outbox.MAX_ATTEMPTS
-RETRY_DELAYS_SECONDS = reliable_outbox.RETRY_DELAYS_SECONDS
-LEASE_SECONDS = reliable_outbox.LEASE_SECONDS
 DEFAULT_BATCH_SIZE = reliable_outbox.DEFAULT_BATCH_SIZE
 
 
@@ -29,27 +27,21 @@ def utcnow() -> datetime:
     return reliable_outbox.utcnow()
 
 
-def _safe_failure(exc: Exception) -> tuple[bool, str]:
-    """兼容既有调用；实现由通用 transport 负责。"""
-    return notification_transport.safe_failure(exc)
-
-
 def enqueue_candidates(db: Session, candidates: list[dict]) -> int:
-    """在当前事务中幂等入队；调用方负责提交或回滚。"""
     enqueued = 0
     for candidate in candidates:
         stmt = (
-            sqlite_insert(NotificationOutbox)
+            sqlite_insert(CreditCardNotificationOutbox)
             .values(
                 delivery_id=secrets.token_hex(16),
-                subscription_id=candidate["subscription_id"],
+                credit_card_id=candidate["credit_card_id"],
                 user_id=candidate["user_id"],
                 business_date=candidate["business_date"],
+                due_date=candidate["due_date"],
                 days_before=candidate["days_before"],
                 channel=candidate["channel"],
                 status="pending",
-                subscription_name=candidate["subscription_name"],
-                renewal_date=candidate["renewal_date"],
+                credit_card_name=candidate["credit_card_name"],
                 payload=candidate["payload"],
                 retry_cycle=0,
                 attempt_count=0,
@@ -57,12 +49,7 @@ def enqueue_candidates(db: Session, candidates: list[dict]) -> int:
                 updated_at=utcnow(),
             )
             .on_conflict_do_nothing(
-                index_elements=[
-                    "subscription_id",
-                    "business_date",
-                    "days_before",
-                    "channel",
-                ]
+                index_elements=["credit_card_id", "due_date", "days_before", "channel"]
             )
         )
         result = db.execute(stmt)
@@ -71,12 +58,11 @@ def enqueue_candidates(db: Session, candidates: list[dict]) -> int:
 
 
 def mark_scan_completed(db: Session, business_date: date) -> None:
-    """在扫描入队的同一事务中记录已完成业务日。"""
     now = utcnow()
     stmt = (
         sqlite_insert(SchedulerState)
         .values(
-            key="reminder_scan",
+            key=CHECKPOINT_KEY,
             last_completed_business_date=business_date,
             updated_at=now,
         )
@@ -92,33 +78,46 @@ def mark_scan_completed(db: Session, business_date: date) -> None:
 
 
 def scan_completed_for(db: Session, business_date: date) -> bool:
-    state = db.get(SchedulerState, "reminder_scan")
+    state = db.get(SchedulerState, CHECKPOINT_KEY)
     return bool(state and state.last_completed_business_date == business_date)
 
 
 def invalidate_scan_checkpoint(db: Session) -> None:
-    """恢复删除 Outbox 后使当天 checkpoint 失效，防止通知永久缺失。"""
-    state = db.get(SchedulerState, "reminder_scan")
+    state = db.get(SchedulerState, CHECKPOINT_KEY)
     if state:
         state.last_completed_business_date = None
         state.updated_at = utcnow()
 
 
+def pending_startup_scan(business_date: date) -> bool:
+    if database.SessionLocal is None:
+        return False
+    db = database.SessionLocal()
+    try:
+        return not scan_completed_for(db, business_date)
+    finally:
+        db.close()
+
+
 def _prepare_delivery(db: Session, claim: dict) -> tuple[str, dict | None]:
-    row = db.get(NotificationOutbox, claim["id"])
+    row = db.get(CreditCardNotificationOutbox, claim["id"])
     if not row or row.status != "sending" or row.lease_token != claim["token"]:
         return "stale", None
     user = db.get(User, row.user_id)
-    sub = db.get(Subscription, row.subscription_id)
-    if not user or not user.is_active or not sub or sub.user_id != row.user_id:
+    card = db.get(CreditCard, row.credit_card_id)
+    if not user or not user.is_active or not card or card.user_id != row.user_id:
         return "canceled", None
-    if not sub.is_active or sub.is_paused or sub.billing_type != "recurring":
+    if not card.is_active:
         return "canceled", None
-    if sub.next_renewal_date != row.renewal_date:
+    if row.days_before not in (card.remind_days_before or []):
         return "canceled", None
-    if not is_renewal_within_end_date(row.renewal_date, sub.end_date):
+    if next_due_date(row.business_date, card.due_day) != row.due_date:
         return "canceled", None
 
+    from app.services.scheduler import _local_today
+
+    if row.due_date < _local_today():
+        return "canceled", None
     config_state, config = notification_transport.channel_config(user, row.channel)
     if config_state != "ready":
         return config_state, None
@@ -126,9 +125,9 @@ def _prepare_delivery(db: Session, claim: dict) -> tuple[str, dict | None]:
         "id": row.id,
         "delivery_id": row.delivery_id,
         "user_id": row.user_id,
-        "source_id": row.subscription_id,
-        "source_name": row.subscription_name,
-        "subscription_id": row.subscription_id,
+        "source_id": row.credit_card_id,
+        "source_name": row.credit_card_name,
+        "credit_card_id": row.credit_card_id,
         "user": user,
         "days_before": row.days_before,
         "channel": row.channel,
@@ -140,9 +139,11 @@ def _prepare_delivery(db: Session, claim: dict) -> tuple[str, dict | None]:
     }
 
 
-def _log_factory(delivery: dict, ok: bool, message: str, now: datetime) -> NotificationLog:
-    return NotificationLog(
-        subscription_id=delivery["subscription_id"],
+def _log_factory(
+    delivery: dict, ok: bool, message: str, now: datetime
+) -> CreditCardNotificationLog:
+    return CreditCardNotificationLog(
+        credit_card_id=delivery["credit_card_id"],
         user_id=delivery["user_id"],
         outbox_id=delivery["id"],
         attempt_no=delivery["attempt_no"],
@@ -157,11 +158,11 @@ def _log_factory(delivery: dict, ok: bool, message: str, now: datetime) -> Notif
 
 def _activity_callback(delivery: dict, ok: bool, message: str) -> None:
     activity.log(
-        f"{delivery['channel']}.reminder",
+        f"{delivery['channel']}.credit_card_reminder",
         (
-            f"已提醒「{delivery['source_name']}」（{delivery['channel']}）"
+            f"已提醒「{delivery['source_name']}」计划还款（{delivery['channel']}）"
             if ok
-            else f"提醒「{delivery['source_name']}」投递失败（{delivery['channel']}）：{message}"
+            else f"「{delivery['source_name']}」计划还款提醒投递失败（{delivery['channel']}）：{message}"
         ),
         user=delivery["user"],
         level="info" if ok else "error",
@@ -171,25 +172,16 @@ def _activity_callback(delivery: dict, ok: bool, message: str) -> None:
 def dispatch_due(batch_size: int = DEFAULT_BATCH_SIZE) -> dict:
     return reliable_outbox.dispatch_due(
         database.SessionLocal,
-        NotificationOutbox,
+        CreditCardNotificationOutbox,
         _prepare_delivery,
         _log_factory,
         _activity_callback,
         batch_size=batch_size,
-        thread_name_prefix="notification-outbox",
+        thread_name_prefix="credit-card-outbox",
     )
 
 
 def retry_outbox(db: Session, outbox_id: int, user_id: int) -> bool:
-    """原子重置 dead/retry_wait 任务；不会在请求事务内同步发送。"""
-    return reliable_outbox.retry_outbox(db, NotificationOutbox, outbox_id, user_id)
-
-
-def pending_startup_scan(business_date: date) -> bool:
-    if database.SessionLocal is None:
-        return False
-    db = database.SessionLocal()
-    try:
-        return not scan_completed_for(db, business_date)
-    finally:
-        db.close()
+    return reliable_outbox.retry_outbox(
+        db, CreditCardNotificationOutbox, outbox_id, user_id
+    )

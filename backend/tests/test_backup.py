@@ -8,6 +8,9 @@ from app.database import Base
 from app.models import (
     Bundle,
     Category,
+    CreditCard,
+    CreditCardNotificationLog,
+    CreditCardNotificationOutbox,
     Currency,
     ExchangeRate,
     NotificationLog,
@@ -967,6 +970,225 @@ def test_backup_normalizes_subscription_currency_before_storage():
         backup._restore_entities(db, user, payload, replace=False)
         saved = db.scalar(select(Subscription).where(Subscription.name == "币种规范化"))
         assert saved.currency == "ABC"
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def _add_credit_card(db, user, display_name="主卡", **overrides):
+    card = CreditCard(
+        user_id=user.id,
+        display_name=display_name,
+        bank_name=overrides.pop("bank_name", "示例银行"),
+        last_four=overrides.pop("last_four", "0123"),
+        statement_day=overrides.pop("statement_day", 5),
+        due_day=overrides.pop("due_day", 25),
+        remind_days_before=overrides.pop("remind_days_before", [7, 1]),
+        is_active=overrides.pop("is_active", True),
+        show_in_calendar=overrides.pop("show_in_calendar", True),
+        **overrides,
+    )
+    db.add(card)
+    db.flush()
+    return card
+
+
+def _add_credit_card_delivery(db, card, user):
+    outbox = CreditCardNotificationOutbox(
+        credit_card_id=card.id,
+        user_id=user.id,
+        business_date=date(2026, 8, 29),
+        due_date=date(2026, 9, 5),
+        days_before=7,
+        channel="webhook",
+        status="sent",
+        credit_card_name=card.display_name,
+        payload={},
+    )
+    db.add(outbox)
+    db.flush()
+    db.add(CreditCardNotificationLog(
+        credit_card_id=card.id,
+        user_id=user.id,
+        outbox_id=outbox.id,
+        attempt_no=1,
+        days_before=7,
+        channel="webhook",
+        status="sent",
+    ))
+    return outbox
+
+
+def test_backup_v3_exports_only_credit_card_configuration_for_current_user():
+    db, engine = make_db()
+    try:
+        user = add_user(db)
+        other = add_user(db, "bob")
+        card = _add_credit_card(db, user, last_four="0012", show_in_calendar=False)
+        _add_credit_card(db, other, display_name="他人卡")
+        _add_credit_card_delivery(db, card, user)
+        db.commit()
+
+        exported = backup.export_data(user=user, db=db)
+
+        assert exported["export_version"] == 3
+        assert exported["credit_cards"] == [{
+            "display_name": "主卡",
+            "bank_name": "示例银行",
+            "last_four": "0012",
+            "statement_day": 5,
+            "due_day": 25,
+            "remind_days_before": [7, 1],
+            "is_active": True,
+            "show_in_calendar": False,
+        }]
+        rendered = repr(exported)
+        assert "他人卡" not in rendered
+        assert "credit_card_notification" not in rendered
+        assert "outbox_id" not in rendered
+        assert "checkpoint" not in rendered
+        assert "feed_token" not in rendered
+    finally:
+        db.close()
+        engine.dispose()
+
+
+@pytest.mark.parametrize("export_version", [1, 2, 3])
+def test_replace_backup_without_credit_cards_preserves_existing_cards(export_version):
+    db, engine = make_db()
+    try:
+        user = add_user(db)
+        _add_credit_card(db, user)
+        db.commit()
+
+        backup._restore_entities(
+            db,
+            user,
+            {"export_version": export_version, "subscriptions": []},
+            replace=True,
+        )
+        db.commit()
+
+        cards = db.scalars(select(CreditCard).where(CreditCard.user_id == user.id)).all()
+        assert [card.display_name for card in cards] == ["主卡"]
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_v3_replace_with_explicit_empty_credit_cards_clears_cards_and_delivery_records():
+    db, engine = make_db()
+    try:
+        user = add_user(db)
+        card = _add_credit_card(db, user)
+        _add_credit_card_delivery(db, card, user)
+        db.commit()
+
+        backup._restore_entities(
+            db,
+            user,
+            {"export_version": 3, "subscriptions": [], "credit_cards": []},
+            replace=True,
+        )
+        db.commit()
+
+        assert db.scalars(select(CreditCard)).all() == []
+        assert db.scalars(select(CreditCardNotificationOutbox)).all() == []
+        assert db.scalars(select(CreditCardNotificationLog)).all() == []
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_v3_credit_cards_roundtrip_all_configuration_fields():
+    db, engine = make_db()
+    try:
+        source = add_user(db)
+        target = add_user(db, "bob")
+        _add_credit_card(
+            db,
+            source,
+            display_name="旅行卡",
+            bank_name="旅行银行",
+            last_four="0007",
+            statement_day=9,
+            due_day=29,
+            remind_days_before=[10, 3],
+            is_active=False,
+            show_in_calendar=False,
+        )
+        db.commit()
+        exported = backup.export_data(user=source, db=db)
+
+        backup._restore_entities(db, target, exported, replace=True)
+        db.commit()
+
+        restored = db.scalars(
+            select(CreditCard).where(CreditCard.user_id == target.id)
+        ).one()
+        assert restored.display_name == "旅行卡"
+        assert restored.bank_name == "旅行银行"
+        assert restored.last_four == "0007"
+        assert restored.statement_day == 9
+        assert restored.due_day == 29
+        assert restored.remind_days_before == [10, 3]
+        assert restored.is_active is False
+        assert restored.show_in_calendar is False
+    finally:
+        db.close()
+        engine.dispose()
+
+
+@pytest.mark.parametrize(
+    "credit_cards, error",
+    [
+        ({}, "不是数组"),
+        ([{"display_name": "错误卡"}], "bank_name"),
+        ([{
+            "display_name": "错误卡",
+            "bank_name": "示例银行",
+            "last_four": "12x4",
+            "statement_day": 5,
+            "due_day": 25,
+            "remind_days_before": [7, 1],
+            "is_active": True,
+            "show_in_calendar": True,
+        }], "last_four"),
+    ],
+)
+def test_invalid_credit_cards_return_400_before_replace_deletes_existing_data(
+    monkeypatch, credit_cards, error
+):
+    db, engine = make_db()
+    try:
+        user = add_user(db)
+        _add_credit_card(db, user)
+        db.add(Subscription(
+            user_id=user.id,
+            name="原有订阅",
+            amount=1,
+            currency="CNY",
+            start_date=date(2024, 1, 1),
+            next_renewal_date=date(2024, 2, 1),
+        ))
+        db.commit()
+        monkeypatch.setattr(backup.activity, "log", lambda *args, **kwargs: None)
+
+        with pytest.raises(Exception) as exc:
+            backup.import_data(
+                backup.ImportIn(data={
+                    "export_version": 3,
+                    "subscriptions": [],
+                    "credit_cards": credit_cards,
+                }, replace=True),
+                user=user,
+                db=db,
+            )
+
+        assert getattr(exc.value, "status_code", None) == 400
+        assert error in getattr(exc.value, "detail", "")
+        assert db.scalar(select(CreditCard).where(CreditCard.user_id == user.id))
+        assert db.scalar(select(Subscription).where(Subscription.user_id == user.id))
     finally:
         db.close()
         engine.dispose()

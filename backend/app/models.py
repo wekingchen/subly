@@ -223,6 +223,27 @@ class Subscription(Base):
     payment_method: Mapped["PaymentMethod | None"] = relationship()
 
 
+class CreditCard(Base):
+    __tablename__ = "credit_cards"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    display_name: Mapped[str] = mapped_column(String(128))
+    bank_name: Mapped[str] = mapped_column(String(128))
+    last_four: Mapped[str | None] = mapped_column(String(4), nullable=True)
+    statement_day: Mapped[int] = mapped_column(Integer)
+    due_day: Mapped[int] = mapped_column(Integer)
+    remind_days_before: Mapped[list] = mapped_column(
+        JSON, default=lambda: [7, 3, 1, 0]
+    )
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    show_in_calendar: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now()
+    )
+
+
 class Bundle(Base):
     __tablename__ = "bundles"
 
@@ -304,6 +325,69 @@ class NotificationLog(Base):
     days_before: Mapped[int] = mapped_column(Integer)
     channel: Mapped[str] = mapped_column(String(16), default="telegram")
     status: Mapped[str] = mapped_column(String(16))         # sent | failed
+    message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    sent_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+class CreditCardNotificationOutbox(Base):
+    __tablename__ = "credit_card_notification_outbox"
+    __table_args__ = (
+        UniqueConstraint(
+            "credit_card_id",
+            "due_date",
+            "days_before",
+            "channel",
+            name="uq_credit_card_notification_outbox_delivery",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    delivery_id: Mapped[str] = mapped_column(
+        String(32), unique=True, index=True, default=lambda: uuid4().hex
+    )
+    credit_card_id: Mapped[int] = mapped_column(
+        ForeignKey("credit_cards.id"), index=True
+    )
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    business_date: Mapped[date] = mapped_column(Date, index=True)
+    days_before: Mapped[int] = mapped_column(Integer)
+    channel: Mapped[str] = mapped_column(String(16))
+    status: Mapped[str] = mapped_column(String(16), default="pending", index=True)
+    credit_card_name: Mapped[str] = mapped_column(String(128))
+    due_date: Mapped[date] = mapped_column(Date)
+    payload: Mapped[dict] = mapped_column(JSON)
+    retry_cycle: Mapped[int] = mapped_column(Integer, default=0)
+    attempt_count: Mapped[int] = mapped_column(Integer, default=0)
+    next_attempt_at: Mapped[datetime | None] = mapped_column(
+        DateTime, nullable=True, index=True
+    )
+    lease_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime, nullable=True, index=True
+    )
+    lease_token: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    last_error: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    canceled_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class CreditCardNotificationLog(Base):
+    __tablename__ = "credit_card_notification_log"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    credit_card_id: Mapped[int] = mapped_column(
+        ForeignKey("credit_cards.id"), index=True
+    )
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    outbox_id: Mapped[int | None] = mapped_column(
+        ForeignKey("credit_card_notification_outbox.id"), nullable=True, index=True
+    )
+    attempt_no: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    retry_cycle: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    days_before: Mapped[int] = mapped_column(Integer)
+    channel: Mapped[str] = mapped_column(String(16), default="telegram")
+    status: Mapped[str] = mapped_column(String(16))
     message: Mapped[str | None] = mapped_column(Text, nullable=True)
     sent_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 

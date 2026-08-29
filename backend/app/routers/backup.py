@@ -20,6 +20,9 @@ from app.deps import get_admin_user, get_current_user
 from app.models import (
     Bundle,
     Category,
+    CreditCard,
+    CreditCardNotificationLog,
+    CreditCardNotificationOutbox,
     Currency,
     ExchangeRate,
     NotificationLog,
@@ -29,8 +32,13 @@ from app.models import (
     Subscription,
     User,
 )
-from app.schemas import normalize_currency_code, sanitize_url
-from app.services import exchange, notification_outbox, scheduler
+from app.schemas import CreditCardIn, normalize_currency_code, sanitize_url
+from app.services import (
+    credit_card_notification_outbox,
+    exchange,
+    notification_outbox,
+    scheduler,
+)
 from app.services.scheduler import utcnow
 from app.security import hash_password
 from app.subscription_rules import (
@@ -41,7 +49,7 @@ from app.subscription_rules import (
 
 router = APIRouter(prefix="/api/backup", tags=["backup"])
 
-EXPORT_VERSION = 2
+EXPORT_VERSION = 3
 
 
 def _sub_dict(s: Subscription, history: list[RenewalHistory]) -> dict:
@@ -89,6 +97,19 @@ def _sub_dict(s: Subscription, history: list[RenewalHistory]) -> dict:
     }
 
 
+def _credit_card_dict(card: CreditCard) -> dict:
+    return {
+        "display_name": card.display_name,
+        "bank_name": card.bank_name,
+        "last_four": card.last_four,
+        "statement_day": card.statement_day,
+        "due_day": card.due_day,
+        "remind_days_before": card.remind_days_before,
+        "is_active": card.is_active,
+        "show_in_calendar": card.show_in_calendar,
+    }
+
+
 def _collect_entities(db: Session, user: User) -> dict:
     """汇总某用户的订阅及其依赖实体（分类/付款方式/捆绑包/自定义货币）。
 
@@ -128,6 +149,9 @@ def _collect_entities(db: Session, user: User) -> dict:
         )
     ).all()
     bundles = db.scalars(select(Bundle).where(Bundle.user_id == user.id)).all()
+    credit_cards = db.scalars(
+        select(CreditCard).where(CreditCard.user_id == user.id).order_by(CreditCard.id)
+    ).all()
     currencies = db.scalars(
         select(Currency).where(Currency.is_custom.is_(True), Currency.user_id == user.id)
     ).all()
@@ -145,6 +169,7 @@ def _collect_entities(db: Session, user: User) -> dict:
             for p in pms
         ],
         "bundles": [{"id": b.id, "name": b.name, "note": b.note} for b in bundles],
+        "credit_cards": [_credit_card_dict(card) for card in credit_cards],
         "currencies": [
             {
                 "code": c.code,
@@ -228,6 +253,23 @@ def _restore_currency_rate(
         row.user_id = currency.user_id
 
 
+def _validated_credit_cards(data: dict) -> list[dict] | None:
+    if "credit_cards" not in data:
+        return None
+    cards = data["credit_cards"]
+    if not isinstance(cards, list):
+        raise ValueError("备份格式错误：credit_cards 不是数组")
+    validated: list[dict] = []
+    for index, card in enumerate(cards, start=1):
+        if not isinstance(card, dict):
+            raise ValueError(f"备份 credit_cards 第 {index} 项必须是对象")
+        try:
+            validated.append(CreditCardIn.model_validate(card).model_dump())
+        except ValueError as exc:
+            raise ValueError(f"备份 credit_cards 第 {index} 项非法：{exc}") from exc
+    return validated
+
+
 def _validate_backup_payload(data: dict) -> None:
     """导入前校验：畸形备份（缺 name、非法日期、类型错误）直接抛错，避免 replace 先删后写丢数据。
 
@@ -243,6 +285,7 @@ def _validate_backup_payload(data: dict) -> None:
         raise ValueError("备份缺少 subscriptions 字段（如需清空请显式传空数组）")
     if not isinstance(subs, list):
         raise ValueError("备份格式错误：subscriptions 不是数组")
+    _validated_credit_cards(data)
     # 辅助集合必须是数组、元素必须是 dict，否则后续 .get() 抛 AttributeError 走成 500
     for key in ("categories", "payment_methods", "bundles", "currencies"):
         items = data.get(key)
@@ -404,16 +447,48 @@ def _validate_restore_currency_refs(
             raise ValueError(f"第 {index} 条订阅货币 {str(code).upper()} 缺少可用汇率")
 
 
-def _restore_entities(db: Session, user: User, data: dict, replace: bool) -> int:
+def _restore_entities(
+    db: Session,
+    user: User,
+    data: dict,
+    replace: bool,
+    *,
+    export_version: int | None = None,
+) -> int:
     """把一份导出数据恢复到指定用户名下，返回导入的订阅数（不提交事务）。
 
     自定义分类/付款方式/捆绑包按名称匹配现有实体（含系统预置），缺失才新建。
     """
     subs_in = data.get("subscriptions") or []
+    cards_in = _validated_credit_cards(data)
+    replace_credit_cards = replace and cards_in is not None
 
     # 任何删除/写入前先校验，畸形或越权货币引用直接抛错，避免 replace 先删后写错数据。
     _validate_backup_payload(data)
     _validate_restore_currency_refs(db, user, data, replace=replace)
+    if cards_in is not None:
+        credit_card_notification_outbox.invalidate_scan_checkpoint(db)
+
+    if replace_credit_cards:
+        old_card_ids = [
+            card.id
+            for card in db.scalars(
+                select(CreditCard).where(CreditCard.user_id == user.id)
+            ).all()
+        ]
+        if old_card_ids:
+            db.execute(
+                delete(CreditCardNotificationLog).where(
+                    CreditCardNotificationLog.credit_card_id.in_(old_card_ids)
+                )
+            )
+            db.execute(
+                delete(CreditCardNotificationOutbox).where(
+                    CreditCardNotificationOutbox.credit_card_id.in_(old_card_ids)
+                )
+            )
+            db.execute(delete(CreditCard).where(CreditCard.id.in_(old_card_ids)))
+        db.flush()
 
     if replace:
         notification_outbox.invalidate_scan_checkpoint(db)
@@ -538,6 +613,23 @@ def _restore_entities(db: Session, user: User, data: dict, replace: bool) -> int
             currency.symbol = cu.get("symbol", currency.symbol)
         _restore_currency_rate(db, currency, cu, backup_base_currency)
     db.flush()
+
+    if isinstance(cards_in, list):
+        for card in cards_in:
+            db.add(
+                CreditCard(
+                    user_id=user.id,
+                    display_name=card["display_name"].strip(),
+                    bank_name=card["bank_name"],
+                    last_four=card["last_four"],
+                    statement_day=card["statement_day"],
+                    due_day=card["due_day"],
+                    remind_days_before=card["remind_days_before"],
+                    is_active=card["is_active"],
+                    show_in_calendar=card["show_in_calendar"],
+                )
+            )
+        db.flush()
 
     count = 0
     # 旧备份下标 -> 新订阅对象，用于恢复嵌套的续费历史。
@@ -690,7 +782,13 @@ def import_data(
         raise HTTPException(400, "备份文件格式不正确：缺少 subscriptions")
 
     try:
-        count = _restore_entities(db, user, data, payload.replace)
+        count = _restore_entities(
+            db,
+            user,
+            data,
+            payload.replace,
+            export_version=data.get("export_version"),
+        )
         meta = data.get("user") or {}
         if isinstance(meta, dict):
             _apply_user_preferences(db, user, meta)
@@ -698,7 +796,7 @@ def import_data(
         db.rollback()
         raise HTTPException(400, f"备份校验失败：{e}")
     db.commit()
-    if payload.replace:
+    if payload.replace or "credit_cards" in data:
         scheduler.rescan_after_restore()
     activity.log("backup.import", f"导入恢复了 {count} 个订阅", user=user)
     return {"ok": True, "imported": count}
@@ -803,14 +901,22 @@ def import_all(
                 existing_users[username] = target
                 created_users += 1
 
-            total_subs += _restore_entities(db, target, ub, payload.replace)
+            total_subs += _restore_entities(
+                db,
+                target,
+                ub,
+                payload.replace,
+                export_version=data.get("export_version"),
+            )
             _apply_user_preferences(db, target, meta, label=username)
     except (ValueError, TypeError, AttributeError) as e:
         db.rollback()
         raise HTTPException(400, f"备份校验失败：{e}")
 
     db.commit()
-    if payload.replace:
+    if payload.replace or any(
+        isinstance(block, dict) and "credit_cards" in block for block in users_in
+    ):
         scheduler.rescan_after_restore()
     activity.log(
         "backup.import_all",

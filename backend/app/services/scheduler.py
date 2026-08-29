@@ -26,7 +26,15 @@ from app.models import (
     Subscription,
     User,
 )
-from app.services import bark, exchange, notification_outbox, telegram, webhook  # noqa: F401
+from app.services import (
+    bark,
+    credit_card_notification_outbox,
+    credit_card_reminders,
+    exchange,
+    notification_outbox,
+    telegram,  # noqa: F401 - 保留为测试 monkeypatch 锚点
+    webhook,  # noqa: F401 - 保留为测试 monkeypatch 锚点
+)
 
 _scheduler: BackgroundScheduler | None = None
 logger = logging.getLogger(__name__)
@@ -277,7 +285,7 @@ def plan_reminder_candidates(
 
 
 def run_reminder_scan() -> dict:
-    """扫描到期提醒并原子写入 Outbox；不执行任何外部 HTTP。"""
+    """扫描订阅提醒并原子写入 Outbox；不执行任何外部 HTTP。"""
     if not _scan_lock.acquire(blocking=False):
         logger.info("event=reminder_scan_skipped reason=already_running")
         return {
@@ -665,23 +673,80 @@ def simulate_reminder_scan(
     return {"summary": summary, "items": items}
 
 
+def run_credit_card_reminder_scan() -> dict:
+    """扫描信用卡计划还款提醒；与订阅 checkpoint/锁相互独立。"""
+    return credit_card_reminders.run_reminder_scan(_local_today())
+
+
+def run_all_reminder_scans() -> dict:
+    """供管理员手动触发两类扫描；扫描阶段不执行外部 HTTP。
+
+    两类扫描独立 try/except：单类失败只记录自身错误，不阻止另一类执行，
+    也不能让手动 API 在首个异常处整体短路。
+    """
+    results = {}
+    for key, scan in (
+        ("subscriptions", run_reminder_scan),
+        ("credit_cards", run_credit_card_reminder_scan),
+    ):
+        try:
+            results[key] = scan()
+        except Exception as exc:  # noqa: BLE001 - 响亮记录后继续另一类
+            logger.exception(
+                "event=reminder_scan_failed kind=%s error_type=%s", key, type(exc).__name__
+            )
+            results[key] = {"error": type(exc).__name__}
+    return results
+
+
+def _dispatch_all_due() -> None:
+    """投递两类 Outbox；单类投递异常响亮记录后继续另一类，避免队列饥饿。"""
+    for dispatcher, kind in (
+        (notification_outbox.dispatch_due, "subscription"),
+        (credit_card_notification_outbox.dispatch_due, "credit_card"),
+    ):
+        try:
+            dispatcher()
+        except Exception as exc:  # noqa: BLE001 - 投递异常不应阻断另一类队列
+            logger.exception(
+                "event=outbox_dispatch_failed kind=%s error_type=%s",
+                kind,
+                type(exc).__name__,
+            )
+
+
 def _scheduled_reminder_job() -> None:
-    run_reminder_scan()
-    notification_outbox.dispatch_due()
+    # 每日任务同样隔离：单类扫描失败不阻断另一类扫描与两类投递。
+    for scan in (run_reminder_scan, run_credit_card_reminder_scan):
+        try:
+            scan()
+        except Exception as exc:  # noqa: BLE001 - checkpoint 未推进时由维护任务补偿
+            logger.exception(
+                "event=scheduled_reminder_scan_failed error_type=%s", type(exc).__name__
+            )
+    _dispatch_all_due()
 
 
 def _notification_maintenance_job() -> None:
-    """每分钟确保当天扫描完成；补扫失败也不阻断已有任务投递。"""
+    """每分钟确保两类当天扫描完成；单类失败不阻断另一类投递。"""
     today = _local_today()
     if notification_outbox.pending_startup_scan(today):
         try:
             run_reminder_scan()
         except Exception as exc:  # noqa: BLE001 - checkpoint 保持未完成，下分钟继续补扫
             logger.exception(
-                "event=notification_catchup_scan_failed error_type=%s",
+                "event=notification_catchup_scan_failed kind=subscription error_type=%s",
                 type(exc).__name__,
             )
-    notification_outbox.dispatch_due()
+    if credit_card_notification_outbox.pending_startup_scan(today):
+        try:
+            credit_card_reminders.run_reminder_scan(today)
+        except Exception as exc:  # noqa: BLE001 - checkpoint 保持未完成，下分钟继续补扫
+            logger.exception(
+                "event=notification_catchup_scan_failed kind=credit_card error_type=%s",
+                type(exc).__name__,
+            )
+    _dispatch_all_due()
 
 
 def _startup_notification_job() -> None:
@@ -691,14 +756,18 @@ def _startup_notification_job() -> None:
 def rescan_after_restore() -> dict:
     """恢复提交后重建当天候选；失败或锁冲突时安排一次后台重试。"""
     try:
-        result = run_reminder_scan()
+        result = run_all_reminder_scans()
     except Exception as exc:  # noqa: BLE001 - 恢复已提交，改为响亮记录并后台补偿
         logger.exception(
             "event=restore_notification_rescan_failed error_type=%s",
             type(exc).__name__,
         )
         result = {"skipped": "恢复后扫描失败，已安排重试"}
-    if result.get("skipped") and _scheduler is not None:
+    needs_retry = bool(result.get("skipped")) or any(
+        isinstance(value, dict) and value.get("skipped")
+        for value in result.values()
+    )
+    if needs_retry and _scheduler is not None:
         _scheduler.add_job(
             _notification_maintenance_job,
             "date",

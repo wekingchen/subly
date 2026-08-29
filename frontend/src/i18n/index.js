@@ -2,7 +2,7 @@ import { createI18n } from 'vue-i18n'
 
 const zh = {
   app: { tagline: '订阅 / 续费 / 保号，一个都不漏' },
-  nav: { dashboard: '雷达总览', subscriptions: '订阅账本', calendar: '续费日历', reports: '支出报表', notifications: '通知中心', logs: '实时日志', settings: '系统设置', iconLibrary: '服务管理', diagnostics: '数据诊断', users: '用户管理', groupWorkspace: '雷达工作台', groupSystem: '通知与系统', groupAdmin: '管理员', logout: '退出', logoutFail: '退出失败，请检查网络后重试', menu: '导航菜单', closeMenu: '关闭导航菜单', brandTag: '续费雷达' },
+  nav: { dashboard: '雷达总览', subscriptions: '订阅账本', creditCards: '信用卡', calendar: '续费与还款日历', reports: '支出报表', notifications: '通知中心', logs: '实时日志', settings: '系统设置', iconLibrary: '服务管理', diagnostics: '数据诊断', users: '用户管理', groupWorkspace: '雷达工作台', groupSystem: '通知与系统', groupAdmin: '管理员', logout: '退出', logoutFail: '退出失败，请检查网络后重试', menu: '导航菜单', closeMenu: '关闭导航菜单', brandTag: '续费雷达' },
   notify: {
     title: '通知投递中心', kicker: '可靠投递队列',
     subtitle: '查看每条提醒从入队到送达的状态；临时故障会自动退避重试，停止重试后可手动恢复。',
@@ -102,8 +102,23 @@ const zh = {
       nextRenewal: '下次保号日', lastRenewedAt: '上次保号日'
     }
   },
+  creditCards: {
+    kicker: '还款节奏 · 信用卡', title: '信用卡管理', subtitle: '集中记录账单日、计划还款日与提醒窗口，让每张卡的还款节奏清晰可见。', cardCount: '{n} 张卡片', add: '添加信用卡',
+    statsLabel: '信用卡概览', activeCards: '启用卡片', activeCardsHint: '共记录 {total} 张卡', dueSoon: '7 天内计划还款', nearestDue: '最近：{name}，还有 {n} 天', noUpcomingDue: '暂无即将到来的还款日',
+    loading: '正在加载信用卡…', loadFailed: '信用卡列表加载失败', staleTitle: '刷新失败，当前显示上次加载的信用卡', staleDescription: '你可以继续查看，或稍后重试。',
+    emptyTitle: '还没有信用卡记录', emptyDescription: '添加第一张卡，把账单日、计划还款日和提醒规则放进同一条时间轨道。', listLabel: '信用卡列表',
+    displayName: '卡片名称', bankName: '发卡银行', lastFour: '卡号后四位（可选）', statementDay: '账单日', dueDay: '计划还款日', remindDaysBefore: '提前提醒天数', monthDayHint: '填写每月 1–31 日；短月份由服务端按实际日期派生。', dueDayHint: '若早于账单日，表示下个月的计划还款日。', remindHint: '逗号分隔多个提醒点，如 7, 3, 1, 0（还款日当天）；留空表示不发送外部提醒，最多 8 项、每项 0–30。', lastFourPlaceholder: '留空则不记录尾号', lastFourHint: '仅用于展示辨识，Subly 不保存完整卡号。', remindPlaceholder: '7, 3, 1, 0',
+    isActive: '启用这张卡', isActiveHint: '停用后保留记录，但不计入近期还款统计。', showInCalendar: '显示在日历中', showInCalendarHint: '允许后端把派生的计划还款日加入日历。',
+    addTitle: '添加信用卡', editTitle: '编辑信用卡', detailTitle: '信用卡详情', edit: '编辑', delete: '删除', save: '保存信用卡', cancel: '取消', viewDetails: '查看详情', confirmDelete: '确认删除',
+    nameRequired: '请填写卡片名称和发卡银行', lastFourInvalid: '卡号后四位必须是 4 位数字', dayInvalid: '账单日和计划还款日必须是 1–31 的整数', remindInvalid: '提前提醒天数必须是 0–30 的整数，逗号分隔最多 8 项',
+    created: '信用卡已添加', updated: '信用卡已更新', deleted: '信用卡已删除', deleteTitle: '删除信用卡', deleteMessage: '确认删除「{name}」？删除后无法恢复。',
+    active: '已启用', inactive: '已停用', calendarOn: '已显示在日历', calendarOff: '未显示在日历', statementDayValue: '每月 {n} 日出账', dueDayValue: '每月 {n} 日计划还款', monthDayValue: '每月 {n} 日', remindValue: '提前 {n} 天提醒', repaymentWindow: '账单至还款窗口',
+    cycleTitle: '账单日 → 计划还款日', statementDate: '下个账单日', plannedDueDate: '计划还款日', windowDays: '{n} 天窗口', datePending: '等待派生日期', cycleUnavailable: '服务端尚未返回完整的账单与计划还款日期', cycleAria: '账单日 {statement}，计划还款日 {due}，间隔 {days} 天，当前状态：{phase}',
+    phase: { 'before-statement': '等待出账', 'repayment-window': '还款窗口', overdue: '已过计划日', unknown: '等待计算' },
+    disclaimerTitle: '仅作计划提醒', disclaimer: 'Subly 不会读取账单、验证欠款或代你还款。日期与提醒仅依据你填写的规则和服务端派生结果，请以银行账单与官方通知为准。'
+  },
   calendar: {
-    title: '续费日历', noEvents: '本月无续费', today: '今天', prevMonth: '上个月', nextMonth: '下个月', more: '还有 {n} 项',
+    title: '续费与还款日历', noEvents: '本月无续费或计划还款事件', today: '今天', prevMonth: '上个月', nextMonth: '下个月', more: '还有 {n} 项',
     trajectory: '续费航迹', monthSignal: '本月信号', monthNavigation: '所选月份导航', todayRadar: '以今天为基准的续费风险',
     monthSummary: '所选月份共 {n} 个续费事件，预计 {amount}', monthSummaryIncomplete: '所选月份共 {n} 个续费事件；缺少 {currencies} 汇率，预计金额不完整', monthSafe: '所选月份暂无可见续费事件',
     openDayEvents: '查看 {date} 的全部 {n} 个续费事件', dayEventsTitle: '{date} 的续费事件', radarAmountIncomplete: '缺少 {currencies} 汇率'

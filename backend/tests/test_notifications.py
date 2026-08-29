@@ -163,7 +163,9 @@ def test_run_scan_rejects_non_admin(monkeypatch):
     from app import main
 
     main.app.dependency_overrides[notifications.get_current_user] = lambda: _user(is_admin=False)
-    monkeypatch.setattr(notifications.scheduler, "run_reminder_scan", lambda: {"sent": 0, "failed": 0})
+    monkeypatch.setattr(notifications.scheduler, "run_all_reminder_scans", lambda: {
+        "subscriptions": {"enqueued": 0}, "credit_cards": {"enqueued": 0}
+    })
     try:
         client = TestClient(main.app)
         assert client.post("/api/notifications/run-scan").status_code == 403
@@ -178,7 +180,12 @@ def test_run_scan_allows_admin(monkeypatch):
 
     called = {}
     main.app.dependency_overrides[notifications.get_current_user] = lambda: _user(is_admin=True)
-    monkeypatch.setattr(notifications.scheduler, "run_reminder_scan", lambda: called.update({"ran": True}) or {"sent": 0, "failed": 0})
+
+    def fake_scan():
+        called.update({"ran": True})
+        return {"subscriptions": {"enqueued": 0}, "credit_cards": {"enqueued": 0}}
+
+    monkeypatch.setattr(notifications.scheduler, "run_all_reminder_scans", fake_scan)
     try:
         client = TestClient(main.app)
         resp = client.post("/api/notifications/run-scan")

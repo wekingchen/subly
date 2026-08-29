@@ -11,7 +11,9 @@ from sqlalchemy.orm import Session
 
 from app.billing import add_cycle, is_renewal_within_end_date
 from app.config import settings
-from app.models import CalendarFeedToken, Subscription, User
+from app.credit_card_rules import due_dates_in_range
+from app.models import CalendarFeedToken, CreditCard, Subscription, User
+from app.services.credit_card_reminders import external_card_label
 from app.schemas import sanitize_url
 
 TOKEN_BYTES = 32
@@ -232,13 +234,20 @@ def build_calendar(
             Subscription.show_in_calendar.is_(True),
         )
     ).all()
+    credit_cards = db.scalars(
+        select(CreditCard).where(
+            CreditCard.user_id == user.id,
+            CreditCard.is_active.is_(True),
+            CreditCard.show_in_calendar.is_(True),
+        )
+    ).all()
 
     calendar = Calendar()
-    calendar.add("prodid", "-//Subly//Private Renewal Calendar//ZH")
+    calendar.add("prodid", "-//Subly//Private Renewal and Repayment Calendar//ZH")
     calendar.add("version", "2.0")
     calendar.add("calscale", "GREGORIAN")
     calendar.add("method", "PUBLISH")
-    calendar.add("x-wr-calname", "Subly 续费日历")
+    calendar.add("x-wr-calname", "Subly 续费与还款日历")
 
     event_count = 0
     dtstamp = datetime.now(timezone.utc)
@@ -262,6 +271,28 @@ def build_calendar(
             safe_url = sanitize_url(subscription.url)
             if safe_url:
                 event.add("url", safe_url)
+            calendar.add_component(event)
+
+    for card in credit_cards:
+        for occurrence in due_dates_in_range(window_start, window_end, card.due_day):
+            event_count += 1
+            if event_count > MAX_EVENTS:
+                raise CalendarFeedTooLarge("Feed 事件数量超过限制")
+            event = Event()
+            event.add(
+                "uid",
+                f"subly-credit-card-{user.id}-{card.id}-{occurrence:%Y%m%d}"
+                f"@{uid_namespace}.subly",
+            )
+            event.add("dtstamp", dtstamp)
+            event.add("dtstart", occurrence)
+            event.add("dtend", occurrence + timedelta(days=1))
+            event.add("summary", f"计划还款：{external_card_label(card)}")
+            event.add(
+                "description",
+                f"计划还款日：{occurrence}\n实际金额和处理状态请以银行账单为准。",
+            )
+            event.add("transp", "TRANSPARENT")
             calendar.add_component(event)
 
     return calendar.to_ical()

@@ -1,3 +1,4 @@
+import re
 from datetime import date, datetime
 from ipaddress import AddressValueError, ip_address
 from socket import inet_aton, inet_ntoa
@@ -430,6 +431,159 @@ class SubscriptionOut(BaseModel):
     amount_in_base: float | None = None
     monthly_cost_in_base: float | None = None
     base_conversion_complete: bool | None = None
+
+
+# ---------- Credit card ----------
+_PAN_LIKE_PATTERN = re.compile(r"\d(?:[\d -]*\d)?")
+_CREDIT_CARD_REQUIRED_UPDATE_FIELDS = {
+    "display_name",
+    "bank_name",
+    "statement_day",
+    "due_day",
+    "remind_days_before",
+    "is_active",
+    "show_in_calendar",
+}
+
+
+def _normalize_credit_card_name(value: str, label: str) -> str:
+    if not isinstance(value, str):
+        raise ValueError(f"{label}必须是字符串")
+    normalized = value.strip()
+    if not normalized:
+        raise ValueError(f"{label}不能为空")
+    if len(normalized) > 128:
+        raise ValueError(f"{label}不能超过 128 个字符")
+    for match in _PAN_LIKE_PATTERN.finditer(normalized):
+        digit_count = sum(char.isdigit() for char in match.group())
+        if 12 <= digit_count <= 19:
+            raise ValueError(f"{label}不能包含疑似完整卡号")
+    return normalized
+
+
+def _normalize_last_four(value: str | None) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError("卡号尾号必须是字符串")
+    normalized = value.strip()
+    if not normalized:
+        return None
+    if len(normalized) != 4 or not normalized.isascii() or not normalized.isdigit():
+        raise ValueError("卡号尾号必须是 4 位数字")
+    return normalized
+
+
+def _normalize_remind_days(value) -> list[int]:
+    if not isinstance(value, list):
+        raise ValueError("提醒天数必须是整数数组")
+    if any(isinstance(item, bool) or not isinstance(item, int) for item in value):
+        raise ValueError("提醒天数必须是整数数组")
+    if any(item < 0 or item > 30 for item in value):
+        raise ValueError("提醒天数必须在 0 至 30 之间")
+    normalized = sorted(set(value), reverse=True)
+    if len(normalized) > 8:
+        raise ValueError("提醒天数最多 8 项")
+    return normalized
+
+
+class CreditCardIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    display_name: str
+    bank_name: str
+    last_four: str | None = None
+    statement_day: int = Field(ge=1, le=31, strict=True)
+    due_day: int = Field(ge=1, le=31, strict=True)
+    remind_days_before: list[int] = Field(default_factory=lambda: [7, 3, 1, 0])
+    is_active: bool = True
+    show_in_calendar: bool = True
+
+    @field_validator("display_name", mode="before")
+    @classmethod
+    def _validate_display_name(cls, value):
+        return _normalize_credit_card_name(value, "卡片名称")
+
+    @field_validator("bank_name", mode="before")
+    @classmethod
+    def _validate_bank_name(cls, value):
+        return _normalize_credit_card_name(value, "银行名称")
+
+    @field_validator("last_four", mode="before")
+    @classmethod
+    def _validate_last_four(cls, value):
+        return _normalize_last_four(value)
+
+    @field_validator("remind_days_before", mode="before")
+    @classmethod
+    def _validate_remind_days(cls, value):
+        return _normalize_remind_days(value)
+
+
+class CreditCardUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    display_name: str | None = None
+    bank_name: str | None = None
+    last_four: str | None = None
+    statement_day: int | None = Field(default=None, ge=1, le=31, strict=True)
+    due_day: int | None = Field(default=None, ge=1, le=31, strict=True)
+    remind_days_before: list[int] | None = None
+    is_active: bool | None = None
+    show_in_calendar: bool | None = None
+
+    @field_validator("display_name", mode="before")
+    @classmethod
+    def _validate_display_name(cls, value):
+        if value is None:
+            return None
+        return _normalize_credit_card_name(value, "卡片名称")
+
+    @field_validator("bank_name", mode="before")
+    @classmethod
+    def _validate_bank_name(cls, value):
+        if value is None:
+            return None
+        return _normalize_credit_card_name(value, "银行名称")
+
+    @field_validator("last_four", mode="before")
+    @classmethod
+    def _validate_last_four(cls, value):
+        return _normalize_last_four(value)
+
+    @field_validator("remind_days_before", mode="before")
+    @classmethod
+    def _validate_remind_days(cls, value):
+        if value is None:
+            return None
+        return _normalize_remind_days(value)
+
+    @model_validator(mode="after")
+    def _reject_null_required_fields(self):
+        for field in self.model_fields_set & _CREDIT_CARD_REQUIRED_UPDATE_FIELDS:
+            if getattr(self, field) is None:
+                raise ValueError(f"{field} 不能为空")
+        return self
+
+
+class CreditCardOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    display_name: str
+    bank_name: str
+    last_four: str | None
+    statement_day: int
+    due_day: int
+    remind_days_before: list[int]
+    is_active: bool
+    show_in_calendar: bool
+    created_at: datetime
+    updated_at: datetime
+    next_statement_date: date
+    next_due_date: date
+    days_until_due: int
+    statement_to_due_days: int
 
 
 # ---------- Bundle ----------

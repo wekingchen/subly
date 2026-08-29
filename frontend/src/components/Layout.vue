@@ -98,6 +98,7 @@ const navGroups = computed(() => {
       items: [
         { to: '/dashboard', key: 'dashboard', label: 'nav.dashboard' },
         { to: '/subscriptions', key: 'subscriptions', label: 'nav.subscriptions' },
+        { to: '/credit-cards', key: 'creditCards', label: 'nav.creditCards' },
         { to: '/calendar', key: 'calendar', label: 'nav.calendar' },
         { to: '/reports', key: 'reports', label: 'nav.reports' }
       ]

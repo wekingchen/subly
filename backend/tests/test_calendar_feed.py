@@ -6,14 +6,21 @@ from urllib.parse import parse_qs, urlparse
 import pytest
 from fastapi.testclient import TestClient
 from icalendar import Calendar
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine, select, text
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app import main
 from app.database import Base, get_db
 from app.deps import get_current_user
-from app.models import CalendarFeedToken, Subscription, User
+from app.models import (
+    CalendarFeedToken,
+    CreditCard,
+    CreditCardNotificationLog,
+    CreditCardNotificationOutbox,
+    Subscription,
+    User,
+)
 from app.routers import admin, backup, calendar_feed as calendar_feed_router
 from app.services import calendar_feed
 
@@ -342,9 +349,10 @@ def test_feed_token_is_excluded_from_user_backup():
         engine.dispose()
 
 
-def test_admin_delete_user_removes_calendar_feed_token(monkeypatch):
+def test_admin_delete_user_removes_calendar_feed_and_credit_card_dependencies(monkeypatch):
     db, engine = make_db()
     try:
+        db.execute(text("PRAGMA foreign_keys=ON"))
         admin_user = add_user(
             db,
             username="admin",
@@ -352,15 +360,85 @@ def test_admin_delete_user_removes_calendar_feed_token(monkeypatch):
             is_admin=True,
         )
         target = add_user(db, username="target", email="target@example.com")
-        db.add(
+        target_card = CreditCard(
+            user_id=target.id,
+            display_name="待删除卡",
+            bank_name="示例银行",
+            last_four="1234",
+            statement_day=5,
+            due_day=25,
+            remind_days_before=[7, 1],
+            is_active=True,
+            show_in_calendar=True,
+        )
+        admin_card = CreditCard(
+            user_id=admin_user.id,
+            display_name="保留卡",
+            bank_name="示例银行",
+            last_four="5678",
+            statement_day=6,
+            due_day=26,
+            remind_days_before=[7, 1],
+            is_active=True,
+            show_in_calendar=True,
+        )
+        db.add_all([
             CalendarFeedToken(
                 user_id=target.id,
                 token_hash="b" * 64,
                 uid_namespace="b" * 32,
-            )
+            ),
+            target_card,
+            admin_card,
+        ])
+        db.flush()
+        target_outbox = CreditCardNotificationOutbox(
+            credit_card_id=target_card.id,
+            user_id=target.id,
+            business_date=date(2026, 8, 29),
+            due_date=date(2026, 9, 5),
+            days_before=7,
+            channel="webhook",
+            status="sent",
+            credit_card_name=target_card.display_name,
+            payload={},
         )
+        admin_outbox = CreditCardNotificationOutbox(
+            credit_card_id=admin_card.id,
+            user_id=admin_user.id,
+            business_date=date(2026, 8, 29),
+            due_date=date(2026, 9, 6),
+            days_before=8,
+            channel="webhook",
+            status="sent",
+            credit_card_name=admin_card.display_name,
+            payload={},
+        )
+        db.add_all([target_outbox, admin_outbox])
+        db.flush()
+        db.add_all([
+            CreditCardNotificationLog(
+                credit_card_id=target_card.id,
+                user_id=target.id,
+                outbox_id=target_outbox.id,
+                attempt_no=1,
+                days_before=7,
+                channel="webhook",
+                status="sent",
+            ),
+            CreditCardNotificationLog(
+                credit_card_id=admin_card.id,
+                user_id=admin_user.id,
+                outbox_id=admin_outbox.id,
+                attempt_no=1,
+                days_before=8,
+                channel="webhook",
+                status="sent",
+            ),
+        ])
         db.commit()
         target_id = target.id
+        admin_card_id = admin_card.id
         monkeypatch.setattr(admin.activity, "log", lambda *args, **kwargs: None)
 
         admin.delete_user(target_id, admin=admin_user, db=db)
@@ -369,6 +447,20 @@ def test_admin_delete_user_removes_calendar_feed_token(monkeypatch):
         assert db.scalar(
             select(CalendarFeedToken).where(CalendarFeedToken.user_id == target_id)
         ) is None
+        assert db.scalar(
+            select(CreditCardNotificationLog).where(
+                CreditCardNotificationLog.user_id == target_id
+            )
+        ) is None
+        assert db.scalar(
+            select(CreditCardNotificationOutbox).where(
+                CreditCardNotificationOutbox.user_id == target_id
+            )
+        ) is None
+        assert db.scalar(
+            select(CreditCard).where(CreditCard.user_id == target_id)
+        ) is None
+        assert db.get(CreditCard, admin_card_id) is not None
     finally:
         db.close()
         engine.dispose()

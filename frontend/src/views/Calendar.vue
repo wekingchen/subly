@@ -6,7 +6,7 @@
       :state="dataState"
       :trust="dataState === 'stale' ? 'stale' : 'unknown'"
       :compact="dataState === 'refreshing' || dataState === 'stale'"
-      error-title="续费日历加载失败"
+      error-title="续费与还款日历加载失败"
       stale-title="刷新失败，当前显示上次加载的日历"
       @retry="reload"
     />
@@ -43,14 +43,15 @@
              :class="[{ out: !cell.inMonth, today: cell.isToday, active: cell.events.length }, groupStatus(cell.events)]">
           <div class="dnum"><span class="num mono-data">{{ cell.day }}</span></div>
           <div class="evs">
-            <div v-for="ev in cell.events.slice(0, 3)" :key="ev.id" class="ev clickable"
-                 :class="statusOf(ev)" :style="{ '--c': evColor(ev) }" :title="ev.name"
-                 role="button" tabindex="0" :aria-label="ev.name"
-                 @click="openDetail(ev)" @keydown="onItemKeydown($event, ev)">
+            <button v-for="ev in cell.events.slice(0, 3)" :key="ev.key || ev.id" type="button" class="ev clickable"
+                    :class="statusOf(ev)" :style="{ '--c': evColor(ev) }" :title="ev.name"
+                    :aria-label="`${ev.sourceLabel}：${ev.name}`"
+                    @click="openDetail(ev)">
               <span class="ev-dot"></span>
-              <ServiceIcon :src="ev.icon" :name="ev.name" :fallback="emojiOf(ev)" class="ev-ico" />
+              <ServiceIcon :src="ev.icon" :name="ev.name" :fallback="fallbackEmoji(ev)" class="ev-ico" />
               <span class="ev-name">{{ ev.name }}</span>
-            </div>
+              <span class="source-label">{{ ev.sourceLabel }}</span>
+            </button>
             <button v-if="cell.events.length > 3" class="ev more" type="button"
                     :aria-label="t('calendar.openDayEvents', { date: cell.key, n: cell.events.length })"
                     @click="openDayEvents(cell)">
@@ -67,15 +68,15 @@
             <span class="ag-date">{{ d.label }}</span>
             <span class="ag-count mono-data">{{ d.events.length }}</span>
           </div>
-          <div v-for="ev in d.events" :key="ev.id" class="ag-ev clickable" :class="statusOf(ev)"
-               :style="{ '--c': evColor(ev) }"
-               role="button" tabindex="0" :aria-label="ev.name"
-               @click="openDetail(ev)" @keydown="onItemKeydown($event, ev)">
+          <button v-for="ev in d.events" :key="ev.key || ev.id" type="button" class="ag-ev clickable" :class="statusOf(ev)"
+                  :style="{ '--c': evColor(ev) }" :aria-label="`${ev.sourceLabel}：${ev.name}`"
+                  @click="openDetail(ev)">
             <span class="ag-signal"></span>
-            <ServiceIcon :src="ev.icon" :name="ev.name" :fallback="emojiOf(ev)" class="ag-ico" />
+            <ServiceIcon :src="ev.icon" :name="ev.name" :fallback="fallbackEmoji(ev)" class="ag-ico" />
             <span class="ag-name">{{ ev.name }}</span>
-            <MoneyText v-if="ev.amount" class="ag-amt" :value="ev.amount" :currency="ev.currency" position="suffix" muted />
-          </div>
+            <span class="source-label">{{ ev.sourceLabel }}</span>
+            <MoneyText v-if="ev.kind === 'subscription' && ev.amount" class="ag-amt" :value="ev.amount" :currency="ev.currency" position="suffix" muted />
+          </button>
         </div>
         <div v-if="!agendaDays.length" class="ag-empty muted">{{ t('calendar.noEvents') }}</div>
       </div>
@@ -83,16 +84,23 @@
 
     <AppModal v-model="showDayEvents" :title="dayEventsTitle" width="560px" :close-label="t('common.close')" @close="closeDayEvents">
       <div class="day-events-list">
-        <button v-for="ev in dayEvents" :key="ev.id" type="button" class="day-event" @click="openDayEventDetail(ev)">
-          <ServiceIcon :src="ev.icon" :name="ev.name" :fallback="emojiOf(ev)" class="day-event-ico" />
+        <button v-for="ev in dayEvents" :key="ev.key || ev.id" type="button" class="day-event" @click="openDayEventDetail(ev)">
+          <ServiceIcon :src="ev.icon" :name="ev.name" :fallback="fallbackEmoji(ev)" class="day-event-ico" />
           <span class="day-event-main">
             <strong>{{ ev.name }}</strong>
-            <span class="muted">{{ ev.occurrence_date }}</span>
+            <span class="muted">{{ ev.sourceLabel }} · {{ ev.occurrence_date }}</span>
           </span>
-          <MoneyText v-if="ev.amount" :value="ev.amount" :currency="ev.currency" position="suffix" muted />
+          <MoneyText v-if="ev.kind === 'subscription' && ev.amount" :value="ev.amount" :currency="ev.currency" position="suffix" muted />
         </button>
       </div>
     </AppModal>
+
+    <CreditCardDetailModal
+      v-if="creditCardDetailTarget"
+      :card="creditCardDetailTarget"
+      @close="creditCardDetailTarget = null"
+      @edit="goToCreditCard"
+    />
 
     <!-- 订阅详情弹窗：详情/续费/编辑/删除一律基于原始订阅（点击的是周期展开后的 occurrence） -->
     <AppModal v-model="showDetail" :title="detailTarget?.name" width="640px" :close-label="t('common.close')" @close="closeDetail">
@@ -163,6 +171,7 @@
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { useRouter } from 'vue-router'
 import api from '../api'
 import AppModal from '../components/AppModal.vue'
 import AppToastRegion from '../components/AppToastRegion.vue'
@@ -175,6 +184,7 @@ import DeleteSubscriptionModal from '../components/subscriptions/DeleteSubscript
 import RenewSubscriptionModal from '../components/subscriptions/RenewSubscriptionModal.vue'
 import SubscriptionCardDetails from '../components/subscriptions/SubscriptionCardDetails.vue'
 import SubscriptionFormModal from '../components/subscriptions/SubscriptionFormModal.vue'
+import CreditCardDetailModal from '../components/credit-cards/CreditCardDetailModal.vue'
 import { useAuth } from '../stores/auth'
 import { useBodyLock } from '../composables/useBodyLock'
 import { useSubscriptionActions } from '../composables/useSubscriptionActions'
@@ -183,16 +193,23 @@ import { toISODate } from '../utils/date'
 import { useDataRequest } from '../utils/dataRequest'
 import { emojiOf } from '../utils/icon'
 import { amountOf, baseAmountOf, formatMoney, hasBaseEquivalent } from '../utils/money'
-import { buildRenewalRadarEvents, expandRenewalsInRange, groupRenewalEventsByDate } from '../utils/recurrence'
-import { groupRenewalStatus, radarBucket as renewalRadarBucket, renewalStatus } from '../utils/renewal'
+import { buildRenewalRadarEvents } from '../utils/recurrence'
+import {
+  creditCardCalendarEvents,
+  groupCalendarEventsByDate,
+  subscriptionCalendarEvents
+} from '../utils/calendarEvents'
+import { radarBucket as renewalRadarBucket, renewalStatus } from '../utils/renewal'
 
 const { t } = useI18n()
+const router = useRouter()
 const auth = useAuth()
 const now = new Date()
 const year = ref(now.getFullYear())
 const month = ref(now.getMonth())
 const dataRequest = useDataRequest({ initialData: [] })
 const subs = dataRequest.data
+const creditCards = ref([])
 const dataState = computed(() => dataRequest.state())
 const hasLoaded = dataRequest.hasLoaded
 const cats = ref([])
@@ -207,8 +224,19 @@ const PALETTE = ['#5b5bd6', '#06b6d4', '#16a34a', '#f59e0b', '#ef4444', '#a855f7
 const STATUS_COLORS = { overdue: '#ef4444', soon: '#f59e0b' }
 const cur = computed(() => auth.user?.base_currency || 'CNY')
 function fmt(v) { return formatMoney(v, cur.value) }
-function statusOf(s) { return renewalStatus(s, { emptyStatus: 'ok' }) }
-function groupStatus(events) { return groupRenewalStatus(events, { emptyStatus: '' }) }
+function statusOf(event) {
+  return renewalStatus(event, { emptyStatus: 'ok', field: 'occurrence_date' })
+}
+function groupStatus(events) {
+  if (!events?.length) return ''
+  const statuses = events.map(statusOf)
+  if (statuses.includes('overdue')) return 'overdue'
+  if (statuses.includes('soon')) return 'soon'
+  return 'ok'
+}
+function fallbackEmoji(event) {
+  return event.kind === 'credit_card' ? '💳' : emojiOf(event)
+}
 function evColor(s) {
   const st = statusOf(s)
   if (STATUS_COLORS[st]) return STATUS_COLORS[st]
@@ -247,9 +275,12 @@ const cells = computed(() => {
   }
   // 若最后一整行都不属于本月则去掉（保持 5~6 行紧凑）
   const visibleDates = dates.slice(35).every((d) => d.getMonth() !== month.value) ? dates.slice(0, 35) : dates
-  const eventsByDate = groupRenewalEventsByDate(
-    expandRenewalsInRange(subs.value, visibleDates[0], visibleDates[visibleDates.length - 1])
-  )
+  const startDate = visibleDates[0]
+  const endDate = visibleDates[visibleDates.length - 1]
+  const eventsByDate = groupCalendarEventsByDate([
+    ...subscriptionCalendarEvents(subs.value, startDate, endDate),
+    ...creditCardCalendarEvents(creditCards.value, startDate, endDate)
+  ])
 
   return visibleDates.map((d) => {
     const key = toISODate(d)
@@ -299,15 +330,18 @@ const heroStatus = computed(() => {
   if (radarRaw.value.find((b) => b.key === 'd3')?.count || radarRaw.value.find((b) => b.key === 'd7')?.count) return 'soon'
   return 'ok'
 })
-const monthAmount = computed(() => visibleEvents.value.reduce((n, s) => n + amountOf(s), 0))
+const subscriptionEvents = computed(() => visibleEvents.value.filter((event) => event.kind === 'subscription'))
+const monthAmount = computed(() => subscriptionEvents.value.reduce((n, s) => n + amountOf(s), 0))
 const missingAmountCurrencies = computed(() => [...new Set(
-  visibleEvents.value
+  subscriptionEvents.value
     .filter((s) => baseAmountOf(s) === null)
     .map((s) => s.currency)
     .filter(Boolean)
 )].join('、'))
 const calendarSummary = computed(() => {
   if (!visibleEvents.value.length) return t('calendar.monthSafe')
+  const creditCardCount = visibleEvents.value.filter((event) => event.kind === 'credit_card').length
+  if (!subscriptionEvents.value.length) return `本月有 ${creditCardCount} 个信用卡计划还款日。`
   if (missingAmountCurrencies.value) {
     return t('calendar.monthSummaryIncomplete', {
       n: visibleEvents.value.length,
@@ -336,9 +370,14 @@ let auxiliaryRequestId = 0
 async function reload() {
   const requestId = ++auxiliaryRequestId
   // 核心订阅数据独立写入并立即 resolve：不让辅助元数据请求拖累 safeReload 的 busy 周期。
-  await dataRequest.run(async () => (
-    await api.get('/api/subscriptions', { params: { billing_type: 'recurring', active: true } })
-  ).data)
+  await dataRequest.run(async () => {
+    const [subscriptionsResponse, creditCardsResponse] = await Promise.all([
+      api.get('/api/subscriptions', { params: { billing_type: 'recurring', active: true } }),
+      api.get('/api/credit-cards')
+    ])
+    creditCards.value = creditCardsResponse.data || []
+    return subscriptionsResponse.data
+  })
   // 辅助元数据（分类/付款方式/捆绑包/币种/图标库）后台并行拉取，各自成功即写入，失败保留旧值。
   Promise.allSettled([
     api.get('/api/categories'),
@@ -382,21 +421,24 @@ function openDayEventDetail(ev) {
   openDetail(ev)
 }
 const detailId = ref(null)
+const creditCardDetailTarget = ref(null)
 const showDetail = computed({
   get: () => detailId.value !== null,
   set: (v) => { if (!v) detailId.value = null }
 })
-function openDetail(ev) {
-  detailId.value = originOf(ev)
+function openDetail(event) {
+  if (event.kind === 'credit_card') {
+    creditCardDetailTarget.value = event.raw || creditCards.value.find((card) => card.id === event.sourceId) || null
+    return
+  }
+  detailId.value = originOf(event)
 }
 function closeDetail() {
   detailId.value = null
 }
-function onItemKeydown(e, ev) {
-  if (e.key === 'Enter' || e.key === ' ') {
-    e.preventDefault()
-    openDetail(ev)
-  }
+function goToCreditCard() {
+  creditCardDetailTarget.value = null
+  router.push('/credit-cards')
 }
 const detailTarget = computed(() => {
   if (detailId.value === null) return null
@@ -455,7 +497,7 @@ const {
 
 // 统一汇总日历页 overlay 状态，交给引用计数式 body lock 管理。
 const calendarOverlays = computed(() =>
-  showDayEvents.value || showDetail.value || showForm.value || !!renewTarget.value || !!delTarget.value
+  showDayEvents.value || showDetail.value || !!creditCardDetailTarget.value || showForm.value || !!renewTarget.value || !!delTarget.value
 )
 useBodyLock(calendarOverlays, 'calendar-overlays')
 
@@ -526,7 +568,7 @@ onMounted(async () => {
   border: 1px solid color-mix(in srgb, var(--signal-cyan) 42%, var(--border)); font-weight: 800;
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--signal-cyan) 12%, transparent); }
 .evs { display: flex; flex-direction: column; gap: 3px; margin-top: 3px; overflow: hidden; }
-.ev { display: flex; align-items: center; gap: 4px; font-size: 11px; color: var(--text);
+.ev { width: 100%; display: flex; align-items: center; gap: 4px; font: inherit; font-size: 11px; color: var(--text); text-align: left;
   background: color-mix(in srgb, var(--c) 12%, transparent); border: 1px solid color-mix(in srgb, var(--c) 26%, transparent);
   border-radius: 7px; padding: 2px 5px; white-space: nowrap; overflow: hidden; }
 .ev.soon { background: color-mix(in srgb, var(--warning) 12%, transparent); border-color: color-mix(in srgb, var(--warning) 28%, transparent); }
@@ -534,7 +576,8 @@ onMounted(async () => {
 .ev-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--c); flex-shrink: 0; box-shadow: 0 0 0 2px color-mix(in srgb, var(--c) 12%, transparent); }
 .ev-ico { width: 13px; height: 13px; border-radius: 3px; object-fit: contain; flex-shrink: 0; }
 .ev-emoji { font-size: 12px; flex-shrink: 0; line-height: 1; }
-.ev-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ev-name { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.source-label { flex: 0 0 auto; padding: 1px 5px; border: 1px solid color-mix(in srgb, var(--text-soft) 28%, transparent); border-radius: 999px; color: var(--text-soft); font-size: 9px; line-height: 1.4; }
 .ev.more { width: 100%; background: transparent; border-color: transparent; color: var(--text-soft); padding: 0 5px; cursor: pointer; text-align: left; }
 .ev.more:hover { color: var(--primary); }
 .day-events-list { display: flex; flex-direction: column; gap: 8px; }
@@ -586,14 +629,14 @@ onMounted(async () => {
   .ag-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 8px; }
   .ag-date { font-weight: 700; overflow-wrap: anywhere; }
   .ag-count { background: var(--surface-2); color: var(--text-soft); border-radius: 999px; padding: 2px 8px; font-size: 12px; }
-  .ag-ev { display: grid; grid-template-columns: auto auto minmax(0, 1fr); align-items: center; gap: 8px; min-height: 44px; border-radius: 10px; padding: 6px 8px;
+  .ag-ev { width: 100%; display: grid; grid-template-columns: auto auto minmax(0, 1fr) auto; align-items: center; gap: 8px; min-height: 44px; border: 0; border-radius: 10px; padding: 6px 8px; color: var(--text); font: inherit; text-align: left;
     border-left: 3px solid color-mix(in srgb, var(--c) 55%, transparent); background: color-mix(in srgb, var(--c) 10%, transparent); }
   .ag-ev.soon { border-left-color: var(--warning-text); background: color-mix(in srgb, var(--warning) 10%, transparent); }
   .ag-ev.overdue { border-left-color: var(--danger-text); background: color-mix(in srgb, var(--danger) 10%, transparent); }
   .ag-signal { width: 8px; height: 8px; border-radius: 999px; background: var(--c); flex-shrink: 0; box-shadow: 0 0 0 3px color-mix(in srgb, var(--c) 12%, transparent); }
   .ag-ico { width: 24px; height: 24px; border-radius: 6px; object-fit: contain; flex-shrink: 0; }
   .ag-name { min-width: 0; font-weight: 600; white-space: normal; line-height: 1.35; overflow-wrap: anywhere; }
-  .ag-amt { grid-column: 3; font-size: 12px; white-space: normal; overflow-wrap: anywhere; }
+  .ag-amt { grid-column: 3 / 5; font-size: 12px; white-space: normal; overflow-wrap: anywhere; }
   .ag-empty { padding: 28px 10px; text-align: center; }
   .month { font-size: 20px; }
   /* 详情弹窗底部三按钮：移动端横向等分紧凑排列，与雷达页一致 */

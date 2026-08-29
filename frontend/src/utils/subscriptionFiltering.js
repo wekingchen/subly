@@ -26,10 +26,11 @@ export function filterSubscriptions(items, filters = {}, options = {}) {
 
     if (risk) {
       if (item.billing_type !== 'recurring' || item.is_active === false || item.is_paused === true) return false
-      const today = parseLocalDate(options.today || new Date())
+      const today = parseLocalDate(options.today || options.now || new Date())
       const endDate = parseLocalDate(item.end_date)
       if (today && endDate && endDate < new Date(today.getFullYear(), today.getMonth(), today.getDate())) return false
-      if (renewalStatus(item, options) !== risk) return false
+      // daysLeft 只认 options.now；today 必须显式映射，否则风险判定会静默改用真实日期。
+      if (renewalStatus(item, { ...options, now: today }) !== risk) return false
     }
 
     return true

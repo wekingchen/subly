@@ -21,10 +21,10 @@ test('路由标题、主标题和焦点随导航更新', async ({ page }) => {
   await expect(page.locator('#main-content h1')).toHaveText('订阅账本')
   await expect(page.locator('#main-content h1')).toBeFocused()
 
-  await page.getByRole('link', { name: '续费日历' }).click()
-  await expect(page).toHaveTitle('续费日历 · Subly')
+  await page.getByRole('link', { name: '续费与还款日历' }).click()
+  await expect(page).toHaveTitle('续费与还款日历 · Subly')
   const calendarHeading = page.locator('#main-content h1')
-  await expect(calendarHeading).toHaveText('续费日历')
+  await expect(calendarHeading).toHaveText('续费与还款日历')
   await expect(calendarHeading).toBeFocused()
   const headingRect = await calendarHeading.evaluate((element) => {
     const rect = element.getBoundingClientRect()

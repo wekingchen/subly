@@ -43,6 +43,19 @@
     <section class="queue-section" aria-label="通知投递队列">
       <div class="queue-toolbar">
         <div class="filter-label">{{ t('notify.filterLabel') }}</div>
+        <div class="filter-row source-filter" aria-label="通知来源筛选">
+          <button
+            v-for="option in sourceOptions"
+            :key="option.value"
+            type="button"
+            class="filter-btn"
+            :class="{ active: kindFilter === option.value }"
+            :aria-pressed="kindFilter === option.value"
+            @click="kindFilter = option.value"
+          >
+            {{ option.label }}
+          </button>
+        </div>
         <div class="filter-row">
           <button
             v-for="option in filterOptions"
@@ -64,7 +77,7 @@
       <div v-else-if="visibleItems.length" class="queue-list">
         <article
           v-for="item in visibleItems"
-          :key="item.id"
+          :key="item.key"
           class="card delivery-card"
           :class="`state-${item.status}`"
         >
@@ -79,10 +92,11 @@
                   <span class="status-chip" :class="`status-${item.status}`">
                     {{ statusLabel(item.status) }}
                   </span>
+                  <span class="tag source">{{ item.kind === 'credit_card' ? '信用卡' : '订阅' }}</span>
                   <span class="tag chan">{{ channelLabel(item.channel) }}</span>
                   <span class="delivery-id mono-data">#{{ item.id }}</span>
                 </div>
-                <h2>{{ item.subscription_name }}</h2>
+                <h2>{{ item.source_name }}</h2>
               </div>
               <div class="delivery-time">
                 <span>{{ t('notify.createdAt') }}</span>
@@ -96,8 +110,8 @@
                 <dd>{{ formatDaysBefore(item.days_before) }}</dd>
               </div>
               <div>
-                <dt>{{ t('notify.renewalDate') }}</dt>
-                <dd class="mono-data">{{ item.renewal_date }}</dd>
+                <dt>{{ item.event_label }}</dt>
+                <dd class="mono-data">{{ item.event_date }}</dd>
               </div>
               <div>
                 <dt>{{ t('notify.attempts') }}</dt>
@@ -118,32 +132,32 @@
               <button
                 type="button"
                 class="text-action"
-                :aria-expanded="expandedId === item.id"
-                :aria-controls="`attempts-${item.id}`"
+                :aria-expanded="expandedId === item.key"
+                :aria-controls="`attempts-${item.kind}-${item.id}`"
                 @click="toggleAttempts(item)"
               >
                 {{ t('notify.attemptHistory') }}
-                <span aria-hidden="true">{{ expandedId === item.id ? '−' : '+' }}</span>
+                <span aria-hidden="true">{{ expandedId === item.key ? '−' : '+' }}</span>
               </button>
               <button
                 v-if="canRetry(item)"
                 type="button"
                 class="btn retry-btn"
-                :disabled="isRetrying(item.id)"
+                :disabled="isRetrying(item.key)"
                 @click="retry(item)"
               >
-                {{ isRetrying(item.id) ? t('notify.retrying') : t('notify.retry') }}
+                {{ isRetrying(item.key) ? t('notify.retrying') : t('notify.retry') }}
               </button>
             </div>
 
             <div
-              v-if="expandedId === item.id"
-              :id="`attempts-${item.id}`"
+              v-if="expandedId === item.key"
+              :id="`attempts-${item.kind}-${item.id}`"
               class="attempt-panel"
             >
-              <p v-if="attemptLoadingId === item.id" class="muted">正在加载尝试记录…</p>
-              <ol v-else-if="attempts[item.id]?.length" class="attempt-list">
-                <li v-for="attempt in attempts[item.id]" :key="attempt.id">
+              <p v-if="attemptLoadingId === item.key" class="muted">正在加载尝试记录…</p>
+              <ol v-else-if="attempts[item.key]?.length" class="attempt-list">
+                <li v-for="attempt in attempts[item.key]" :key="attempt.id">
                   <div>
                     <b>{{ attemptLabel(attempt) }}</b>
                     <span class="attempt-status" :class="attempt.status">
@@ -193,6 +207,7 @@ const items = ref([])
 const summary = ref({})
 const timezone = ref('Asia/Shanghai')
 const filter = ref('all')
+const kindFilter = ref('all')
 const loading = ref(true)
 const moreLoading = ref(false)
 const hasMore = ref(false)
@@ -213,6 +228,12 @@ const visibleItems = computed(() => (
     ? items.value
     : items.value.filter((item) => item.status === filter.value)
 ))
+
+const sourceOptions = [
+  { value: 'all', label: '全部来源' },
+  { value: 'subscription', label: '订阅' },
+  { value: 'credit_card', label: '信用卡' }
+]
 
 const filterOptions = computed(() => [
   { value: 'all', label: t('notify.total'), count: summary.value.total || 0 },
@@ -266,6 +287,7 @@ function isRetrying(id) {
 async function load({ append = false } = {}) {
   const generation = ++loadGeneration
   const requestedFilter = filter.value
+  const requestedKind = kindFilter.value
   const cursor = append ? nextCursor.value : null
   if (append) moreLoading.value = true
   else {
@@ -275,19 +297,25 @@ async function load({ append = false } = {}) {
   try {
     const params = { limit: 50 }
     if (requestedFilter !== 'all') params.status = requestedFilter
+    if (requestedKind !== 'all') params.kind = requestedKind
     if (cursor) {
       params.before_created_at = cursor.created_at
+      params.before_kind = cursor.kind
       params.before_id = cursor.id
     }
     const [outboxResponse, systemResponse] = await Promise.all([
-      api.get('/api/notifications/outbox', { params }),
+      api.get('/api/notifications/deliveries', { params }),
       api.get('/api/system/info')
     ])
-    if (generation !== loadGeneration || requestedFilter !== filter.value) return
+    if (
+      generation !== loadGeneration ||
+      requestedFilter !== filter.value ||
+      requestedKind !== kindFilter.value
+    ) return
     const page = outboxResponse.data.items || []
     if (append) {
-      const existingIds = new Set(items.value.map((item) => item.id))
-      items.value = [...items.value, ...page.filter((item) => !existingIds.has(item.id))]
+      const existingKeys = new Set(items.value.map((item) => item.key))
+      items.value = [...items.value, ...page.filter((item) => !existingKeys.has(item.key))]
     } else {
       items.value = page
     }
@@ -311,10 +339,10 @@ function loadMore() {
   if (!moreLoading.value && hasMore.value) load({ append: true })
 }
 
-async function refreshRow(id) {
+async function refreshRow(item) {
   try {
-    const row = (await api.get(`/api/notifications/outbox/${id}`)).data
-    const index = items.value.findIndex((item) => item.id === id)
+    const row = (await api.get(`/api/notifications/deliveries/${item.kind}/${item.id}`)).data
+    const index = items.value.findIndex((current) => current.key === item.key)
     if (index >= 0) {
       const previous = items.value[index]
       if (previous.status !== row.status) {
@@ -339,11 +367,18 @@ async function runScan() {
   message.value = ''
   try {
     const result = (await api.post('/api/notifications/run-scan')).data
-    messageOk.value = true
-    message.value = t('notify.scanDone', {
-      enqueued: result.enqueued || 0,
-      existing: result.existing || 0
-    })
+    const subscriptionResult = result.subscriptions || {}
+    const creditCardResult = result.credit_cards || {}
+    // 任一类扫描失败时后端仍返回 200（单类失败不短路另一类），前端必须响亮呈现部分失败。
+    const failedKinds = [
+      ['订阅', subscriptionResult],
+      ['信用卡', creditCardResult]
+    ].filter(([, item]) => item?.error).map(([label]) => label)
+    messageOk.value = failedKinds.length === 0
+    const enqueuedText = `订阅新入队 ${subscriptionResult.enqueued || 0} 条，信用卡新入队 ${creditCardResult.enqueued || 0} 条`
+    message.value = failedKinds.length
+      ? `扫描部分失败（${failedKinds.join('、')}扫描出错，已记录服务端日志）：${enqueuedText}。`
+      : `扫描完成：${enqueuedText}。`
     await load()
   } catch (error) {
     messageOk.value = false
@@ -354,44 +389,44 @@ async function runScan() {
 }
 
 async function retry(item) {
-  if (isRetrying(item.id)) return
-  retryingIds.value = new Set([...retryingIds.value, item.id])
+  if (isRetrying(item.key)) return
+  retryingIds.value = new Set([...retryingIds.value, item.key])
   message.value = ''
   try {
-    await api.post(`/api/notifications/outbox/${item.id}/retry`)
-    await refreshRow(item.id)
+    await api.post(`/api/notifications/deliveries/${item.kind}/${item.id}/retry`)
+    await refreshRow(item)
     messageOk.value = true
     message.value = t('notify.retryQueued')
   } catch (error) {
-    if (error.response?.status === 409) await refreshRow(item.id)
+    if (error.response?.status === 409) await refreshRow(item)
     messageOk.value = false
     message.value = error.response?.data?.detail || t('common.networkError')
   } finally {
     const next = new Set(retryingIds.value)
-    next.delete(item.id)
+    next.delete(item.key)
     retryingIds.value = next
   }
 }
 
 async function toggleAttempts(item) {
-  if (expandedId.value === item.id) {
+  if (expandedId.value === item.key) {
     expandedId.value = null
     return
   }
-  expandedId.value = item.id
-  if (attempts.value[item.id]) return
-  attemptLoadingId.value = item.id
+  expandedId.value = item.key
+  if (attempts.value[item.key]) return
+  attemptLoadingId.value = item.key
   try {
-    const data = (await api.get(`/api/notifications/outbox/${item.id}/attempts`)).data
-    attempts.value = { ...attempts.value, [item.id]: data }
+    const data = (await api.get(`/api/notifications/deliveries/${item.kind}/${item.id}/attempts`)).data
+    attempts.value = { ...attempts.value, [item.key]: data }
   } catch {
-    attempts.value = { ...attempts.value, [item.id]: [] }
+    attempts.value = { ...attempts.value, [item.key]: [] }
   } finally {
     attemptLoadingId.value = null
   }
 }
 
-watch(filter, () => {
+watch([filter, kindFilter], () => {
   expandedId.value = null
   attempts.value = {}
   load()

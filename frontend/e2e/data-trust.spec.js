@@ -21,7 +21,7 @@ test('核心页面不会把首次请求失败伪装成空数据', async ({ page 
 
   for (const target of [
     { path: '/dashboard', endpoint: '**/api/dashboard', title: '雷达总览加载失败' },
-    { path: '/calendar', endpoint: '**/api/subscriptions?billing_type=recurring&active=true', title: '续费日历加载失败' },
+    { path: '/calendar', endpoint: '**/api/subscriptions?billing_type=recurring&active=true', title: '续费与还款日历加载失败' },
     { path: '/subscriptions', endpoint: '**/api/subscriptions', title: '订阅账本加载失败' },
     { path: '/reports', endpoint: '**/api/reports/insights', title: '支出报表加载失败' }
   ]) {

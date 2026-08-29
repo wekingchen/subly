@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.orm import Session
 
 from app import activity
@@ -9,6 +9,9 @@ from app.models import (
     Bundle,
     CalendarFeedToken,
     Category,
+    CreditCard,
+    CreditCardNotificationLog,
+    CreditCardNotificationOutbox,
     Currency,
     NotificationLog,
     NotificationOutbox,
@@ -116,6 +119,29 @@ def delete_user(
 
     # 清理该用户的全部数据（保持外键完整）
     db.execute(delete(CalendarFeedToken).where(CalendarFeedToken.user_id == user_id))
+    credit_card_ids = list(db.scalars(
+        select(CreditCard.id).where(CreditCard.user_id == user_id)
+    ).all())
+    credit_card_outbox_ids = list(db.scalars(
+        select(CreditCardNotificationOutbox.id).where(or_(
+            CreditCardNotificationOutbox.user_id == user_id,
+            CreditCardNotificationOutbox.credit_card_id.in_(credit_card_ids),
+        ))
+    ).all())
+    db.execute(
+        delete(CreditCardNotificationLog).where(or_(
+            CreditCardNotificationLog.user_id == user_id,
+            CreditCardNotificationLog.credit_card_id.in_(credit_card_ids),
+            CreditCardNotificationLog.outbox_id.in_(credit_card_outbox_ids),
+        ))
+    )
+    db.execute(
+        delete(CreditCardNotificationOutbox).where(or_(
+            CreditCardNotificationOutbox.user_id == user_id,
+            CreditCardNotificationOutbox.credit_card_id.in_(credit_card_ids),
+        ))
+    )
+    db.execute(delete(CreditCard).where(CreditCard.user_id == user_id))
     db.execute(delete(NotificationLog).where(NotificationLog.user_id == user_id))
     db.execute(delete(NotificationOutbox).where(NotificationOutbox.user_id == user_id))
     db.execute(delete(RenewalHistory).where(RenewalHistory.user_id == user_id))
