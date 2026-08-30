@@ -39,6 +39,30 @@ def statement_date_for_due(due_date: date, statement_day: int, due_day: int) -> 
     return anchor_month_day(year, month, statement_day)
 
 
+def interest_free_period(as_of: date, statement_day: int, due_day: int) -> tuple[date, int]:
+    """假设 as_of 当天消费一笔，返回该笔消费享受的免息期与天数。
+
+    免息还款期 = 消费日起至该笔消费计入那期的计划还款日（可免息借钱的天数）。
+    口径（与既有名义日/月末锚定规则一致）：
+    - 消费计入哪期：as_of <= 当期锚定账单日 → 计入当期；否则计入下期
+      （出账日后一天消费即属此列，免息期最长；出账日当天消费最短）。
+    - 账单期与还款日按名义周期配对（与 statement_date_for_due 反向规则一致）：
+      due_day > statement_day → 还款日与账单日同一名义月；否则在下一名义月。
+      不能用 next_due_date() 代替：名义日不同但锚定后同日时（如 5/5、31/30
+      在 2 月）会错误配到上一个还款周期。
+
+    返回 (该期计划还款日, 免息天数 = 还款日 − 消费日)。
+    """
+    current_statement = anchor_month_day(as_of.year, as_of.month, statement_day)
+    if as_of <= current_statement:
+        statement_month = (as_of.year, as_of.month)
+    else:
+        statement_month = _next_month(as_of.year, as_of.month)
+    due_month = statement_month if due_day > statement_day else _next_month(*statement_month)
+    due = anchor_month_day(due_month[0], due_month[1], due_day)
+    return due, (due - as_of).days
+
+
 def due_dates_in_range(start: date, end: date, due_day: int) -> list[date]:
     """按名义月份展开闭区间内的计划还款日，不从上次实际日期链式递推。"""
     if end < start:

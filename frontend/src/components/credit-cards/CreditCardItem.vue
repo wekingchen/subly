@@ -1,5 +1,5 @@
 <template>
-  <article class="credit-card card" :class="{ inactive: !card.is_active }">
+  <article class="credit-card card" :class="{ inactive: !card.is_active, 'is-best': highlight }">
     <div class="card-head">
       <div class="card-glyph" aria-hidden="true">
         <CreditCardBrandBadge :bank-name="card.bank_name" />
@@ -19,6 +19,7 @@
       <span>{{ t('creditCards.statementDayValue', { n: card.statement_day }) }}</span>
       <span>{{ t('creditCards.dueDayValue', { n: card.due_day }) }}</span>
       <span>{{ t('creditCards.remindValue', { n: card.remind_days_before }) }}</span>
+      <span v-if="card.interest_free_days != null" class="if-days">{{ t('creditCards.interestFreeChip', { n: card.interest_free_days }) }}</span>
       <span v-if="card.credit_limit != null">{{ t('creditCards.creditLimitValue', { n: formatLimit(card.credit_limit) }) }}</span>
     </div>
 
@@ -37,7 +38,8 @@ import CreditCardCycleTrack from './CreditCardCycleTrack.vue'
 
 defineProps({
   card: { type: Object, required: true },
-  disabled: { type: Boolean, default: false }
+  disabled: { type: Boolean, default: false },
+  highlight: { type: Boolean, default: false }
 })
 
 defineEmits(['view', 'edit', 'delete'])
@@ -65,6 +67,9 @@ function formatLimit(value) {
 .status-tag.inactive-tag { background: var(--surface-2); color: var(--text-soft); }
 .card-meta { display: flex; flex-wrap: wrap; gap: 6px; }
 .card-meta span { padding: 4px 8px; border: 1px solid var(--border); border-radius: 999px; background: color-mix(in srgb, var(--surface-2) 76%, transparent); color: var(--text-soft); font-size: 11px; }
+.card-meta span.if-days { color: var(--primary); border-color: color-mix(in srgb, var(--signal-cyan) 42%, var(--border)); }
+.credit-card.is-best { border-color: color-mix(in srgb, var(--signal-cyan) 55%, var(--border)); box-shadow: 0 0 0 1px color-mix(in srgb, var(--signal-cyan) 30%, transparent), 0 8px 22px color-mix(in srgb, var(--signal-cyan) 14%, transparent); }
+.credit-card.is-best::before { background: linear-gradient(180deg, var(--signal-cyan), var(--primary)); box-shadow: 0 0 12px color-mix(in srgb, var(--signal-cyan) 55%, transparent); }
 .card-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: auto; padding-top: 2px; }
 .card-actions .btn { flex: 1 1 auto; }
 @media (hover: hover) and (pointer: fine) {

@@ -587,6 +587,9 @@ class CreditCardOut(BaseModel):
     next_due_date: date
     days_until_due: int
     statement_to_due_days: int
+    # 免息期：假设今天消费一笔，从消费日到计入那期计划还款日的免息天数。
+    interest_free_days: int
+    interest_free_due_date: date
 
 
 # ---------- Bundle ----------

@@ -12,7 +12,12 @@
       </div>
     </section>
 
-    <CreditCardStats v-if="canShowCards" :cards="cards" />
+    <CreditCardStats
+      v-if="canShowCards"
+      :cards="cards"
+      :sort-by-interest-free="sortByInterestFree"
+      @toggle-interest-sort="sortByInterestFree = !sortByInterestFree"
+    />
 
     <DataState
       v-if="dataState !== 'ready' && dataState !== 'empty'"
@@ -35,9 +40,10 @@
 
     <section v-if="canShowCards && cards.length" class="cards-grid" :aria-label="t('creditCards.listLabel')">
       <CreditCardItem
-        v-for="card in cards"
+        v-for="card in visibleCards"
         :key="card.id"
         :card="card"
+        :highlight="sortByInterestFree && bestInterestFree?.id === card.id"
         :disabled="mutationPending"
         @view="openDetail"
         @edit="openEdit"
@@ -115,6 +121,26 @@ const formTarget = ref(null)
 const formError = ref('')
 const detailTarget = ref(null)
 const canShowCards = computed(() => !['loading', 'error'].includes(dataState.value))
+
+// 免息期排序：点击"最长免息期"统计卡切换。默认关闭（按录入顺序），
+// 开启后列表按 interest_free_days 从长到短排序，并高亮当前最长的卡。
+const sortByInterestFree = ref(false)
+const bestInterestFree = computed(() => {
+  const active = cards.value.filter((card) => card.is_active && Number.isFinite(card.interest_free_days))
+  return active.length
+    ? active.reduce((best, card) => (card.interest_free_days > best.interest_free_days ? card : best))
+    : null
+})
+const visibleCards = computed(() => {
+  if (!sortByInterestFree.value) return cards.value
+  // 与 bestInterestFree 同口径：启用卡按免息天数降序在前，停用卡统一沉底。
+  const inactive = cards.value.filter((card) => !card.is_active)
+  const active = cards.value
+    .filter((card) => card.is_active)
+    .sort((a, b) => (Number(b.interest_free_days) || 0) - (Number(a.interest_free_days) || 0))
+  return [...active, ...inactive]
+})
+
 const confirmOpen = computed({
   get: () => Boolean(confirm.state.value?.open),
   set: (value) => { if (!value) confirm.close() }
@@ -217,6 +243,7 @@ onMounted(load)
 .empty-card { position: relative; width: 58px; height: 39px; border: 1px dashed color-mix(in srgb, var(--primary) 50%, var(--border)); border-radius: 12px; background: var(--surface-2); transform: rotate(-4deg); }
 .empty-card span { position: absolute; right: 8px; bottom: 8px; width: 18px; height: 3px; border-radius: 999px; background: color-mix(in srgb, var(--signal-cyan) 65%, var(--primary)); }
 .page-disclaimer { display: flex; gap: 11px; margin-top: 18px; padding: 14px 16px; border: 1px solid color-mix(in srgb, var(--warning) 32%, var(--border)); border-radius: 14px; background: color-mix(in srgb, var(--warning) 6%, var(--surface)); }
+/* 最长免息期 stat tile（插槽传入，覆盖 scoped 隔离）：可点击 + 信号色强调 */
 .page-disclaimer > span { display: flex; width: 24px; height: 24px; flex: 0 0 24px; align-items: center; justify-content: center; border-radius: 999px; background: color-mix(in srgb, var(--warning) 16%, var(--surface)); color: var(--warning-text); font-weight: 900; }
 .page-disclaimer strong { color: var(--warning-text); font-size: 12px; }
 .page-disclaimer p, .delete-copy { margin: 4px 0 0; color: var(--text-soft); font-size: 12px; line-height: 1.6; }

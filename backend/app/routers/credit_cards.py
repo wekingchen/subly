@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
-from app.credit_card_rules import next_due_date, statement_date_for_due
+from app.credit_card_rules import interest_free_period, next_due_date, statement_date_for_due
 from app.database import get_db
 from app.deps import get_current_user
 from app.models import (
@@ -43,6 +43,8 @@ def _to_out(card: CreditCard, as_of: date | None = None) -> CreditCardOut:
         card.statement_day,
         card.due_day,
     )
+    # 免息期：假设今天消费一笔，从消费日到计入那期还款日的可免息天数。
+    if_due_date, if_days = interest_free_period(business_date, card.statement_day, card.due_day)
     return CreditCardOut(
         id=card.id,
         display_name=card.display_name,
@@ -60,6 +62,8 @@ def _to_out(card: CreditCard, as_of: date | None = None) -> CreditCardOut:
         next_due_date=due_date,
         days_until_due=(due_date - business_date).days,
         statement_to_due_days=(due_date - statement_date).days,
+        interest_free_days=if_days,
+        interest_free_due_date=if_due_date,
     )
 
 
