@@ -104,6 +104,36 @@ def test_credit_card_crud_normalizes_reminders_and_derives_dates(credit_card_api
     assert [item["id"] for item in listed.json()] == [body["id"]]
 
 
+def test_credit_card_credit_limit_roundtrip_and_validation(credit_card_api):
+    client, _, alice, _, _ = credit_card_api
+
+    created = client.post(
+        "/api/credit-cards", json=valid_payload(credit_limit=50000.0)
+    )
+    assert created.status_code == 200
+    assert created.json()["credit_limit"] == 50000.0
+
+    card_id = created.json()["id"]
+    cleared = client.put(
+        f"/api/credit-cards/{card_id}", json={"credit_limit": None}
+    )
+    assert cleared.status_code == 200
+    assert cleared.json()["credit_limit"] is None
+
+    zero = client.post("/api/credit-cards", json=valid_payload(credit_limit=0))
+    assert zero.status_code == 200
+    assert zero.json()["credit_limit"] == 0
+
+    negative = client.post(
+        "/api/credit-cards", json=valid_payload(credit_limit=-1)
+    )
+    assert negative.status_code == 422
+
+    missing = client.post("/api/credit-cards", json=valid_payload())
+    assert missing.status_code == 200
+    assert missing.json()["credit_limit"] is None
+
+
 def test_credit_card_crud_hides_other_users_resources(credit_card_api):
     client, db, alice, bob, _ = credit_card_api
     alice_card = CreditCard(user_id=alice.id, **valid_payload())

@@ -75,3 +75,19 @@ def test_normalize_category_keys_fallback_used_when_main_empty():
 
 def test_normalize_category_keys_all_invalid_returns_other():
     assert icon_library.normalize_category_keys("", fallback=None) == ["other"]
+
+
+def test_bank_services_seeded_with_official_domains():
+    """信用卡徽标依赖的 5 家银行必须在内置服务库且用官方域名，缺失会让徽标回退字标。"""
+    expected = {
+        "招商银行": "cmbchina.com",
+        "平安银行": "pingan.com",
+        "民生银行": "cmbc.com.cn",
+        "中信银行": "citicbank.com",
+        "建设银行": "ccb.com",
+    }
+    by_name = {name: domain for name, domain, _ in icon_library.SERVICES}
+    for name, domain in expected.items():
+        assert by_name.get(name) == domain, f"缺少内置银行服务或域名不符：{name}"
+
+    assert dict(icon_library.CATEGORY_LABELS)["bank"] == "银行 / Bank"

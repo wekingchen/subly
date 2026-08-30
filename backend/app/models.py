@@ -236,6 +236,7 @@ class CreditCard(Base):
     remind_days_before: Mapped[list] = mapped_column(
         JSON, default=lambda: [7, 3, 1, 0]
     )
+    credit_limit: Mapped[float | None] = mapped_column(Float, nullable=True)  # 授信上限，仅作记录，不外发
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     show_in_calendar: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())

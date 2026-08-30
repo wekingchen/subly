@@ -21,8 +21,8 @@
         </div>
         <div class="field">
           <label for="credit-card-last-four">{{ t('creditCards.lastFour') }}</label>
-          <input id="credit-card-last-four" v-model="form.last_four" maxlength="4" inputmode="numeric" pattern="[0-9]{4}" autocomplete="off" :placeholder="t('creditCards.lastFourPlaceholder')" :aria-invalid="!!error" />
-          <span class="field-hint">{{ t('creditCards.lastFourHint') }}</span>
+          <input id="credit-card-last-four" v-model="form.last_four" :maxlength="isEditing ? 4 : 64" inputmode="numeric" autocomplete="off" :placeholder="t('creditCards.lastFourPlaceholder')" :aria-invalid="!!error" />
+          <span class="field-hint">{{ isEditing ? t('creditCards.lastFourHint') : t('creditCards.lastFourBatchHint') }}</span>
         </div>
         <div class="field">
           <label for="credit-card-statement-day">{{ t('creditCards.statementDay') }}</label>
@@ -39,6 +39,11 @@
           <input id="credit-card-remind-days" v-model="form.remind_days_before" inputmode="numeric" autocomplete="off" :placeholder="t('creditCards.remindPlaceholder')" :aria-invalid="!!error" />
           <span class="field-hint">{{ t('creditCards.remindHint') }}</span>
         </div>
+        <div class="field field-wide">
+          <label for="credit-card-credit-limit">{{ t('creditCards.creditLimit') }}</label>
+          <input id="credit-card-credit-limit" v-model.number="form.credit_limit" type="number" min="0" step="0.01" inputmode="decimal" autocomplete="off" :placeholder="t('creditCards.creditLimitPlaceholder')" :aria-invalid="!!error" />
+          <span class="field-hint">{{ t('creditCards.creditLimitHint') }}</span>
+        </div>
       </div>
 
       <div class="switches">
@@ -52,7 +57,7 @@
         </label>
       </div>
 
-      <p v-if="error" class="form-error" role="alert">{{ error }}</p>
+      <p v-if="errorMessage" class="form-error" role="alert">{{ errorMessage }}</p>
     </form>
 
     <template #footer>
@@ -65,19 +70,21 @@
 </template>
 
 <script setup>
-import { reactive, watch } from 'vue'
+import { computed, reactive, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import AppModal from '../AppModal.vue'
+import { parseLastFours, remainingLastFoursText } from '../../utils/creditCardFormLogic'
 
 const props = defineProps({
   card: { type: Object, default: null },
   pending: { type: Boolean, default: false },
-  error: { type: String, default: '' }
+  error: { type: [String, Object], default: '' }
 })
 
 const emit = defineEmits(['close', 'save'])
 const { t } = useI18n()
 const form = reactive(blankForm())
+const isEditing = computed(() => Boolean(props.card?.id))
 
 function blankForm() {
   return {
@@ -87,6 +94,7 @@ function blankForm() {
     statement_day: 1,
     due_day: 20,
     remind_days_before: '',
+    credit_limit: null,
     is_active: true,
     show_in_calendar: true
   }
@@ -102,6 +110,22 @@ function reset(card) {
 
 watch(() => props.card, reset, { immediate: true })
 
+// 部分失败后父级带回剩余尾号：收缩输入框到未成功部分，
+// 让"直接再点保存"只重试失败的卡，不重复创建已成功的。
+watch(
+  () => props.error,
+  (value) => {
+    const remainingText = remainingLastFoursText(value)
+    if (remainingText !== null && !props.card?.id) {
+      form.last_four = remainingText
+    }
+  }
+)
+
+const errorMessage = computed(() =>
+  typeof props.error === 'object' && props.error !== null ? props.error.message || '' : props.error || ''
+)
+
 function onModalChange(value) {
   if (!value) emit('close')
 }
@@ -114,10 +138,19 @@ function validDay(value) {
 function submit() {
   const displayName = form.display_name.trim()
   const bankName = form.bank_name.trim()
-  const lastFour = form.last_four.trim()
   if (!displayName || !bankName) return emit('save', null, t('creditCards.nameRequired'))
-  if (lastFour && !/^\d{4}$/.test(lastFour)) return emit('save', null, t('creditCards.lastFourInvalid'))
+
+  // 尾号：编辑单卡只允许一个值；新建允许多值（1234,2234）一次建多张卡。
+  const lastFours = parseLastFours(form.last_four)
+  if (lastFours.some((value) => !/^\d{4}$/.test(value))) {
+    return emit('save', null, t('creditCards.lastFourInvalid'))
+  }
+  if (isEditing.value && lastFours.length > 1) {
+    return emit('save', null, t('creditCards.lastFourInvalid'))
+  }
+
   if (!validDay(form.statement_day) || !validDay(form.due_day)) return emit('save', null, t('creditCards.dayInvalid'))
+
   const remindText = String(form.remind_days_before ?? '').trim()
   const remindDays = remindText
     ? remindText.split(/[,，\s]+/).filter(Boolean).map(Number)
@@ -128,12 +161,20 @@ function submit() {
   ) {
     return emit('save', null, t('creditCards.remindInvalid'))
   }
+
+  // 额度：空字符串/空输入归一为 null（未填写），非负数由输入框 min 约束兜底。
+  const limit = form.credit_limit
+  const creditLimit =
+    limit === null || limit === undefined || limit === '' ? null : Number(limit)
+
   emit('save', {
     ...form,
     display_name: displayName,
     bank_name: bankName,
-    last_four: lastFour,
-    remind_days_before: remindDays
+    last_fours: lastFours,
+    last_four: lastFours[0] ?? '',
+    remind_days_before: remindDays,
+    credit_limit: creditLimit
   })
 }
 </script>

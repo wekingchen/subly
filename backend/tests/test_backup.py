@@ -1039,6 +1039,7 @@ def test_backup_v3_exports_only_credit_card_configuration_for_current_user():
             "statement_day": 5,
             "due_day": 25,
             "remind_days_before": [7, 1],
+            "credit_limit": None,
             "is_active": True,
             "show_in_calendar": False,
         }]
@@ -1114,11 +1115,14 @@ def test_v3_credit_cards_roundtrip_all_configuration_fields():
             statement_day=9,
             due_day=29,
             remind_days_before=[10, 3],
+            credit_limit=50000.25,
             is_active=False,
             show_in_calendar=False,
         )
         db.commit()
         exported = backup.export_data(user=source, db=db)
+        # 导出段：非空额度必须出现在备份对象里。
+        assert exported["credit_cards"][0]["credit_limit"] == 50000.25
 
         backup._restore_entities(db, target, exported, replace=True)
         db.commit()
@@ -1132,6 +1136,8 @@ def test_v3_credit_cards_roundtrip_all_configuration_fields():
         assert restored.statement_day == 9
         assert restored.due_day == 29
         assert restored.remind_days_before == [10, 3]
+        # 恢复段：非空额度完整还原，丢失即回归。
+        assert restored.credit_limit == 50000.25
         assert restored.is_active is False
         assert restored.show_in_calendar is False
     finally:
@@ -1189,6 +1195,37 @@ def test_invalid_credit_cards_return_400_before_replace_deletes_existing_data(
         assert error in getattr(exc.value, "detail", "")
         assert db.scalar(select(CreditCard).where(CreditCard.user_id == user.id))
         assert db.scalar(select(Subscription).where(Subscription.user_id == user.id))
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_legacy_v3_card_without_credit_limit_key_imports_as_none():
+    """旧 v3 备份的卡片对象没有 credit_limit 键：导入后额度为 None，不报错。"""
+    db, engine = make_db()
+    try:
+        user = add_user(db)
+        payload = {
+            "export_version": 3,
+            "subscriptions": [],
+            "credit_cards": [{
+                "display_name": "旧格式卡",
+                "bank_name": "示例银行",
+                "last_four": "0009",
+                "statement_day": 5,
+                "due_day": 25,
+                "remind_days_before": [7, 1],
+                "is_active": True,
+                "show_in_calendar": True,
+            }],
+        }
+
+        backup._restore_entities(db, user, payload, replace=False)
+        db.commit()
+
+        restored = db.scalar(select(CreditCard).where(CreditCard.user_id == user.id))
+        assert restored.display_name == "旧格式卡"
+        assert restored.credit_limit is None
     finally:
         db.close()
         engine.dispose()

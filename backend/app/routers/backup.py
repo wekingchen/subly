@@ -105,6 +105,7 @@ def _credit_card_dict(card: CreditCard) -> dict:
         "statement_day": card.statement_day,
         "due_day": card.due_day,
         "remind_days_before": card.remind_days_before,
+        "credit_limit": card.credit_limit,
         "is_active": card.is_active,
         "show_in_calendar": card.show_in_calendar,
     }
@@ -625,6 +626,7 @@ def _restore_entities(
                     statement_day=card["statement_day"],
                     due_day=card["due_day"],
                     remind_days_before=card["remind_days_before"],
+                    credit_limit=card.get("credit_limit"),
                     is_active=card["is_active"],
                     show_in_calendar=card["show_in_calendar"],
                 )

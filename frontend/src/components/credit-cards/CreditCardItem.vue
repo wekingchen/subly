@@ -1,10 +1,12 @@
 <template>
   <article class="credit-card card" :class="{ inactive: !card.is_active }">
     <div class="card-head">
-      <div class="card-glyph" aria-hidden="true"><span></span></div>
+      <div class="card-glyph" aria-hidden="true">
+        <CreditCardBrandBadge :bank-name="card.bank_name" />
+      </div>
       <div class="card-title">
         <div class="card-name">{{ card.display_name }}</div>
-        <div class="card-bank">{{ card.bank_name }} ···· {{ card.last_four }}</div>
+        <div class="card-bank">{{ card.bank_name }}<template v-if="card.last_four"> ···· {{ card.last_four }}</template></div>
       </div>
       <span class="status-tag" :class="card.is_active ? 'active' : 'inactive-tag'">
         {{ card.is_active ? t('creditCards.active') : t('creditCards.inactive') }}
@@ -17,6 +19,7 @@
       <span>{{ t('creditCards.statementDayValue', { n: card.statement_day }) }}</span>
       <span>{{ t('creditCards.dueDayValue', { n: card.due_day }) }}</span>
       <span>{{ t('creditCards.remindValue', { n: card.remind_days_before }) }}</span>
+      <span v-if="card.credit_limit != null">{{ t('creditCards.creditLimitValue', { n: formatLimit(card.credit_limit) }) }}</span>
     </div>
 
     <div class="card-actions">
@@ -29,6 +32,7 @@
 
 <script setup>
 import { useI18n } from 'vue-i18n'
+import CreditCardBrandBadge from './CreditCardBrandBadge.vue'
 import CreditCardCycleTrack from './CreditCardCycleTrack.vue'
 
 defineProps({
@@ -38,6 +42,12 @@ defineProps({
 
 defineEmits(['view', 'edit', 'delete'])
 const { t } = useI18n()
+
+// 额度仅作展示记录：千分位整数（有小数保留两位），不带币种符号——币种跟随用户基准币。
+function formatLimit(value) {
+  const n = Number(value)
+  return Number.isInteger(n) ? n.toLocaleString('zh-CN') : n.toFixed(2)
+}
 </script>
 
 <style scoped>
@@ -46,9 +56,7 @@ const { t } = useI18n()
 .credit-card.inactive { opacity: .68; border-style: dashed; }
 .credit-card.inactive::before { background: var(--text-soft); opacity: .5; }
 .card-head { display: flex; min-width: 0; align-items: center; gap: 11px; }
-.card-glyph { position: relative; display: flex; width: 44px; height: 34px; flex: 0 0 44px; align-items: flex-end; padding: 7px; border: 1px solid color-mix(in srgb, var(--primary) 30%, var(--border)); border-radius: 10px; background: linear-gradient(135deg, color-mix(in srgb, var(--primary) 85%, #0b1020), color-mix(in srgb, var(--signal-cyan) 52%, var(--primary))); box-shadow: 0 6px 16px color-mix(in srgb, var(--primary) 18%, transparent); }
-.card-glyph::before { content: ''; position: absolute; top: 8px; left: 7px; width: 11px; height: 7px; border-radius: 3px; background: rgba(255,255,255,.78); }
-.card-glyph span { width: 18px; height: 2px; border-radius: 999px; background: rgba(255,255,255,.66); }
+.card-glyph { position: relative; display: flex; width: 44px; height: 34px; flex: 0 0 44px; align-items: stretch; padding: 0; border: 1px solid color-mix(in srgb, var(--primary) 30%, var(--border)); border-radius: 10px; overflow: hidden; box-shadow: 0 6px 16px color-mix(in srgb, var(--primary) 18%, transparent); }
 .card-title { min-width: 0; flex: 1; }
 .card-name { overflow: hidden; font-size: 16px; font-weight: 800; text-overflow: ellipsis; white-space: nowrap; }
 .card-bank { margin-top: 3px; color: var(--text-soft); font-size: 12px; overflow-wrap: anywhere; }

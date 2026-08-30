@@ -49,6 +49,7 @@ _COLUMNS = [
     ("notification_log", "outbox_id", "INTEGER"),
     ("notification_log", "attempt_no", "INTEGER"),
     ("notification_log", "retry_cycle", "INTEGER"),
+    ("credit_cards", "credit_limit", "FLOAT"),
 ]
 
 

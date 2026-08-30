@@ -384,3 +384,54 @@ def test_external_label_falls_back_when_only_punctuation_remains(tmp_path):
 
     # 未登记尾号时无从比对，名称保持原样（不误伤）。
     assert credit_card_reminders.external_card_label(_NoLastFour()) == "（1234）"
+
+
+def test_credit_limit_never_reaches_external_outputs(tmp_path, monkeypatch):
+    """额度是展示性数据：三通道 payload 与 iCal 渲染都不得包含 credit_limit 数值。"""
+    Session, engine = make_db(tmp_path, monkeypatch)
+    db = Session()
+    try:
+        user, card = add_card(db)
+        card.credit_limit = 50000.0
+        db.commit()
+
+        rendered = calendar_feed.build_calendar(
+            db, user, today=date(2026, 8, 29), uid_namespace="ns"
+        ).decode("utf-8")
+        assert "50000" not in rendered
+
+        for channel in ("telegram", "bark", "webhook"):
+            payload = credit_card_reminders._build_payload(
+                card, date(2026, 9, 5), 7, channel
+            )
+            assert "50000" not in str(payload)
+            assert "credit_limit" not in str(payload)
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_external_outputs_never_render_credit_limit(tmp_path, monkeypatch):
+    """额度是展示性数据：三通道 payload 与 iCal 均不得出现额度数值。"""
+    Session, engine = make_db(tmp_path, monkeypatch)
+    db = Session()
+    try:
+        user, card = add_card(db)
+        card.credit_limit = 50000.0
+        db.commit()
+
+        rendered = calendar_feed.build_calendar(
+            db, user, today=date(2026, 8, 29), uid_namespace="ns"
+        ).decode("utf-8")
+        assert "50000" not in rendered
+
+        payloads = [
+            credit_card_reminders._build_payload(card, date(2026, 9, 5), 7, channel)
+            for channel in ("telegram", "bark", "webhook")
+        ]
+        blob = str(payloads)
+        assert "50000" not in blob
+        assert "credit_limit" not in blob
+    finally:
+        db.close()
+        engine.dispose()

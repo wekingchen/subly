@@ -10,9 +10,10 @@
     <div class="detail-identity">
       <div class="detail-card" aria-hidden="true">
         <span class="detail-chip"></span>
+        <CreditCardBrandBadge class="detail-brand" :bank-name="card.bank_name" />
         <strong>{{ card.display_name }}</strong>
         <span>{{ card.bank_name }}</span>
-        <b class="mono-data">···· {{ card.last_four }}</b>
+        <b v-if="card.last_four" class="mono-data">···· {{ card.last_four }}</b>
       </div>
       <div class="detail-status">
         <span class="tag">{{ card.is_active ? t('creditCards.active') : t('creditCards.inactive') }}</span>
@@ -27,6 +28,7 @@
       <div><dt>{{ t('creditCards.dueDay') }}</dt><dd>{{ t('creditCards.monthDayValue', { n: card.due_day }) }}</dd></div>
       <div><dt>{{ t('creditCards.remindDaysBefore') }}</dt><dd>{{ t('creditCards.remindValue', { n: card.remind_days_before }) }}</dd></div>
       <div><dt>{{ t('creditCards.repaymentWindow') }}</dt><dd>{{ card.statement_to_due_days != null ? t('creditCards.windowDays', { n: card.statement_to_due_days }) : '—' }}</dd></div>
+      <div><dt>{{ t('creditCards.creditLimit') }}</dt><dd>{{ card.credit_limit != null ? formatLimit(card.credit_limit) : '—' }}</dd></div>
     </dl>
 
     <aside class="disclaimer" role="note">
@@ -44,11 +46,15 @@
 <script setup>
 import { useI18n } from 'vue-i18n'
 import AppModal from '../AppModal.vue'
+import CreditCardBrandBadge from './CreditCardBrandBadge.vue'
 import CreditCardCycleTrack from './CreditCardCycleTrack.vue'
 
 defineProps({ card: { type: Object, required: true } })
 const emit = defineEmits(['close', 'edit'])
 const { t } = useI18n()
+function formatLimit(value) {
+  return new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 2 }).format(Number(value))
+}
 
 function onModalChange(value) {
   if (!value) emit('close')
@@ -60,6 +66,8 @@ function onModalChange(value) {
 .detail-card { display: grid; width: min(260px, 100%); min-height: 146px; padding: 18px; border-radius: 18px; background: linear-gradient(145deg, color-mix(in srgb, var(--primary) 76%, #0b1020), color-mix(in srgb, var(--signal-cyan) 48%, var(--primary))); color: #fff; box-shadow: 0 14px 30px color-mix(in srgb, var(--primary) 24%, transparent); }
 .detail-chip { width: 32px; height: 23px; border-radius: 6px; background: linear-gradient(135deg, rgba(255,255,255,.86), rgba(255,255,255,.42)); }
 .detail-card strong { align-self: end; margin-top: 18px; font-size: 17px; overflow-wrap: anywhere; }
+.detail-brand { position: absolute; top: 14px; right: 14px; width: 40px; height: 31px; border-radius: 9px; overflow: hidden; border: 1px solid rgba(255,255,255,.34); }
+.detail-card { position: relative; }
 .detail-card > span:not(.detail-chip) { font-size: 12px; opacity: .82; }
 .detail-card b { justify-self: end; margin-top: 4px; letter-spacing: .06em; }
 .detail-status { display: flex; flex-direction: column; align-items: flex-end; gap: 8px; font-size: 12px; text-align: right; }

@@ -51,6 +51,7 @@ def _to_out(card: CreditCard, as_of: date | None = None) -> CreditCardOut:
         statement_day=card.statement_day,
         due_day=card.due_day,
         remind_days_before=card.remind_days_before or [],
+        credit_limit=card.credit_limit,
         is_active=card.is_active,
         show_in_calendar=card.show_in_calendar,
         created_at=card.created_at,

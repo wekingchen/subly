@@ -2,6 +2,14 @@ import { computed, ref } from 'vue'
 import api from '../api'
 import { useDataRequest } from '../utils/dataRequest'
 
+// 批量建卡时名称自动拼尾号区分；用户名称已含该尾号则不重复。
+function displayNameFor(displayName, lastFour) {
+  const base = String(displayName || '').trim()
+  if (!lastFour) return base
+  if (base.includes(lastFour)) return base
+  return base ? `${base} ${lastFour}` : lastFour
+}
+
 export function buildCreditCardPayload(source) {
   const remindDays = Array.isArray(source?.remind_days_before)
     ? source.remind_days_before
@@ -15,6 +23,10 @@ export function buildCreditCardPayload(source) {
     statement_day: Number(source?.statement_day),
     due_day: Number(source?.due_day),
     remind_days_before: remindDays.map(Number),
+    credit_limit:
+      source?.credit_limit === '' || source?.credit_limit === null || source?.credit_limit === undefined
+        ? null
+        : Number(source.credit_limit),
     is_active: source?.is_active !== false,
     show_in_calendar: source?.show_in_calendar !== false
   }
@@ -35,19 +47,48 @@ export function useCreditCards() {
     if (mutationPending.value) return null
     mutationPending.value = true
     try {
-      const payload = buildCreditCardPayload(source)
-      const response = card?.id
-        ? await api.put(`/api/credit-cards/${card.id}`, payload)
-        : await api.post('/api/credit-cards', payload)
-      const saved = response.data
-      if (saved?.id) {
+      // 编辑：单卡走 PUT，契约与既有行为一致。
+      if (card?.id) {
+        const payload = buildCreditCardPayload(source)
+        const response = await api.put(`/api/credit-cards/${card.id}`, payload)
+        const saved = response.data
         const index = cards.value.findIndex((item) => item.id === saved.id)
         if (index >= 0) cards.value.splice(index, 1, saved)
         else cards.value.unshift(saved)
-      } else {
-        await load()
+        return { created: 1, total: 1, items: [saved], remainingLastFours: [] }
       }
-      return saved || null
+
+      // 新建：尾号多值（如 1234,2234）时逐张创建，名称自动拼尾号区分。
+      // 空尾号视为单卡（lastFour 为空串），与后端"尾号可选"契约一致。
+      const lastFours = Array.isArray(source?.last_fours) && source.last_fours.length
+        ? [...source.last_fours]
+        : [String(source?.last_four || '').trim()]
+      const items = []
+      for (let index = 0; index < lastFours.length; index += 1) {
+        const lastFour = lastFours[index]
+        const payload = buildCreditCardPayload({
+          ...source,
+          display_name: displayNameFor(source.display_name, lastFour),
+          last_four: lastFour
+        })
+        try {
+          const response = await api.post('/api/credit-cards', payload)
+          const saved = response.data
+          if (saved?.id) cards.value.unshift(saved)
+          items.push(saved)
+        } catch (error) {
+          // 部分成功要响亮：携带结构化批次结果，剩余尾号供 UI 回填重试，避免重复创建已成功项。
+          error.batch = {
+            created: items.length,
+            total: lastFours.length,
+            failedIndex: index,
+            failedReason: error,
+            remainingLastFours: lastFours.slice(index)
+          }
+          throw error
+        }
+      }
+      return { created: items.length, total: lastFours.length, items, remainingLastFours: [] }
     } finally {
       mutationPending.value = false
     }

@@ -156,11 +156,31 @@ async function submitForm(payload, localError = '') {
   formError.value = ''
   try {
     const wasEditing = Boolean(formTarget.value?.id)
-    await save(formTarget.value, payload)
+    const result = await save(formTarget.value, payload)
     closeForm()
-    toast(t(wasEditing ? 'creditCards.updated' : 'creditCards.created'))
+    if (wasEditing) {
+      toast(t('creditCards.updated'))
+    } else {
+      // 批量数量以 save() 的归一化结果为准（空尾号按 1 张计），与实际持久化一致。
+      toast(t('creditCards.batchCreated', { n: result?.created ?? 1 }))
+    }
   } catch (error) {
-    formError.value = error.response?.data?.detail || t('common.networkError')
+    const batch = error.batch
+    if (batch && batch.created > 0) {
+      const reason = error.response?.data?.detail || t('common.networkError')
+      // 结构化错误：message 给弹窗显示，remainingLastFours 让表单收缩到未成功部分，
+      // 用户直接重试不会把已创建的卡再建一遍。
+      formError.value = {
+        message: t('creditCards.batchPartialFailed', {
+          n: batch.created,
+          m: batch.created + 1,
+          reason
+        }),
+        remainingLastFours: batch.remainingLastFours || []
+      }
+    } else {
+      formError.value = error.response?.data?.detail || t('common.networkError')
+    }
   }
 }
 

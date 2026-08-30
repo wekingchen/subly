@@ -22,6 +22,7 @@ CATEGORY_LABELS = [
     ("news", "新闻 / News"),
     ("fitness", "健身 / Fitness"),
     ("membership", "会员 / Membership"),
+    ("bank", "银行 / Bank"),
     ("other", "其它 / Other"),
 ]
 
@@ -219,6 +220,12 @@ SERVICES = [
     ("Costco", "costco.com", "membership"),
     ("Patreon", "patreon.com", "membership"),
     ("Sam's Club", "samsclub.com", "membership"),
+    # 银行 bank：信用卡板块按 bank_name 匹配品牌，logo 走官网 favicon 管线
+    ("招商银行", "cmbchina.com", "bank"),
+    ("平安银行", "pingan.com", "bank"),
+    ("民生银行", "cmbc.com.cn", "bank"),
+    ("中信银行", "citicbank.com", "bank"),
+    ("建设银行", "ccb.com", "bank"),
 ]
 
 

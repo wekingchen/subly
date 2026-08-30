@@ -496,6 +496,7 @@ class CreditCardIn(BaseModel):
     statement_day: int = Field(ge=1, le=31, strict=True)
     due_day: int = Field(ge=1, le=31, strict=True)
     remind_days_before: list[int] = Field(default_factory=lambda: [7, 3, 1, 0])
+    credit_limit: float | None = Field(default=None, ge=0, le=1_000_000_000)
     is_active: bool = True
     show_in_calendar: bool = True
 
@@ -529,6 +530,7 @@ class CreditCardUpdate(BaseModel):
     statement_day: int | None = Field(default=None, ge=1, le=31, strict=True)
     due_day: int | None = Field(default=None, ge=1, le=31, strict=True)
     remind_days_before: list[int] | None = None
+    credit_limit: float | None = Field(default=None, ge=0, le=1_000_000_000)
     is_active: bool | None = None
     show_in_calendar: bool | None = None
 
@@ -576,6 +578,7 @@ class CreditCardOut(BaseModel):
     statement_day: int
     due_day: int
     remind_days_before: list[int]
+    credit_limit: float | None
     is_active: bool
     show_in_calendar: bool
     created_at: datetime
