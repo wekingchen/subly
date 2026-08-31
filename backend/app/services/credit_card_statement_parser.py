@@ -676,7 +676,9 @@ def _parse_pab(html: str) -> list[ParsedStatement]:
                 current_card = m[1]
                 group = None
             elif "本期最低应还金额" in stripped and len(cells) >= 2:
-                min_due = _f(parse_money(cells[1])) or min_due
+                parsed_min = _f(parse_money(cells[1]))
+                if parsed_min is not None:  # 0.00 是合法值，不能用 or（审核修复）
+                    min_due = parsed_min
             elif "分期" in stripped:
                 group = "分期"
             continue

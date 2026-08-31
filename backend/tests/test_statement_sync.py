@@ -356,3 +356,70 @@ def test_sync_does_not_overwrite_on_mismatch(sync_env, monkeypatch):
     card = db.get(CreditCard, card.id)
     assert card.statement_day == 10  # 未被覆盖
     assert card.due_day == 20
+
+
+def test_writeback_latest_statement_wins_regardless_of_order(sync_env, monkeypatch):
+    """审核 High 回归：同卡两期账单，无论处理顺序，回写都用最新一期。
+
+    招行账单日=期末：7/16-8/15 账单日 8/15，构造第二封「更旧」账单
+    （statementCycle 6/16-7/15）改额度区分。
+    """
+    client, db, user, account = sync_env
+    card = CreditCard(
+        user_id=user.id, display_name="招行卡", bank_name="招商银行",
+        last_four="6310", statement_day=10, due_day=20, credit_limit=1.0,
+    )
+    db.add(card)
+    db.commit()
+
+    newer = load_cmb()  # 账单日 2026-08-15，额度 60000
+    older_src = load_cmb().decode()
+    older = (older_src
+             .replace("2026/07/16-2026/08/15", "2026/06/16-2026/07/15")
+             .replace("<m-cmb-1>", "<m-cmb-old>")
+             .replace("cmb-fix-1", "cmb-fix-old")
+             .encode())
+
+    # 顺序 1：新→旧（旧的后处理，旔回写不得胜出）
+    _mock_imap(monkeypatch, [newer, older])
+    client.post(f"/api/imap/accounts/{account.id}/sync-statements")
+    db.expire_all()
+    assert db.get(CreditCard, card.id).credit_limit == 60000.0
+
+    # 顺序 2：旧→新（也应新账单胜出）
+    client.delete(f"/api/credit-cards/{card.id}")
+    card2 = CreditCard(
+        user_id=user.id, display_name="招行卡", bank_name="招商银行",
+        last_four="6310", statement_day=10, due_day=20, credit_limit=1.0,
+    )
+    db.add(card2)
+    db.commit()
+    _mock_imap(monkeypatch, [older, newer])
+    client.post(f"/api/imap/accounts/{account.id}/sync-statements")
+    db.expire_all()
+    assert db.get(CreditCard, card2.id).credit_limit == 60000.0
+    assert db.get(CreditCard, card2.id).statement_day == 15
+
+
+def test_resync_repairs_null_total_due(sync_env, monkeypatch):
+    """审核 Medium 回归：已入库记录（total_due=NULL 的旧版数据）重新解析
+    同一封邮件时，汇总字段被刷新修复。"""
+    client, db, user, account = sync_env
+    from app.models import CreditCardStatement
+
+    # 模拟旧版入库：金额为 NULL
+    db.add(CreditCardStatement(
+        user_id=user.id, source_account_id=account.id, bank_key="cmb",
+        card_last_four="6310", message_id="cmb-fix-1",
+        match_status="matched", verify_status="ok",
+        total_due=None, min_due=None,
+    ))
+    db.commit()
+
+    _mock_imap(monkeypatch, [load_cmb()])
+    resp = client.post(f"/api/imap/accounts/{account.id}/sync-statements")
+    assert resp.json()["skipped"] == 1
+    db.expire_all()
+    stmt = db.query(CreditCardStatement).one()
+    assert stmt.total_due == 1410.94, "重新解析应修复旧记录的 NULL 金额"
+    assert stmt.min_due == 389.07

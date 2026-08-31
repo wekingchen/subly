@@ -51,7 +51,7 @@ class StatementSyncResult:
         }
 
 
-def _apply_statement_to_card(card: CreditCard, st) -> list[str]:
+def _apply_statement_to_card(db, card: CreditCard, st) -> list[str]:
     """用账单邮件的账单日/还款日/总额度覆盖卡片（以最新邮件为准）。
 
     名义日取具体日期的 .day；只在邮件数据非空时覆盖。返回实际更新的
@@ -75,15 +75,8 @@ def _apply_statement_to_card(card: CreditCard, st) -> list[str]:
         updated.append("credit_limit")
     if updated:
         # 卡片字段变化影响提醒扫描（账单日/还款日参与派生），使 checkpoint 失效
-        credit_card_notification_outbox.invalidate_scan_checkpoint(_session_of(card))
+        credit_card_notification_outbox.invalidate_scan_checkpoint(db)
     return updated
-
-
-def _session_of(card: CreditCard):
-    """从持久化对象取其 Session（SQLAlchemy inspect）。"""
-    from sqlalchemy import inspect as sa_inspect
-
-    return sa_inspect(card).session
 
 
 def _bank_prefixes(banks: list[str] | None) -> list[str] | None:
@@ -110,6 +103,40 @@ def _match_card(db: Session, user_id: int, bank_key: str, last_four: str) -> tup
     return ("matched", candidates[0])
 
 
+def _statement_sort_key(parsed, st):
+    """回写候选的「新旧」排序键：邮件 Date > 账单日 > Message-ID。
+
+    解析器未保留邮件 Date，这里用账单日（statement_date）做主依据——
+    同一卡的多期账单账单日必然不同且严格递增；并列时 Message-ID 保稳定。
+    """
+    return (
+        st.statement_date or st.bill_period_end,
+        parsed.message_id,
+    )
+
+
+def _pick_newer(best, challenger):
+    """返回两份 (parsed, st) 候选中账单日更新的那份。"""
+    if best is None:
+        return challenger
+    if _statement_sort_key(*challenger) > _statement_sort_key(*best):
+        return challenger
+    return best
+
+
+def _apply_writebacks(db, writeback_candidates: dict, result) -> None:
+    """统一执行卡片回写：每卡只回写其最新账单（审核 High 修复）。"""
+    for card_id, entry in writeback_candidates.items():
+        card = entry["card"]
+        parsed, st = entry["best"]
+        updated_fields = _apply_statement_to_card(db, card, st)
+        if updated_fields:
+            result.updated_cards.append({
+                "last_four": st.card_last_four,
+                "fields": updated_fields,
+            })
+
+
 def sync_statements(
     db: Session,
     account: ImapAccount,
@@ -118,6 +145,7 @@ def sync_statements(
 ) -> StatementSyncResult:
     """拉取该账户白名单银行账单邮件并落库。IMAP 异常向上抛（路由转 502）。"""
     result = StatementSyncResult()
+    writeback_candidates: dict[int, dict] = {}  # card_id → {card, best(parsed, st)}
     predicate = None
     if account.banks:
         predicate = lambda addr: sender_matches_banks(addr, account.banks)  # noqa: E731
@@ -179,16 +207,11 @@ def sync_statements(
             scope = ok_scope or st.card_last_four
             if scope in verify and not verify[scope]["ok"]:
                 verify_status = "mismatch"
-            # 账单数据回写卡片：账单日/还款日/总额度以最新邮件为准直接覆盖
-            # （用户需求）。名义日取账单具体日期的 .day（如 2026-08-13 → 13）；
-            # 勾稽失败的账单不回写（数据可信度存疑时不改用户手填值）。
+            # 回写候选登记（实际回写在全部邮件处理完后统一执行——按卡选
+            # 最新账单，避免旧邮件后处理时覆盖新邮件，审核 High 修复）。
             if card is not None and verify_status == "ok":
-                updated_fields = _apply_statement_to_card(card, st)
-                if updated_fields:
-                    result.updated_cards.append({
-                        "last_four": st.card_last_four,
-                        "fields": updated_fields,
-                    })
+                entry = writeback_candidates.setdefault(card.id, {"card": card, "best": None})
+                entry["best"] = _pick_newer(entry["best"], (parsed, st))
             record = db.scalar(
                 select(CreditCardStatement).where(
                     CreditCardStatement.source_account_id == account.id,
@@ -197,10 +220,19 @@ def sync_statements(
                 )
             )
             if record:
-                # 已存在：仅更新匹配结果（明细不重复写）
+                # 已存在：更新匹配结果并刷新账单字段（解析器修复后，重新解析
+                # 同一封邮件能让旧记录的 NULL 金额得到修复，审核 Medium 修复）
                 record.card_id = card.id if card else None
                 record.match_status = status
                 record.verify_status = verify_status
+                record.bill_period_start = st.bill_period_start
+                record.bill_period_end = st.bill_period_end
+                record.statement_date = st.statement_date
+                record.due_date = st.due_date
+                record.total_due = st.total_due
+                record.min_due = st.min_due
+                record.credit_limit = st.credit_limit
+                record.subject = parsed.subject
                 mail_skipped += 1
                 continue
             record = CreditCardStatement(
@@ -247,6 +279,8 @@ def sync_statements(
             mail_saved += 1
         result.saved += mail_saved
         result.skipped += mail_skipped
+    # 统一回写：每卡取最新账单（全部邮件处理完后执行，旧邮件不会覆盖新邮件）
+    _apply_writebacks(db, writeback_candidates, result)
     db.commit()
     if result.saved:
         activity.log(
