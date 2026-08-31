@@ -10,14 +10,14 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app import activity
 from app.database import get_db
 from app.deps import get_current_user
-from app.models import ImapAccount, User
+from app.models import CreditCardStatement, CreditCardStatementItem, ImapAccount, User
 from app.bank_senders import BANK_SENDER_DOMAINS, normalize_bank_keys, sender_matches_banks
 from app.services import imap_client
 
@@ -89,6 +89,10 @@ def _account_out(a: ImapAccount) -> dict:
 class ImapFetchIn(BaseModel):
     days: int = Field(default=30, ge=1, le=90)
     limit: int = Field(default=20, ge=1, le=50)
+
+
+class ImapSyncIn(BaseModel):
+    days: int = Field(default=31, ge=1, le=90)
 
 
 @router.get("")
@@ -203,6 +207,22 @@ def delete_account(
     db: Session = Depends(get_db),
 ):
     account = _account_for_user(user, account_id, db)
+    # 该账户解析出的账单与明细一并清理（来源已不存在，悬空引用会让
+    # 重新添加同邮箱后重复导入；需要保留历史可先导出备份）。
+    stmt_ids = db.scalars(
+        select(CreditCardStatement.id).where(
+            CreditCardStatement.source_account_id == account.id
+        )
+    ).all()
+    if stmt_ids:
+        db.execute(
+            delete(CreditCardStatementItem).where(
+                CreditCardStatementItem.statement_id.in_(stmt_ids)
+            )
+        )
+        db.execute(
+            delete(CreditCardStatement).where(CreditCardStatement.id.in_(stmt_ids))
+        )
     db.delete(account)
     db.commit()
     activity.log("imap.account_deleted", "删除邮件账户", user=user)
@@ -263,6 +283,33 @@ def fetch_account(
     )
     activity.log("imap.fetch", f"IMAP 拉取最近邮件 {len(messages)} 封", user=user)
     return {"messages": messages, "count": len(messages)}
+
+
+@router.post("/{account_id}/sync-statements")
+def sync_statements_endpoint(
+    account_id: int,
+    payload: ImapSyncIn | None = None,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """手动解析账单：拉白名单银行账单邮件正文 → 解析 → 按卡落库。
+
+    IMAP 层异常转 502（同 test/fetch）；单封邮件解析失败不中断，
+    计入 errors 返回。
+    """
+    from app.services.credit_card_statement_sync import sync_statements
+
+    account = _account_for_user(user, account_id, db)
+    body = payload or ImapSyncIn()
+    if not _IMAP_SEMAPHORE.acquire(timeout=5):
+        raise HTTPException(503, "IMAP 操作繁忙，请稍后再试")
+    try:
+        result = sync_statements(db, account, user, days=body.days)
+    except (imap_client.ImapConnectionError, imap_client.ImapConfigError) as exc:
+        raise _service_error(exc, "sync", user)
+    finally:
+        _IMAP_SEMAPHORE.release()
+    return result.as_dict()
 
 
 @router.get("/banks")

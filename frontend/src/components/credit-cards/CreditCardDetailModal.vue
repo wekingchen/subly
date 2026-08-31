@@ -23,6 +23,8 @@
 
     <CreditCardCycleTrack :card="card" />
 
+    <CreditCardStatementList :card-id="card.id" />
+
     <dl class="detail-grid">
       <div><dt>{{ t('creditCards.statementDay') }}</dt><dd>{{ t('creditCards.monthDayValue', { n: card.statement_day }) }}</dd></div>
       <div><dt>{{ t('creditCards.dueDay') }}</dt><dd>{{ t('creditCards.monthDayValue', { n: card.due_day }) }}</dd></div>
@@ -48,6 +50,7 @@ import { useI18n } from 'vue-i18n'
 import AppModal from '../AppModal.vue'
 import CreditCardBrandBadge from './CreditCardBrandBadge.vue'
 import CreditCardCycleTrack from './CreditCardCycleTrack.vue'
+import CreditCardStatementList from './CreditCardStatementList.vue'
 
 defineProps({ card: { type: Object, required: true } })
 const emit = defineEmits(['close', 'edit'])

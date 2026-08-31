@@ -23,7 +23,10 @@ from app.models import (
     CreditCard,
     CreditCardNotificationLog,
     CreditCardNotificationOutbox,
+    CreditCardStatement,
+    CreditCardStatementItem,
     Currency,
+    ImapAccount,
     ExchangeRate,
     NotificationLog,
     NotificationOutbox,
@@ -49,7 +52,7 @@ from app.subscription_rules import (
 
 router = APIRouter(prefix="/api/backup", tags=["backup"])
 
-EXPORT_VERSION = 3
+EXPORT_VERSION = 4
 
 
 def _sub_dict(s: Subscription, history: list[RenewalHistory]) -> dict:
@@ -111,6 +114,70 @@ def _credit_card_dict(card: CreditCard) -> dict:
     }
 
 
+def _statement_dict(s: CreditCardStatement, card_index: dict[int, int]) -> dict:
+    return {
+        # 备份内卡片局部 key = 该卡在备份 credit_cards 数组中的下标；
+        # DB id 不能跨库使用，恢复端按下标映射到新建卡。
+        "card_key": card_index.get(s.card_id) if s.card_id is not None else None,
+        "bank_key": s.bank_key,
+        "card_last_four": s.card_last_four,
+        "match_status": s.match_status,
+        "bill_period_start": s.bill_period_start,
+        "bill_period_end": s.bill_period_end,
+        "statement_date": s.statement_date,
+        "due_date": s.due_date,
+        "total_due": s.total_due,
+        "min_due": s.min_due,
+        "credit_limit": s.credit_limit,
+        "message_id": s.message_id,
+        "subject": s.subject,
+        "verify_status": s.verify_status,
+        # 备份内来源局部 key：源邮箱地址（不含凭据）；恢复端映射到同邮箱账户
+        "source_email": s.source_account.email if s.source_account else None,
+        "items": [
+            {
+                "trans_date_raw": i.trans_date_raw,
+                "trans_date": i.trans_date,
+                "posted_date": i.posted_date,
+                "description": i.description,
+                "amount": i.amount,
+                "tx_amount": i.tx_amount,
+                "tx_currency": i.tx_currency,
+                "tx_type": i.tx_type,
+                "installment_note": i.installment_note,
+            }
+            for i in s.items
+        ],
+    }
+
+
+def _validated_statements(data: dict) -> list[dict] | None:
+    """校验 credit_card_statements；返回 None = 备份不含该字段（旧版备份）。"""
+    if "credit_card_statements" not in data:
+        return None
+    stmts = data["credit_card_statements"]
+    if not isinstance(stmts, list):
+        raise ValueError("备份格式错误：credit_card_statements 不是数组")
+    for index, s in enumerate(stmts, start=1):
+        if not isinstance(s, dict):
+            raise ValueError(f"备份 credit_card_statements 第 {index} 项必须是对象")
+        for field in ("bank_key", "card_last_four", "message_id"):
+            if not isinstance(s.get(field), str) or not s.get(field):
+                raise ValueError(f"备份 credit_card_statements 第 {index} 项缺少 {field}")
+        items = s.get("items")
+        if items is not None and not isinstance(items, list):
+            raise ValueError(f"备份 credit_card_statements 第 {index} 项 items 不是数组")
+        for j, item in enumerate(items or [], start=1):
+            if not isinstance(item, dict):
+                raise ValueError(f"备份 credit_card_statements 第 {index} 项 items 第 {j} 条必须是对象")
+            if not isinstance(item.get("description"), str):
+                raise ValueError(f"备份 credit_card_statements 第 {index} 项 items 第 {j} 条缺 description")
+            amount = item.get("amount")
+            if not isinstance(amount, (int, float)) or isinstance(amount, bool):
+                raise ValueError(f"备份 credit_card_statements 第 {index} 项 items 第 {j} 条 amount 非法")
+    return stmts
+
+
 def _collect_entities(db: Session, user: User) -> dict:
     """汇总某用户的订阅及其依赖实体（分类/付款方式/捆绑包/自定义货币）。
 
@@ -120,6 +187,11 @@ def _collect_entities(db: Session, user: User) -> dict:
     恢复端按名称匹配即可正确还原到重新种子化后的系统分类上。
     """
     subs = db.scalars(select(Subscription).where(Subscription.user_id == user.id)).all()
+    statements = db.scalars(
+        select(CreditCardStatement)
+        .where(CreditCardStatement.user_id == user.id)
+        .order_by(CreditCardStatement.id)
+    ).all()
     # 一次性取本用户全部续费历史，按订阅分组，避免每条订阅单独查询。
     all_history = db.scalars(
         select(RenewalHistory)
@@ -157,6 +229,9 @@ def _collect_entities(db: Session, user: User) -> dict:
         select(Currency).where(Currency.is_custom.is_(True), Currency.user_id == user.id)
     ).all()
 
+    # 账单的备份内卡片 key = 卡片在 credit_cards 数组中的下标（与恢复端一致）
+    card_index = {card.id: idx for idx, card in enumerate(credit_cards)}
+
     return {
         "categories": [
             {
@@ -171,6 +246,7 @@ def _collect_entities(db: Session, user: User) -> dict:
         ],
         "bundles": [{"id": b.id, "name": b.name, "note": b.note} for b in bundles],
         "credit_cards": [_credit_card_dict(card) for card in credit_cards],
+        "credit_card_statements": [_statement_dict(s, card_index) for s in statements],
         "currencies": [
             {
                 "code": c.code,
@@ -287,6 +363,7 @@ def _validate_backup_payload(data: dict) -> None:
     if not isinstance(subs, list):
         raise ValueError("备份格式错误：subscriptions 不是数组")
     _validated_credit_cards(data)
+    _validated_statements(data)
     # 辅助集合必须是数组、元素必须是 dict，否则后续 .get() 抛 AttributeError 走成 500
     for key in ("categories", "payment_methods", "bundles", "currencies"):
         items = data.get(key)
@@ -462,6 +539,7 @@ def _restore_entities(
     """
     subs_in = data.get("subscriptions") or []
     cards_in = _validated_credit_cards(data)
+    statements_in = _validated_statements(data)
     replace_credit_cards = replace and cards_in is not None
 
     # 任何删除/写入前先校验，畸形或越权货币引用直接抛错，避免 replace 先删后写错数据。
@@ -487,6 +565,19 @@ def _restore_entities(
                 delete(CreditCardNotificationOutbox).where(
                     CreditCardNotificationOutbox.credit_card_id.in_(old_card_ids)
                 )
+            )
+            # 账单与明细随卡片一起替换（SQLite 无级联，显式清理）
+            old_stmt_ids = list(db.scalars(
+                select(CreditCardStatement.id).where(CreditCardStatement.user_id == user.id)
+            ).all())
+            if old_stmt_ids:
+                db.execute(
+                    delete(CreditCardStatementItem).where(
+                        CreditCardStatementItem.statement_id.in_(old_stmt_ids)
+                    )
+                )
+            db.execute(
+                delete(CreditCardStatement).where(CreditCardStatement.user_id == user.id)
             )
             db.execute(delete(CreditCard).where(CreditCard.id.in_(old_card_ids)))
         db.flush()
@@ -616,21 +707,110 @@ def _restore_entities(
     db.flush()
 
     if isinstance(cards_in, list):
-        for card in cards_in:
-            db.add(
-                CreditCard(
-                    user_id=user.id,
-                    display_name=card["display_name"].strip(),
-                    bank_name=card["bank_name"],
-                    last_four=card["last_four"],
-                    statement_day=card["statement_day"],
-                    due_day=card["due_day"],
-                    remind_days_before=card["remind_days_before"],
-                    credit_limit=card.get("credit_limit"),
-                    is_active=card["is_active"],
-                    show_in_calendar=card["show_in_calendar"],
-                )
+        # 备份内局部 key（卡片在备份 credit_cards 数组的下标）→ 新卡 id。
+        # 尾号不唯一不可作关联键；账单的 card_key 指向导出时的卡片数组序。
+        card_key_map: dict[int, int] = {}
+        for idx, card in enumerate(cards_in):
+            new_card = CreditCard(
+                user_id=user.id,
+                display_name=card["display_name"].strip(),
+                bank_name=card["bank_name"],
+                last_four=card["last_four"],
+                statement_day=card["statement_day"],
+                due_day=card["due_day"],
+                remind_days_before=card["remind_days_before"],
+                credit_limit=card.get("credit_limit"),
+                is_active=card["is_active"],
+                show_in_calendar=card["show_in_calendar"],
             )
+            db.add(new_card)
+            db.flush()
+            card_key_map[idx] = new_card.id
+        # 恢复账单与明细（v4+）：
+        # - 仅 replace 清空现有账单；合并导入按 (source, message_id, card) 去重插入
+        # - 来源按备份内 source_email 映射到当前用户同邮箱的 IMAP 账户；
+        #   找不到则置 NULL（来源信息随账户删除/换库不可还原，不伪造 ID）
+        if statements_in is not None:
+            if replace:
+                source_ids = list(db.scalars(
+                    select(CreditCardStatement.id).where(CreditCardStatement.user_id == user.id)
+                ).all())
+                if source_ids:
+                    db.execute(
+                        delete(CreditCardStatementItem).where(
+                            CreditCardStatementItem.statement_id.in_(source_ids)
+                        )
+                    )
+                db.execute(
+                    delete(CreditCardStatement).where(CreditCardStatement.user_id == user.id)
+                )
+            # 邮箱 → 当前用户账户（备份不含账户 ID；账户凭据不进备份）
+            accounts_by_email = {
+                a.email: a for a in db.scalars(
+                    select(ImapAccount).where(ImapAccount.user_id == user.id)
+                ).all()
+            }
+            # 合并模式下保留现有记录的键，避免重复插入
+            existing_keys: set[tuple[int, str, str]] = set()
+            if not replace:
+                existing_keys = set(
+                    db.execute(
+                        select(
+                            CreditCardStatement.source_account_id,
+                            CreditCardStatement.message_id,
+                            CreditCardStatement.card_last_four,
+                        ).where(CreditCardStatement.user_id == user.id)
+                    ).all()
+                )
+            for s in statements_in:
+                card_key = s.get("card_key")
+                if card_key is not None and (
+                    not isinstance(card_key, int) or card_key not in card_key_map
+                ):
+                    raise ValueError("备份 credit_card_statements 的 card_key 超出范围")
+                source_account = accounts_by_email.get(s.get("source_email"))
+                key = (
+                    source_account.id if source_account else -1,
+                    s["message_id"],
+                    s["card_last_four"],
+                )
+                if key in existing_keys:
+                    continue  # 合并导入去重
+                existing_keys.add(key)
+                record = CreditCardStatement(
+                    user_id=user.id,
+                    card_id=card_key_map.get(card_key) if card_key is not None else None,
+                    source_account_id=source_account.id if source_account else None,
+                    bank_key=s["bank_key"],
+                    card_last_four=s["card_last_four"],
+                    match_status=s.get("match_status") or "unmatched",
+                    bill_period_start=_parse_date(s.get("bill_period_start")),
+                    bill_period_end=_parse_date(s.get("bill_period_end")),
+                    statement_date=_parse_date(s.get("statement_date")),
+                    due_date=_parse_date(s.get("due_date")),
+                    total_due=s.get("total_due"),
+                    min_due=s.get("min_due"),
+                    credit_limit=s.get("credit_limit"),
+                    message_id=s["message_id"],
+                    subject=s.get("subject"),
+                    verify_status=s.get("verify_status") or "ok",
+                )
+                db.add(record)
+                db.flush()
+                for line_no, item in enumerate(s.get("items") or [], start=1):
+                    db.add(CreditCardStatementItem(
+                        statement_id=record.id,
+                        line_no=line_no,
+                        trans_date_raw=item.get("trans_date_raw") or "",
+                        trans_date=_parse_date(item.get("trans_date")),
+                        posted_date=_parse_date(item.get("posted_date")),
+                        description=item.get("description") or "",
+                        amount=item.get("amount") or 0.0,
+                        tx_amount=item.get("tx_amount"),
+                        tx_currency=item.get("tx_currency"),
+                        tx_type=item.get("tx_type") or "purchase",
+                        installment_note=item.get("installment_note"),
+                    ))
         db.flush()
 
     count = 0

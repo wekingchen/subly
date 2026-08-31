@@ -330,6 +330,7 @@
           <div class="imap-account-actions">
             <button class="btn ghost sm" type="button" :disabled="acct.busy" @click="testAccount(acct)">{{ acct.busy ? t('imap.testing') : t('imap.test') }}</button>
             <button class="btn ghost sm" type="button" :disabled="acct.busy" @click="fetchAccount(acct)">{{ acct.busy ? t('imap.fetching') : t('imap.fetch') }}</button>
+            <button class="btn ghost sm" type="button" :disabled="acct.busy" @click="syncStatements(acct)">{{ acct.busy ? t('imap.syncing') : t('imap.syncStatements') }}</button>
             <button class="btn ghost sm" type="button" :disabled="acct.busy || !!editingId" @click="startEdit(acct)">{{ t('common.edit') }}</button>
             <button class="btn ghost sm danger" type="button" :disabled="acct.busy" @click="removeAccount(acct)">{{ t('common.delete') }}</button>
           </div>
@@ -1067,6 +1068,28 @@ async function fetchAccount(acct) {
       imOk.value = false
       imMsg.value = e.response?.data?.detail || t('imap.loadFailed')
     }
+  } finally {
+    acct.busy = false
+  }
+}
+
+// 手动解析账单：拉白名单银行账单邮件 → 按卡落库（展示用，不进通知/iCal）
+async function syncStatements(acct) {
+  if (acct.busy) return
+  acct.busy = true
+  imMsg.value = ''
+  try {
+    const d = (await api.post(`/api/imap/accounts/${acct.id}/sync-statements`, { days: 31 })).data
+    const parts = [t('imap.syncSaved', { n: d.saved || 0 })]
+    if (d.skipped) parts.push(t('imap.syncSkipped', { n: d.skipped }))
+    if (d.unmatched?.length) parts.push(t('imap.syncUnmatched', { n: d.unmatched.length }))
+    if (d.mismatched?.length) parts.push(t('imap.syncMismatched', { n: d.mismatched.length }))
+    if (d.errors?.length) parts.push(t('imap.syncErrors', { n: d.errors.length }))
+    imOk.value = !d.mismatched?.length && !d.errors?.length
+    imMsg.value = parts.join('，')
+  } catch (e) {
+    imOk.value = false
+    imMsg.value = e.response?.data?.detail || t('imap.loadFailed')
   } finally {
     acct.busy = false
   }

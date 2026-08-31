@@ -12,6 +12,8 @@ from app.models import (
     CreditCard,
     CreditCardNotificationLog,
     CreditCardNotificationOutbox,
+    CreditCardStatement,
+    CreditCardStatementItem,
     Currency,
     NotificationLog,
     NotificationOutbox,
@@ -141,6 +143,17 @@ def delete_user(
             CreditCardNotificationOutbox.credit_card_id.in_(credit_card_ids),
         ))
     )
+    # 账单与明细（SQLite 无级联；items 先于 statement）
+    stmt_ids = list(db.scalars(
+        select(CreditCardStatement.id).where(CreditCardStatement.user_id == user_id)
+    ).all())
+    if stmt_ids:
+        db.execute(
+            delete(CreditCardStatementItem).where(
+                CreditCardStatementItem.statement_id.in_(stmt_ids)
+            )
+        )
+    db.execute(delete(CreditCardStatement).where(CreditCardStatement.user_id == user_id))
     db.execute(delete(CreditCard).where(CreditCard.user_id == user_id))
     db.execute(delete(NotificationLog).where(NotificationLog.user_id == user_id))
     db.execute(delete(NotificationOutbox).where(NotificationOutbox.user_id == user_id))

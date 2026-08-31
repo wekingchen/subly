@@ -5,6 +5,7 @@
 """
 import email.header
 import imaplib
+import re
 import ssl
 from email.utils import parseaddr
 
@@ -201,6 +202,95 @@ def fetch_recent(
         except (imaplib.IMAP4.error, OSError, TimeoutError) as exc:
             # SELECT/SEARCH/FETCH 期间的协议/网络异常（含网易 "Unsafe Login"
             # 拒绝等 IMAP4.error 子类）统一转成连接错误，避免 500 逃逸。
+            raise ImapConnectionError(type(exc).__name__) from exc
+    finally:
+        try:
+            client.logout()
+        except (OSError, imaplib.IMAP4.error):
+            pass
+        try:
+            client.shutdown()
+        except (OSError, imaplib.IMAP4.error):
+            pass
+
+
+def fetch_full_mime(
+    email: str,
+    password: str,
+    provider: str,
+    days: int,
+    predicate=None,
+    max_scan: int = 200,
+    max_message_bytes: int = 5 * 1024 * 1024,
+) -> list[dict]:
+    """拉取收件箱最近 N 天**完整邮件**（含正文），供账单解析。
+
+    predicate(from_address) -> bool 过滤发件人（账单银行白名单）。
+    返回 [{uid, from_address, subject, raw(bytes)}]；单封超过
+    max_message_bytes 直接跳过（防止异常大邮件撑爆内存）。
+    """
+    from datetime import date, timedelta
+
+    host = provider_host(provider)
+    since = (date.today() - timedelta(days=days)).strftime("%d-%b-%Y")
+    try:
+        client = imaplib.IMAP4_SSL(
+            host,
+            IMAP_PROVIDERS[provider]["port"],
+            ssl_context=_ssl_context(),
+            timeout=IMAP_TIMEOUT_SECONDS,
+        )
+    except (OSError, imaplib.IMAP4.error) as exc:
+        raise ImapConnectionError(type(exc).__name__) from exc
+    try:
+        try:
+            client.login(email, password)
+        except (imaplib.IMAP4.error, OSError, TimeoutError) as exc:
+            raise ImapConnectionError("login-failed") from exc
+        _client_session(client)
+        try:
+            status, _ = client.select("INBOX", readonly=True)
+            if status != "OK":
+                raise ImapConnectionError("select-failed")
+            status, data = client.uid("search", None, f'(SINCE "{since}")')
+            if status != "OK":
+                raise ImapConnectionError("search-failed")
+            uids = sorted((data[0] or b"").split(), key=lambda u: int(u), reverse=True)
+            out: list[dict] = []
+            # 两阶段拉取：先取头部+大小（发件人过滤与大小判断都不需要正文），
+            # 只对通过筛选的邮件下载完整 BODY——避免把大附件/无关邮件整个
+            # 拉进内存后才丢弃（审核修复：资源保护必须发生在下载之前）。
+            for uid in uids[:max_scan]:
+                status, head_data = client.uid("fetch", uid, "(BODY.PEEK[HEADER] RFC822.SIZE)")
+                if status != "OK" or not head_data or head_data[0] is None:
+                    continue
+                if not isinstance(head_data[0], tuple):
+                    continue
+                meta_raw = head_data[0][1]
+                size_raw = head_data[0][0] if isinstance(head_data[0][0], bytes) else b""
+                msize = re.search(rb"RFC822.SIZE\s+(\d+)", size_raw)
+                if msize and int(msize[1]) > max_message_bytes:
+                    continue  # 超限：不下载正文
+                import email as _email
+
+                head_msg = _email.message_from_bytes(meta_raw)
+                _, sender_addr = _parse_from(head_msg.get("From"))
+                if predicate is not None and not predicate(sender_addr):
+                    continue
+                status, body_data = client.uid("fetch", uid, "(BODY.PEEK[])")
+                if status != "OK" or not body_data or body_data[0] is None:
+                    continue
+                raw = body_data[0][1] if isinstance(body_data[0], tuple) else b""
+                if not raw:
+                    continue
+                out.append({
+                    "uid": uid.decode("ascii", errors="replace"),
+                    "from_address": sender_addr,
+                    "subject": _decode_header_value(head_msg.get("Subject")),
+                    "raw": raw,
+                })
+            return out
+        except (imaplib.IMAP4.error, OSError, TimeoutError) as exc:
             raise ImapConnectionError(type(exc).__name__) from exc
     finally:
         try:

@@ -1031,7 +1031,7 @@ def test_backup_v3_exports_only_credit_card_configuration_for_current_user():
 
         exported = backup.export_data(user=user, db=db)
 
-        assert exported["export_version"] == 3
+        assert exported["export_version"] == 4
         assert exported["credit_cards"] == [{
             "display_name": "主卡",
             "bank_name": "示例银行",

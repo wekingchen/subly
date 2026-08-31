@@ -10,7 +10,7 @@ BANK_SENDER_DOMAINS: dict[str, dict] = {
     "cmb": {"name": "招商银行", "domains": ["cmbchina.com"]},
     "pab": {"name": "平安银行", "domains": ["pingan.com"]},
     "cmbc": {"name": "民生银行", "domains": ["cmbc.com.cn"]},
-    "citic": {"name": "中信银行", "domains": ["citicbank.com"]},
+    "citic": {"name": "中信银行", "domains": ["citicbank.com", "citiccard.com"]},
     "ccb": {"name": "建设银行", "domains": ["ccb.com"]},
 }
 

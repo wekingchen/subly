@@ -268,6 +268,83 @@ class CreditCard(Base):
         DateTime, server_default=func.now(), onupdate=func.now()
     )
 
+    statements: Mapped[list["CreditCardStatement"]] = relationship(
+        back_populates="card", cascade="all, delete-orphan"
+    )
+
+
+class CreditCardStatement(Base):
+    """单卡单期账单（账单邮件解析产物；一封邮件多卡 → 拆成多条）。
+
+    数据只进展示与备份，不进通知/iCal/任何外部输出。
+    card_id 可空：同尾号多卡无法盲关联（unmatched/ambiguous）。
+    """
+
+    __tablename__ = "credit_card_statements"
+    __table_args__ = (
+        UniqueConstraint(
+            "source_account_id", "message_id", "card_last_four",
+            name="uq_statement_source_message_card",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    card_id: Mapped[int | None] = mapped_column(
+        ForeignKey("credit_cards.id"), nullable=True, index=True
+    )
+    # 来源 IMAP 账户；备份恢复找不到同邮箱账户时为 NULL（历史保留）
+    source_account_id: Mapped[int | None] = mapped_column(
+        ForeignKey("imap_accounts.id"), nullable=True
+    )
+    bank_key: Mapped[str] = mapped_column(String(16))                # 'cmb' 等，见 app.bank_senders
+    card_last_four: Mapped[str] = mapped_column(String(4))           # 邮件里解析出的尾号
+    match_status: Mapped[str] = mapped_column(String(16), default="unmatched")  # matched|unmatched|ambiguous
+    bill_period_start: Mapped[date | None] = mapped_column(Date, nullable=True)
+    bill_period_end: Mapped[date | None] = mapped_column(Date, nullable=True)
+    statement_date: Mapped[date | None] = mapped_column(Date, nullable=True)  # 账单日
+    due_date: Mapped[date | None] = mapped_column(Date, nullable=True)        # 到期还款日
+    total_due: Mapped[float | None] = mapped_column(Float, nullable=True)     # 本期应还款额（CNY）
+    min_due: Mapped[float | None] = mapped_column(Float, nullable=True)
+    credit_limit: Mapped[float | None] = mapped_column(Float, nullable=True)  # 账单显示额度
+    message_id: Mapped[str] = mapped_column(String(998))             # 邮件 Message-ID（去重）
+    subject: Mapped[str | None] = mapped_column(String(255), nullable=True)   # 人识别用
+    verify_status: Mapped[str] = mapped_column(String(16), default="ok")      # ok|mismatch（勾稽失败）
+    parsed_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+    card: Mapped["CreditCard | None"] = relationship(back_populates="statements")
+    source_account: Mapped["ImapAccount | None"] = relationship()
+    items: Mapped[list["CreditCardStatementItem"]] = relationship(
+        back_populates="statement", cascade="all, delete-orphan"
+    )
+
+
+class CreditCardStatementItem(Base):
+    """账单交易明细行。金额正=消费/支出，负=还款/退款；amount 是结算币（CNY）。"""
+
+    __tablename__ = "credit_card_statement_items"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    statement_id: Mapped[int] = mapped_column(
+        ForeignKey("credit_card_statements.id"), index=True
+    )
+    # 账单内行序号（解析顺序）；同日同商户同金额的合法重复交易可共存，
+    # 去重由邮件级 (source_account_id, message_id) 承担。
+    line_no: Mapped[int] = mapped_column(Integer, default=0)
+    trans_date_raw: Mapped[str] = mapped_column(String(16), default="")       # 原文（无年份日期保留）
+    trans_date: Mapped[date | None] = mapped_column(Date, nullable=True)      # 补年后的规范化日期
+    posted_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    description: Mapped[str] = mapped_column(String(255))
+    amount: Mapped[float] = mapped_column(Float)                     # 结算币金额（勾稽口径）
+    tx_amount: Mapped[float | None] = mapped_column(Float, nullable=True)     # 原币金额（存档）
+    tx_currency: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    tx_type: Mapped[str] = mapped_column(String(16), default="purchase")      # purchase|payment|refund|installment|interest|fee|unknown
+    installment_note: Mapped[str | None] = mapped_column(String(64), nullable=True)  # "第10/24期"
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+    statement: Mapped["CreditCardStatement"] = relationship(back_populates="items")
+
 
 class Bundle(Base):
     __tablename__ = "bundles"
