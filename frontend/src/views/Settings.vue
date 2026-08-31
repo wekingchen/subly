@@ -371,7 +371,7 @@
           <span class="sync-error-subject">{{ u.subject }}</span>
           <span class="sync-error-reason">{{ u.error }}</span>
         </li>
-        <li v-for="e in syncErrorDetails" :key="e.uid" class="sync-error-item">
+        <li v-for="e in syncErrorDetails" :key="(e.uid || '') + ':' + (e.subject || '')" class="sync-error-item">
           <span class="sync-error-subject">{{ e.subject }}</span>
           <span v-if="e.from" class="sync-error-from">{{ e.from }}</span>
           <span class="sync-error-reason">{{ e.error }}</span>
@@ -380,7 +380,7 @@
       <div v-if="preview.length" class="imap-preview">
         <div class="imap-preview-title">{{ t('imap.previewTitle') }}</div>
         <ul>
-          <li v-for="m in preview" :key="m.uid">
+          <li v-for="m in preview" :key="(m.folder || 'INBOX') + ':' + m.uid">
             <span class="imap-from">{{ m.from }}</span>
             <span class="imap-subject">{{ m.subject }}</span>
             <span class="imap-date muted">{{ m.date }}</span>

@@ -5,9 +5,12 @@
 """
 import email.header
 import imaplib
+import logging
 import re
 import ssl
 from email.utils import parseaddr
+
+logger = logging.getLogger(__name__)
 
 # 预设服务商：主机/端口固定，不暴露给用户配置
 IMAP_PROVIDERS = {
@@ -17,6 +20,10 @@ IMAP_PROVIDERS = {
 
 IMAP_TIMEOUT_SECONDS = 20
 MAX_SUBJECT_LENGTH = 120
+# 多文件夹扫描资源预算：防止「命中文件夹数 × 每文件夹 200 封 × 单封 5MB」
+# 的无上限内存累积（如 10 个归档类文件夹理论上可达数 GB）。
+MAX_SCAN_FOLDERS = 5
+MAX_TOTAL_BYTES = 50 * 1024 * 1024  # 全部正文合计上限 50MB
 
 # 网易系 IMAP（126/163/网易企业邮）要求登录后先发 ID 命令自报客户端身份，
 # 否则后续 SELECT/SEARCH 会被以 "Unsafe Login" 拒绝——表现为「测试连接成功
@@ -86,6 +93,22 @@ def _parse_from(raw) -> tuple[str, str]:
     """解析发件人头，返回 (显示名或地址, 地址)。"""
     name, address = parseaddr(_decode_header_value(raw))
     return (name or address, address)
+
+
+def _date_sort_key(date_str: str):
+    """邮件 Date 头 → 可比较排序键（解析失败/缺失排最后）。"""
+    from datetime import datetime, timezone
+    from email.utils import parsedate_to_datetime
+
+    try:
+        dt = parsedate_to_datetime(date_str)
+        if dt is None:
+            return datetime.min.replace(tzinfo=timezone.utc)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+    except (TypeError, ValueError):
+        return datetime.min.replace(tzinfo=timezone.utc)
 
 
 def _ssl_context() -> ssl.SSLContext:
@@ -170,6 +193,8 @@ def fetch_recent(
         _client_session(client)
         try:
             messages = []
+            seen_keys: set[str] = set()  # 跨文件夹去重（folder+uid）
+            scanned_any = False  # 至少一个文件夹完成 SELECT+SEARCH
             for folder in _list_scan_folders(client):
                 try:
                     status, _ = client.select(f'"{folder}"', readonly=True)
@@ -180,11 +205,16 @@ def fetch_recent(
                 status, data = client.uid("search", None, f'(SINCE "{since}")')
                 if status != "OK":
                     continue
+                scanned_any = True
                 uids = sorted((data[0] or b"").split(), key=lambda u: int(u), reverse=True)
-                # 最新的 UID 数值最大：倒序扫描，命中累计到 limit 即停。
-                # max_scan 封顶防止大收件箱产生无界 IO；limit 未满时属正常
-                # （指定时间窗内命中邮件就这么多），不视为错误。
+                # 倒序扫描（文件夹内 UID 新的在前）。不在此处提前 return——
+                # 先收集所有文件夹的候选再全局截断，否则 INBOX 旧邮件会把
+                # 归档文件夹里的新账单挤掉（审核修复：全局「最近」语义）。
                 for uid in uids[:max_scan]:
+                    key = f"{folder}:{uid.decode('ascii', errors='replace')}"
+                    if key in seen_keys:
+                        continue
+                    seen_keys.add(key)
                     status, msg_data = client.uid("fetch", uid, "(BODY.PEEK[HEADER])")
                     if status != "OK" or not msg_data or msg_data[0] is None:
                         continue
@@ -196,14 +226,19 @@ def fetch_recent(
                         continue
                     messages.append({
                         "uid": uid.decode("ascii", errors="replace"),
+                        "folder": folder,
                         "from": sender_name,
                         "from_address": sender_addr,
                         "subject": _decode_header_value(msg.get("Subject")) or "（无主题）",
                         "date": _decode_header_value(msg.get("Date")),
                     })
-                    if len(messages) >= limit:
-                        return messages
-            return messages
+            if not scanned_any:
+                # 失败要响亮：所有文件夹都无法 SELECT/SEARCH（如 Unsafe Login、
+                # 权限拒绝）不能伪装成「成功但没有邮件」
+                raise ImapConnectionError("select-failed")
+            # 全局按邮件日期倒序（Date 头解析失败的排最后），再截断 limit
+            messages.sort(key=lambda m: _date_sort_key(m["date"]), reverse=True)
+            return messages[:limit]
         except (imaplib.IMAP4.error, OSError, TimeoutError) as exc:
             # SELECT/SEARCH/FETCH 期间的协议/网络异常（含网易 "Unsafe Login"
             # 拒绝等 IMAP4.error 子类）统一转成连接错误，避免 500 逃逸。
@@ -300,6 +335,7 @@ def fetch_full_mime(
     predicate=None,
     max_scan: int = 200,
     max_message_bytes: int = 5 * 1024 * 1024,
+    max_total_bytes: int = MAX_TOTAL_BYTES,
 ) -> list[dict]:
     """拉取最近 N 天**完整邮件**（含正文），供账单解析。
 
@@ -330,7 +366,10 @@ def fetch_full_mime(
         try:
             out: list[dict] = []
             seen_message_ids: set[str] = set()
-            for folder in _list_scan_folders(client):
+            scanned_any = False
+            total_bytes = 0  # 全局正文字节预算（跨文件夹累计）
+            folders_scanned = _list_scan_folders(client)[:MAX_SCAN_FOLDERS]
+            for folder in folders_scanned:
                 try:
                     status, _ = client.select(f'"{folder}"', readonly=True)
                 except (imaplib.IMAP4.error, OSError, TimeoutError) as exc:
@@ -340,11 +379,18 @@ def fetch_full_mime(
                 status, data = client.uid("search", None, f'(SINCE "{since}")')
                 if status != "OK":
                     continue
+                scanned_any = True
                 uids = sorted((data[0] or b"").split(), key=lambda u: int(u), reverse=True)
                 # 两阶段拉取：先取头部+大小（发件人过滤与大小判断都不需要正文），
                 # 只对通过筛选的邮件下载完整 BODY——避免把大附件/无关邮件整个
                 # 拉进内存后才丢弃（审核修复：资源保护必须发生在下载之前）。
                 for uid in uids[:max_scan]:
+                    if total_bytes >= max_total_bytes:
+                        logger.warning(
+                            "event=imap_fetch_budget_exhausted total_bytes=%d",
+                            total_bytes,
+                        )
+                        return out  # 全局预算耗尽，响亮记录后返回已收集结果
                     status, head_data = client.uid("fetch", uid, "(BODY.PEEK[HEADER] RFC822.SIZE)")
                     if status != "OK" or not head_data or head_data[0] is None:
                         continue
@@ -362,24 +408,31 @@ def fetch_full_mime(
                     if predicate is not None and not predicate(sender_addr):
                         continue
                     # 跨文件夹去重（同一封邮件可能被 QQ 复制进多个文件夹）：
-                    # Message-ID 全局唯一，比 UID 稳定（UID 每文件夹独立编号）
+                    # Message-ID 全局唯一，比 UID 稳定（UID 每文件夹独立编号）。
+                    # 只在正文成功取得后才标记已见——首副本下载失败时仍可从
+                    # 其他文件夹的副本补拉（审核修复：过早标记会漏掉唯一可用副本）。
                     mid = str(head_msg.get("Message-ID") or "").strip()
                     if mid and mid in seen_message_ids:
                         continue
-                    if mid:
-                        seen_message_ids.add(mid)
                     status, body_data = client.uid("fetch", uid, "(BODY.PEEK[])")
                     if status != "OK" or not body_data or body_data[0] is None:
                         continue
                     raw = body_data[0][1] if isinstance(body_data[0], tuple) else b""
                     if not raw:
                         continue
+                    if mid:
+                        seen_message_ids.add(mid)
+                    total_bytes += len(raw)
                     out.append({
                         "uid": uid.decode("ascii", errors="replace"),
                         "from_address": sender_addr,
                         "subject": _decode_header_value(head_msg.get("Subject")),
                         "raw": raw,
                     })
+            if not scanned_any:
+                # 失败要响亮：所有文件夹都无法 SELECT/SEARCH 不能伪装成
+                # 「成功但没有邮件」（Unsafe Login / 权限拒绝等）
+                raise ImapConnectionError("select-failed")
             return out
         except (imaplib.IMAP4.error, OSError, TimeoutError) as exc:
             raise ImapConnectionError(type(exc).__name__) from exc

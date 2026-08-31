@@ -712,6 +712,103 @@ def test_fetch_full_mime_scans_archive_folders(imap_env, monkeypatch):
     assert any("Other" in s for s in selected[1:]), f"归档文件夹未被扫描: {selected}"
 
 
+def test_fetch_full_mime_gets_mail_only_in_archive(imap_env, monkeypatch):
+    """审核回归：账单只在归档文件夹（INBOX 为空）也能拉到——归档独有邮件。"""
+    from app.services import imap_client as ic
+
+    client, _, _ = imap_env
+    client.post("/api/imap/accounts", json={
+        "email": "a@qq.com", "password": "x", "provider": "qq",
+    })
+
+    bill = (b"From: b <creditcard@service.pingan.com>\r\n"
+            b"Subject: s\r\nMessage-ID: <arch-only>\r\n\r\nbody")
+    header = bill.split(b"\r\n\r\n")[0]
+
+    class FakeClient:
+        def __init__(self, *a, **k): pass
+        def login(self, *a): pass
+        def xatom(self, *a): pass
+        def list(self):
+            return "OK", [b'(\\HasNoChildren) "/" "INBOX"',
+                          b'(\\HasNoChildren) "/" "Other Users/&kK5O9l9SaGM-"']
+        def select(self, folder, readonly=False):
+            self.folder = folder
+            return "OK", [b"1"]
+        def uid(self, cmd, *a):
+            # INBOX 空；只有归档里有账单
+            if self.folder == '"INBOX"':
+                return "OK", [b""]
+            if cmd == "search":
+                return "OK", [b"1"]
+            if "BODY.PEEK[]" in a[1]:
+                return "OK", [(b"1 (UID 1 BODY[])", bill), b")"]
+            return "OK", [(f"1 (UID 1 RFC822.SIZE 500 BODY[HEADER] {len(header)})".encode(), header), b")"]
+        def logout(self): pass
+        def shutdown(self): pass
+
+    monkeypatch.setattr(ic.imaplib, "IMAP4_SSL", FakeClient)
+    mails = ic.fetch_full_mime("a@qq.com", "x", "qq", 90)
+    assert len(mails) == 1, "归档独有的账单邮件必须被拉到"
+    assert mails[0]["from_address"] == "creditcard@service.pingan.com"
+
+
+def test_all_folders_rejected_is_loud_error(imap_env, monkeypatch):
+    """审核回归：全部文件夹 SELECT/SEARCH 返回 NO → 报连接错误，不伪装成空邮箱。"""
+    from app.services import imap_client as ic
+
+    class NoFolderClient:
+        def __init__(self, *a, **k): pass
+        def login(self, *a): pass
+        def xatom(self, *a): pass
+        def list(self):
+            return "OK", [b'(\\HasNoChildren) "/" "INBOX"']
+        def select(self, folder, readonly=False):
+            return "NO", [b"SELECT denied"]  # 如 Unsafe Login
+        def logout(self): pass
+        def shutdown(self): pass
+
+    monkeypatch.setattr(ic.imaplib, "IMAP4_SSL", NoFolderClient)
+    with pytest.raises(ic.ImapConnectionError):
+        ic.fetch_full_mime("a@qq.com", "x", "qq", 90)
+
+
+def test_first_copy_body_fails_second_folder_succeeds(imap_env, monkeypatch):
+    """审核回归：INBOX 副本正文下载失败时，归档副本仍可补拉（去重时机）。"""
+    from app.services import imap_client as ic
+
+    bill = (b"From: b <creditcard@service.pingan.com>\r\n"
+            b"Subject: s\r\nMessage-ID: <dup-retry>\r\n\r\nbody")
+    header = bill.split(b"\r\n\r\n")[0]
+
+    class FakeClient:
+        def __init__(self, *a, **k): pass
+        def login(self, *a): pass
+        def xatom(self, *a): pass
+        def list(self):
+            return "OK", [b'(\\HasNoChildren) "/" "INBOX"',
+                          b'(\\HasNoChildren) "/" "MyArchive"']
+        def select(self, folder, readonly=False):
+            self.folder = folder
+            return "OK", [b"1"]
+        def uid(self, cmd, *a):
+            if cmd == "search":
+                return "OK", [b"1"]
+            if "BODY.PEEK[]" in a[1]:
+                # INBOX 副本正文下载失败（NO），归档副本成功
+                if self.folder == '"INBOX"':
+                    return "NO", [b"BODY fetch denied"]
+                return "OK", [(b"1 (UID 1 BODY[])", bill), b")"]
+            return "OK", [(f"1 (UID 1 RFC822.SIZE 500 BODY[HEADER] {len(header)})".encode(), header), b")"]
+        def logout(self): pass
+        def shutdown(self): pass
+
+    monkeypatch.setattr(ic.imaplib, "IMAP4_SSL", FakeClient)
+    mails = ic.fetch_full_mime("a@qq.com", "x", "qq", 90)
+    assert len(mails) == 1, "首副本失败时应从其他文件夹的副本补拉"
+    assert mails[0]["raw"] == bill
+
+
 def test_fetch_full_mime_dedupes_across_folders(imap_env, monkeypatch):
     """同一封邮件出现在多个文件夹（QQ 复制行为）只拉一次（Message-ID 去重）。"""
     from app.services import imap_client as ic
