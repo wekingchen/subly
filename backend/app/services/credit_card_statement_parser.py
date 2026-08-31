@@ -438,9 +438,15 @@ def _parse_ccb(html: str) -> list[ParsedStatement]:
             due_date = parse_date(flat[i + 1])
         elif t in ("本期全部应还款额NewBalance", "本期全部应还款额") and i + 2 < len(flat):
             total_due = _f(parse_money(flat[i + 2]))
-        elif t.startswith("授信额度CreditLimit") and i + 2 < len(flat):
-            # 真实样本：本期账单日 Statement Date 2026-08-27 | 授信额度 Credit Limit CNY 60,000
-            ccb_credit_limit = _f(parse_money(flat[i + 2]))
+        elif ccb_credit_limit is None and "授信额度" in t:
+            # 真实账单里「授信额度」「Credit」「Limit」可能分属相邻单元格，
+            # 不能要求同格；在锚点后的窗口内取第一个可解析金额
+            # （真实样本序：授信额度…CNY 60,000 → 授信额度 60,000）。
+            for j in range(i + 1, min(i + 6, len(flat))):
+                val = parse_money(flat[j])
+                if val is not None:
+                    ccb_credit_limit = float(val)
+                    break
         elif "消费/取现/其它费用" in t and i + 3 <= len(flat):
             # 平铺序：…消费/取现/其它费用…还款/退货/费用返还…=本期应还；数值在下一「币种行」
             for j in range(i + 1, min(i + 12, len(flat))):

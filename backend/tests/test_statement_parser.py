@@ -315,3 +315,26 @@ def test_debit_statement_is_ignored_not_failed():
     # 带着标题判断函数也验证
     assert is_non_card_statement("民生银行账户对账单,请妥善保管")
     assert not is_non_card_statement("民生信用卡2026年07月电子对账单")  # 有「信用卡」
+
+
+def test_ccb_credit_limit_split_cells(imap_env=None):
+    """审核修复回归：真实账单里「授信额度」「Credit」「Limit」「CNY」「金额」
+    分属相邻单元格（非同格），窗口锚定仍能命中。"""
+    from statement_fixtures import build_mime
+    html = """<html><body>
+    <table><tr><td>账单周期Statement Cycle</td><td>2026/07/28-2026/08/27</td></tr>
+    <tr><td>本期到期还款日Payment Due Date</td><td>2026/09/16</td></tr></table>
+    <table><tr>
+      <td>信用信息 Credit Information 本期账单日 Statement Date</td><td>2026-08-27</td>
+      <td>授信额度</td><td>Credit</td><td>Limit</td><td>CNY</td><td>60,000</td>
+      <td>取现额度</td><td>Cash Advance Limit</td><td>CNY</td><td>30,000</td>
+    </tr></table>
+    <table><tr><td>【应还款明细】</td></tr>
+    <tr><td>51100000****5561</td><td>人民币(CNY)</td><td>-100.00</td><td>0.00</td><td></td><td></td><td></td></tr></table>
+    <table><tr><td>【交易明细】</td></tr>
+    <tr><td>交易日</td><td>银行记账日</td><td>卡号后四位</td><td>交易描述</td><td>交易币/金额</td><td></td><td>结算币/金额</td><td></td></tr>
+    <tr><td>2026-07-28</td><td>2026-07-28</td><td>5561</td><td>示例商户</td><td>CNY</td><td>30.00</td><td>CNY</td><td>30.00</td></tr>
+    </table></body></html>"""
+    raw = build_mime(html, ADDR["ccb"], "中国建设银行信用卡电子账单", "ccb-limit-2")
+    parsed = parse_email(raw, from_address=ADDR["ccb"])
+    assert all(s.credit_limit == 60000.0 for s in parsed.statements)
