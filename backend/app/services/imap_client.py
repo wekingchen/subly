@@ -131,9 +131,20 @@ def test_connection(email: str, password: str, provider: str) -> dict:
     return {"ok": True, "email": email, "provider": provider}
 
 
-def fetch_recent(email: str, password: str, provider: str, days: int, limit: int) -> list[dict]:
-    """拉取收件箱最近 N 天邮件头部（不取正文），按 UID 倒序截断 limit。
+def fetch_recent(
+    email: str,
+    password: str,
+    provider: str,
+    days: int,
+    limit: int,
+    predicate=None,
+    max_scan: int = 200,
+) -> list[dict]:
+    """拉取收件箱最近 N 天邮件头部（不取正文），按 UID 倒序返回最多 limit 封。
 
+    predicate(from_name, from_address) -> bool：可选过滤器（如账单银行白名单）。
+    limit 指过滤后的命中数上限：按 UID 倒序最多扫描 max_scan 封头部，
+    命中累计到 limit 即停，避免白名单邮件被无关邮件挤出截断窗口而漏掉。
     只返回 uid/from/subject/date 预览字段，邮件内容不落库。
     """
     from datetime import date, timedelta
@@ -164,8 +175,10 @@ def fetch_recent(email: str, password: str, provider: str, days: int, limit: int
                 raise ImapConnectionError("search-failed")
             uids = sorted((data[0] or b"").split(), key=lambda u: int(u), reverse=True)
             messages = []
-            # 最新的 UID 数值最大：按数值降序取前 limit 封
-            for uid in uids[:limit]:
+            # 最新的 UID 数值最大：倒序扫描，命中累计到 limit 即停。
+            # max_scan 封顶防止大收件箱产生无界 IO；limit 未满时属正常
+            # （指定时间窗内命中邮件就这么多），不视为错误。
+            for uid in uids[:max_scan]:
                 status, msg_data = client.uid("fetch", uid, "(BODY.PEEK[HEADER])")
                 if status != "OK" or not msg_data or msg_data[0] is None:
                     continue
@@ -173,6 +186,8 @@ def fetch_recent(email: str, password: str, provider: str, days: int, limit: int
 
                 msg = email.message_from_bytes(msg_data[0][1])
                 sender_name, sender_addr = _parse_from(msg.get("From"))
+                if predicate is not None and not predicate(sender_name, sender_addr):
+                    continue
                 messages.append({
                     "uid": uid.decode("ascii", errors="replace"),
                     "from": sender_name,
@@ -180,6 +195,8 @@ def fetch_recent(email: str, password: str, provider: str, days: int, limit: int
                     "subject": _decode_header_value(msg.get("Subject")) or "（无主题）",
                     "date": _decode_header_value(msg.get("Date")),
                 })
+                if len(messages) >= limit:
+                    break
             return messages
         except (imaplib.IMAP4.error, OSError, TimeoutError) as exc:
             # SELECT/SEARCH/FETCH 期间的协议/网络异常（含网易 "Unsafe Login"

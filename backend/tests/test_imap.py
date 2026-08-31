@@ -158,6 +158,199 @@ def test_update_other_users_account_404(imap_env):
     assert client.delete(f"/api/imap/accounts/{other_account.id}").status_code == 404
 
 
+# ---------- 银行白名单 ----------
+
+def test_banks_endpoint_lists_five_banks(imap_env):
+    """/banks 路由真实返回 5 家银行与发件人域名。"""
+    from app.bank_senders import BANK_SENDER_DOMAINS
+
+    client, _, _ = imap_env
+    resp = client.get("/api/imap/accounts/banks")
+    assert resp.status_code == 200
+    banks = resp.json()["banks"]
+    assert [b["key"] for b in banks] == ["cmb", "pab", "cmbc", "citic", "ccb"]
+    for b in banks:
+        assert set(b) == {"key", "name", "domains"}
+        assert b["domains"] == BANK_SENDER_DOMAINS[b["key"]]["domains"]
+    assert banks[0]["name"] == "招商银行"
+    assert banks[0]["domains"] == ["cmbchina.com"]
+
+
+def test_create_with_banks_roundtrip(imap_env):
+    """创建时带 banks → 列表/更新响应回显；非法 key 400。"""
+    client, _, _ = imap_env
+    resp = add_account(client, "a@126.com")
+    assert resp.status_code == 201
+    assert resp.json()["banks"] == []  # 未指定 = 全部银行（回显空数组）
+
+    resp = client.post("/api/imap/accounts", json={
+        "email": "b@126.com", "password": "x", "provider": "126",
+        "banks": ["cmb", "pab"],
+    })
+    assert resp.status_code == 201
+    assert resp.json()["banks"] == ["cmb", "pab"]
+
+    listed = client.get("/api/imap/accounts").json()["accounts"]
+    banks_map = {a["email"]: a["banks"] for a in listed}
+    assert banks_map["a@126.com"] == []
+    assert banks_map["b@126.com"] == ["cmb", "pab"]
+
+    # 非法 key
+    bad = client.post("/api/imap/accounts", json={
+        "email": "c@126.com", "password": "x", "provider": "126",
+        "banks": ["evil-bank"],
+    })
+    assert bad.status_code == 400
+
+
+def test_update_banks_semantics(imap_env):
+    """banks 缺省=不修改；空数组=清空（全部银行）；带值=替换。"""
+    client, db, _ = imap_env
+    account_id = client.post("/api/imap/accounts", json={
+        "email": "a@126.com", "password": "x", "provider": "126",
+        "banks": ["cmb"],
+    }).json()["id"]
+
+    # 缺省不修改
+    client.patch(f"/api/imap/accounts/{account_id}",
+                 json={"email": "a@126.com", "provider": "126"})
+    db.expire_all()
+    assert db.get(ImapAccount, account_id).banks == ["cmb"]
+
+    # 空数组 = 清空（全部银行）
+    client.patch(f"/api/imap/accounts/{account_id}",
+                 json={"email": "a@126.com", "provider": "126", "banks": []})
+    db.expire_all()
+    assert db.get(ImapAccount, account_id).banks is None
+
+    # 带值替换 + 去重
+    client.patch(f"/api/imap/accounts/{account_id}",
+                 json={"email": "a@126.com", "provider": "126", "banks": ["ccb", "ccb", "pab"]})
+    db.expire_all()
+    assert db.get(ImapAccount, account_id).banks == ["ccb", "pab"]
+
+
+def test_fetch_filters_by_bank_whitelist(imap_env, monkeypatch):
+    """拉取结果按白名单过滤发件人域名；空白名单不过滤。"""
+    client, _, _ = imap_env
+    account_id = client.post("/api/imap/accounts", json={
+        "email": "a@qq.com", "password": "x", "provider": "qq",
+        "banks": ["cmb"],
+    }).json()["id"]
+
+    def make_raw(from_addr):
+        return f"From: Bill <{from_addr}>\r\nSubject: s\r\nDate: d\r\n\r\n".encode()
+
+    raws = [make_raw("bill@cmbchina.com"), make_raw("notice@qq.com"),
+            make_raw("card@www.cmbchina.com"), make_raw("bill@ccb.com")]
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def login(self, email, password):
+            pass
+
+        def xatom(self, name, arg):
+            pass
+
+        def select(self, folder, readonly=False):
+            return "OK", [b"1"]
+
+        def uid(self, command, *args):
+            if command == "search":
+                return "OK", [b"4 3 2 1"]
+            idx = int(args[0]) - 1
+            return "OK", [(f"1 (UID {args[0]} RFC822.HEADER)".encode(), raws[idx]), b")"]
+
+        def logout(self):
+            pass
+
+        def shutdown(self):
+            pass
+
+    monkeypatch.setattr(imap_client.imaplib, "IMAP4_SSL", FakeClient)
+    resp = client.post(f"/api/imap/accounts/{account_id}/fetch", json={"days": 30, "limit": 50})
+    assert resp.status_code == 200
+    addrs = [m["from_address"] for m in resp.json()["messages"]]
+    # 只留招行：主域 + 子域命中；他行与无关邮件被过滤（UID 倒序：3 在 1 前）
+    assert addrs == ["card@www.cmbchina.com", "bill@cmbchina.com"]
+
+
+def test_fetch_whitelist_mail_beyond_truncation_window(imap_env, monkeypatch):
+    """审核修复回归：白名单邮件排在 20 封无关邮件之后也不能漏。
+
+    limit 是「命中数上限」而非「过滤前检查数」：拉取侧边扫描边匹配，
+    21 封（1 命中在最后）+ limit=20 仍能取到那封银行邮件。"""
+    client, _, _ = imap_env
+    account_id = client.post("/api/imap/accounts", json={
+        "email": "a@qq.com", "password": "x", "provider": "qq",
+        "banks": ["cmb"],
+    }).json()["id"]
+
+    def make_raw(from_addr):
+        return f"From: X <{from_addr}>\r\nSubject: s\r\nDate: d\r\n\r\n".encode()
+
+    # UID 1..21：UID 1（最旧）是唯一招行邮件，其余全是无关邮件
+    raw_by_uid = {
+        uid: make_raw("bill@cmbchina.com" if uid == 1 else "noise@qq.com")
+        for uid in range(1, 22)
+    }
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def login(self, email, password):
+            pass
+
+        def xatom(self, name, arg):
+            pass
+
+        def select(self, folder, readonly=False):
+            return "OK", [b"1"]
+
+        def uid(self, command, *args):
+            if command == "search":
+                return "OK", [b" ".join(str(u).encode() for u in range(1, 22))]
+            raw = raw_by_uid[int(args[0])]
+            return "OK", [(f"1 (UID {args[0]} RFC822.HEADER)".encode(), raw), b")"]
+
+        def logout(self):
+            pass
+
+        def shutdown(self):
+            pass
+
+    monkeypatch.setattr(imap_client.imaplib, "IMAP4_SSL", FakeClient)
+    resp = client.post(f"/api/imap/accounts/{account_id}/fetch", json={"days": 90, "limit": 20})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["count"] == 1
+    assert body["messages"][0]["from_address"] == "bill@cmbchina.com"
+
+
+def test_banks_invalid_types_return_400(imap_env):
+    """banks 结构错误（非数组元素/非数组值）统一 400，而非 Pydantic 422。"""
+    client, _, _ = imap_env
+    base = {"email": "a@126.com", "password": "x", "provider": "126"}
+    assert client.post("/api/imap/accounts", json={**base, "banks": [1]}).status_code == 400
+    assert client.post("/api/imap/accounts", json={**base, "banks": [None]}).status_code == 400
+    assert client.post("/api/imap/accounts", json={**base, "banks": "cmb"}).status_code == 400
+
+
+def test_sender_matches_banks_unit():
+    from app.bank_senders import sender_matches_banks
+
+    assert sender_matches_banks("bill@cmbchina.com", ["cmb"]) is True
+    assert sender_matches_banks("x@www.cmbchina.com", ["cmb"]) is True  # 子域
+    assert sender_matches_banks("bill@ccmbchina.com", ["cmb"]) is False  # 非后缀
+    assert sender_matches_banks("bill@ccb.com", ["cmb"]) is False
+    assert sender_matches_banks("any@any.com", None) is True  # 未限定
+    assert sender_matches_banks("any@any.com", []) is True
+    assert sender_matches_banks("not-an-address", ["cmb"]) is False
+
+
 def test_delete_account(imap_env):
     client, db, _ = imap_env
     account_id = add_account(client).json()["id"]

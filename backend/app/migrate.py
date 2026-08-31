@@ -55,6 +55,7 @@ _COLUMNS = [
     ("notification_log", "attempt_no", "INTEGER"),
     ("notification_log", "retry_cycle", "INTEGER"),
     ("credit_cards", "credit_limit", "FLOAT"),
+    ("imap_accounts", "banks", "JSON"),
 ]
 
 

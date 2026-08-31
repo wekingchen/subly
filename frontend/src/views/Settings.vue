@@ -319,6 +319,13 @@
           <div class="imap-account-main">
             <span class="imap-account-email">{{ acct.email }}</span>
             <span class="imap-account-provider">{{ providerLabel(acct.provider) }}</span>
+            <span class="imap-account-banks" v-if="acct.banks && acct.banks.length">
+              <span v-for="key in acct.banks" :key="key" class="imap-bank-badge">
+                <CreditCardBrandBadge :bank-name="bankNameOf(key)" />
+              </span>
+              <span class="imap-bank-names">{{ bankNamesOf(acct.banks) }}</span>
+            </span>
+            <span v-else class="imap-account-allbanks">{{ t('imap.allBanks') }}</span>
           </div>
           <div class="imap-account-actions">
             <button class="btn ghost sm" type="button" :disabled="acct.busy" @click="testAccount(acct)">{{ acct.busy ? t('imap.testing') : t('imap.test') }}</button>
@@ -346,6 +353,14 @@
                  :disabled="imapBusy" aria-label="IMAP 授权码" />
           <button class="btn" type="submit" :disabled="imapBusy">{{ editingId ? t('common.save') : t('imap.add') }}</button>
           <button v-if="editingId" class="btn ghost" type="button" @click="cancelEdit">{{ t('common.cancel') }}</button>
+        </div>
+        <div class="imap-banks-row">
+          <span class="imap-banks-label">{{ t('imap.banksLabel') }}</span>
+          <label v-for="b in bankOptions" :key="b.key" class="imap-bank-check">
+            <input type="checkbox" :name="`imap_bank_${b.key}`" :value="b.key" v-model="imForm.banks" :disabled="imapBusy" />
+            <span>{{ b.name }}</span>
+          </label>
+          <span class="imap-banks-hint">{{ t('imap.banksHint') }}</span>
         </div>
       </form>
 
@@ -438,6 +453,7 @@ import { useRoute } from 'vue-router'
 import api from '../api'
 import CalendarFeedManager from '../components/settings/CalendarFeedManager.vue'
 import CategoryManager from '../components/settings/CategoryManager.vue'
+import CreditCardBrandBadge from '../components/credit-cards/CreditCardBrandBadge.vue'
 import CurrencyManager from '../components/settings/CurrencyManager.vue'
 import PaymentMethodManager from '../components/settings/PaymentMethodManager.vue'
 import { useAuth } from '../stores/auth'
@@ -888,7 +904,7 @@ async function testWebhook() {
 // 账户列表行内附加 busy 状态（测试/拉取进行中禁用该行按钮）
 const imapAccounts = ref([])
 const editingId = ref(null)
-const imForm = reactive({ email: '', provider: '126', password: '' })
+const imForm = reactive({ email: '', provider: '126', password: '', banks: [] })
 const imapBusy = ref(false)
 const imMsg = ref('')
 const imOk = ref(false)
@@ -897,6 +913,17 @@ const previewAccountId = ref(null)
 
 const PROVIDER_LABELS = { '126': '126 邮箱', qq: 'QQ 邮箱' }
 const providerLabel = (p) => PROVIDER_LABELS[p] || p
+
+// 账单银行白名单选项：与后端 BANK_SENDER_DOMAINS 同源（key 一致）
+const bankOptions = [
+  { key: 'cmb', name: '招商银行' },
+  { key: 'pab', name: '平安银行' },
+  { key: 'cmbc', name: '民生银行' },
+  { key: 'citic', name: '中信银行' },
+  { key: 'ccb', name: '建设银行' }
+]
+const bankNameOf = (key) => bankOptions.find((b) => b.key === key)?.name || key
+const bankNamesOf = (keys) => keys.map(bankNameOf).join('、')
 
 const imapAccountsLoading = ref(false)
 const imapAccountsError = ref(false)
@@ -921,6 +948,7 @@ function resetImapForm() {
   imForm.email = ''
   imForm.provider = '126'
   imForm.password = ''
+  imForm.banks = []
   editingId.value = null
 }
 
@@ -929,6 +957,7 @@ function startEdit(acct) {
   imForm.email = acct.email
   imForm.provider = acct.provider
   imForm.password = ''
+  imForm.banks = [...(acct.banks || [])]
   imMsg.value = ''
 }
 
@@ -944,7 +973,8 @@ async function addAccount() {
     await api.post('/api/imap/accounts', {
       email: imForm.email.trim(),
       provider: imForm.provider,
-      password: imForm.password
+      password: imForm.password,
+      banks: [...imForm.banks]
     })
     resetImapForm()
     imOk.value = true
@@ -963,8 +993,8 @@ async function saveEdit() {
   imapBusy.value = true
   imMsg.value = ''
   try {
-    // 授权码留空 = 不修改（只发 email/provider）
-    const patch = { email: imForm.email.trim(), provider: imForm.provider }
+    // 授权码留空 = 不修改（只发 email/provider/banks）
+    const patch = { email: imForm.email.trim(), provider: imForm.provider, banks: [...imForm.banks] }
     if (imForm.password.trim()) patch.password = imForm.password
     await api.patch(`/api/imap/accounts/${editingId.value}`, patch)
     resetImapForm()
@@ -1205,8 +1235,18 @@ hr { border: none; border-top: 1px solid var(--border); margin: 16px 0; }
 .imap-accounts { list-style: none; margin: 0 0 12px; padding: 0; display: grid; gap: 8px; }
 .imap-account-item { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap;
   padding: 9px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-2); }
-.imap-account-main { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.imap-account-main { display: flex; align-items: center; gap: 8px; min-width: 0; flex-wrap: wrap; }
 .imap-account-email { font-weight: 750; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.imap-account-banks { display: inline-flex; align-items: center; gap: 5px; min-width: 0; }
+.imap-bank-badge { width: 18px; height: 18px; border-radius: 5px; overflow: hidden; flex: 0 0 auto; }
+.imap-bank-names { font-size: 11px; color: var(--text-soft); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.imap-account-allbanks { font-size: 11px; color: var(--text-soft); padding: 2px 8px; border-radius: 999px;
+  background: color-mix(in srgb, var(--success) 10%, transparent); }
+.imap-banks-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 8px; }
+.imap-banks-label { font-size: 12px; color: var(--text-soft); font-weight: 750; }
+.imap-bank-check { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; cursor: pointer; min-height: var(--tap-size); }
+.imap-bank-check input { width: auto; }
+.imap-banks-hint { font-size: 11px; color: var(--text-soft); }
 .imap-account-provider { flex: 0 0 auto; font-size: 11px; color: var(--text-soft); padding: 2px 8px;
   border-radius: 999px; background: color-mix(in srgb, var(--primary) 10%, transparent); }
 .imap-account-actions { display: flex; gap: 6px; flex-wrap: wrap; }

@@ -24,7 +24,9 @@ const zh = {
     test: '测试连接', testing: '正在连接…', fetch: '拉取最近邮件', fetching: '正在拉取…',
     testOkNamed: '{email} 连接成功，凭据有效。', fetchOkNamed: '{email} 拉取到 {n} 封邮件。',
     previewTitle: '最近邮件预览（仅头部，不保存）', emptyPreview: '暂无邮件', loadFailed: 'IMAP 操作失败，请检查邮箱地址、授权码与网络连接。',
-    loadFailedList: '账户列表加载失败。', retry: '重试'
+    loadFailedList: '账户列表加载失败。', retry: '重试',
+    allBanks: '全部银行', banksLabel: '账单银行：',
+    banksHint: '不选 = 接收全部银行的账单邮件；勾选后仅拉取所选银行的账单'
   },
   rtlog: { title: '实时日志', live: '实时', paused: '已暂停', empty: '暂无日志', auto: '自动刷新' },
   account: { title: '账号与密码', username: '用户名', email: '邮箱', saveAccount: '保存账号', changePwd: '修改密码', oldPwd: '原密码', newPwd: '新密码', pwdOk: '密码已修改', accountOk: '账号已更新' },

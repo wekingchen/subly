@@ -6,6 +6,8 @@
 import logging
 import threading
 
+from typing import Any
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import select
@@ -16,6 +18,7 @@ from app import activity
 from app.database import get_db
 from app.deps import get_current_user
 from app.models import ImapAccount, User
+from app.bank_senders import BANK_SENDER_DOMAINS, normalize_bank_keys, sender_matches_banks
 from app.services import imap_client
 
 router = APIRouter(prefix="/api/imap/accounts", tags=["imap"])
@@ -68,6 +71,19 @@ class ImapAccountIn(BaseModel):
     provider: str
     # 创建时必填；更新时 None/空串 = 不修改授权码
     password: str | None = None
+    # 账单银行白名单（银行 key 数组）；None = 不修改（更新时）/全部银行（创建时默认）；
+    # 空数组 = 全部银行。类型放宽为 Any 交由 normalize_bank_keys 统一校验，
+    # 非法类型/元素/key 都返回 400（而非 Pydantic 的 422）。
+    banks: Any | None = None
+
+
+def _account_out(a: ImapAccount) -> dict:
+    return {
+        "id": a.id,
+        "email": a.email,
+        "provider": a.provider,
+        "banks": a.banks or [],
+    }
 
 
 class ImapFetchIn(BaseModel):
@@ -82,12 +98,7 @@ def list_accounts(user: User = Depends(get_current_user), db: Session = Depends(
         .where(ImapAccount.user_id == user.id)
         .order_by(ImapAccount.id)
     ).all()
-    return {
-        "accounts": [
-            {"id": a.id, "email": a.email, "provider": a.provider}
-            for a in accounts
-        ]
-    }
+    return {"accounts": [_account_out(a) for a in accounts]}
 
 
 @router.post("", status_code=201)
@@ -100,6 +111,10 @@ def create_account(
     provider = _validate_provider(payload.provider)
     if not payload.password or not payload.password.strip():
         raise HTTPException(400, "请填写 IMAP 授权码")
+    try:
+        banks = normalize_bank_keys(payload.banks)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
     existing = db.scalar(
         select(ImapAccount).where(
             ImapAccount.user_id == user.id, ImapAccount.email == email
@@ -117,6 +132,7 @@ def create_account(
         email=email,
         password=payload.password.strip(),
         provider=provider,
+        banks=banks,  # None = 全部银行
     )
     db.add(account)
     # 并发下查重/计数可能同时通过，由唯一约束兜底；IntegrityError 转泛化 409，
@@ -132,7 +148,7 @@ def create_account(
         raise HTTPException(409, "该邮箱已存在或添加冲突，请刷新后重试")
     db.refresh(account)
     activity.log("imap.account_added", "新增邮件账户", user=user)
-    return {"id": account.id, "email": account.email, "provider": account.provider}
+    return _account_out(account)
 
 
 @router.patch("/{account_id}")
@@ -145,6 +161,10 @@ def update_account(
     account = _account_for_user(user, account_id, db)
     email = _validate_email(payload.email)
     provider = _validate_provider(payload.provider)
+    try:
+        banks = normalize_bank_keys(payload.banks)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
     # 同用户下改邮箱时查重（排除自身）
     dup = db.scalar(
         select(ImapAccount).where(
@@ -160,6 +180,9 @@ def update_account(
     # 授权码 None/空串 = 不修改
     if payload.password is not None and payload.password.strip():
         account.password = payload.password.strip()
+    # banks None = 不修改（前端总是回传当前选择）；显式数组（含空=全部）则更新
+    if payload.banks is not None:
+        account.banks = banks
     try:
         db.commit()
     except IntegrityError as exc:
@@ -170,7 +193,7 @@ def update_account(
         )
         raise HTTPException(409, "该邮箱已存在或更新冲突，请刷新后重试")
     activity.log("imap.account_updated", "更新邮件账户", user=user)
-    return {"id": account.id, "email": account.email, "provider": account.provider}
+    return _account_out(account)
 
 
 @router.delete("/{account_id}")
@@ -224,12 +247,30 @@ def fetch_account(
 ):
     account = _account_for_user(user, account_id, db)
     body = payload or ImapFetchIn()
+    # 银行白名单在拉取侧过滤：limit 指「命中白名单的邮件数上限」，
+    # 扫描在 IMAP 会话内边取边匹配（受并发信号量保护），白名单邮件
+    # 不会被无关邮件挤出截断窗口。白名单为空 = 不过滤、返回全部。
+    predicate = None
+    if account.banks:
+        predicate = lambda name, addr: sender_matches_banks(addr, account.banks)  # noqa: E731
     messages = _run_imap(
         "fetch",
         user,
         lambda: imap_client.fetch_recent(
-            account.email, account.password, account.provider, body.days, body.limit
+            account.email, account.password, account.provider, body.days, body.limit,
+            predicate=predicate,
         ),
     )
     activity.log("imap.fetch", f"IMAP 拉取最近邮件 {len(messages)} 封", user=user)
     return {"messages": messages, "count": len(messages)}
+
+
+@router.get("/banks")
+def list_banks():
+    """可选银行清单（key/名称/发件人域名），前端选择 UI 与解析层共用。"""
+    return {
+        "banks": [
+            {"key": key, "name": info["name"], "domains": info["domains"]}
+            for key, info in BANK_SENDER_DOMAINS.items()
+        ]
+    }

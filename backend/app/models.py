@@ -94,6 +94,8 @@ class ImapAccount(Base):
     email: Mapped[str] = mapped_column(String(255))
     password: Mapped[str] = mapped_column(String(255))
     provider: Mapped[str] = mapped_column(String(16))  # '126' | 'qq'
+    # 账单银行白名单：银行 key 数组（见 app.bank_senders）；NULL/空 = 全部银行
+    banks: Mapped[list | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
     user: Mapped["User"] = relationship(back_populates="imap_accounts")
