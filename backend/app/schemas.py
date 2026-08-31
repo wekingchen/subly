@@ -193,6 +193,11 @@ class UserOut(BaseModel):
     webhook_enabled: bool
     webhook_url: str | None
     webhook_secret: str | None
+    # IMAP 凭据只写不回显：授权码永不返回；邮箱地址与服务商为非敏感配置，
+    # 返回以支持设置页重载后正确初始化（避免把授权码发给错误服务商）
+    imap_configured: bool = False
+    imap_email: str | None = None
+    imap_provider: str | None = None
 
 
 class UserUpdate(BaseModel):
@@ -220,6 +225,10 @@ class UserUpdate(BaseModel):
     webhook_enabled: bool | None = None
     webhook_url: str | None = None
     webhook_secret: str | None = None
+    imap_email: str | None = None
+    imap_provider: str | None = None
+    # IMAP 授权码：写入路径见 routers/users.py；空串视为清除
+    imap_password: str | None = None
 
     @field_validator("webhook_secret")
     @classmethod

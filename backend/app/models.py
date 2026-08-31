@@ -64,7 +64,17 @@ class User(Base):
     webhook_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
     webhook_secret: Mapped[str | None] = mapped_column(String(255), nullable=True)  # HMAC-SHA256 签名密钥
 
+    # IMAP 邮件账户（信用卡账单邮件拉取；授权码只写不回显，任何 API 不返回）
+    imap_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    imap_password: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    imap_provider: Mapped[str | None] = mapped_column(String(16), nullable=True)  # '126' | 'qq'
+
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+    @property
+    def imap_configured(self) -> bool:
+        """IMAP 凭据是否已配置（授权码只写不回显，仅暴露状态布尔）。"""
+        return bool(self.imap_email and self.imap_password and self.imap_provider)
 
     subscriptions: Mapped[list["Subscription"]] = relationship(
         back_populates="user", cascade="all, delete-orphan"

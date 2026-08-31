@@ -8,6 +8,7 @@ from app.database import get_db
 from app.deps import get_current_user
 from app.models import User
 from app.schemas import UserOut, UserUpdate, validate_outbound_url
+from app.services import imap_client
 from app.security import hash_password, verify_password
 from app.subscription_rules import currency_allowed_for_user, custom_currency_has_rate
 
@@ -56,6 +57,17 @@ def update_me(
                 data[field] = validate_outbound_url(data[field])
             except ValueError as e:
                 raise HTTPException(400, str(e))
+    # IMAP：授权码空串视为清除；服务商必须是内置预设；邮箱格式做基本校验。
+    if "imap_password" in data and isinstance(data["imap_password"], str):
+        data["imap_password"] = data["imap_password"].strip() or None
+    if "imap_provider" in data and data["imap_provider"] is not None:
+        if data["imap_provider"] not in imap_client.IMAP_PROVIDERS:
+            raise HTTPException(400, "不支持的邮箱服务商，目前仅支持 126 与 QQ 邮箱")
+    if "imap_email" in data and data["imap_email"] is not None:
+        imap_email = str(data["imap_email"]).strip()
+        if not imap_email or "@" not in imap_email or len(imap_email) > 255:
+            raise HTTPException(400, "邮箱地址格式不正确")
+        data["imap_email"] = imap_email
     for field, value in data.items():
         setattr(user, field, value)
     db.commit()

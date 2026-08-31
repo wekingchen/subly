@@ -15,6 +15,14 @@ const zh = {
     timing: '提醒时机', daysBefore: '提前 {n} 天', daysToday: '到期当天', daysAfter: '过期后第 {n} 天',
     filterLabel: '按投递状态筛选', loadMore: '加载更多', loadingMore: '正在加载…', loadFailed: '投递记录加载失败，请稍后重试。', scanFailed: '扫描失败，请稍后重试。'
   },
+  imap: {
+    title: '邮件账户', tip: '为后续信用卡账单邮件解析做准备。授权码只写入不回显，已配置时留空表示不修改。126 / QQ 邮箱需在邮箱网页端开启 IMAP 并获取授权码。',
+    email: '邮箱地址', provider: '邮箱服务商', password: 'IMAP 授权码',
+    passwordPh: '已配置时留空表示不修改', configured: '已配置', notConfigured: '未配置',
+    test: '测试连接', testing: '正在连接…', fetch: '拉取最近邮件', fetching: '正在拉取…',
+    testOk: '连接成功，凭据有效。', fetchOk: '拉取到 {n} 封邮件。', saveFirst: '请先保存配置',
+    previewTitle: '最近邮件预览（仅头部，不保存）', emptyPreview: '暂无邮件', loadFailed: 'IMAP 操作失败，请检查邮箱地址、授权码与网络连接。'
+  },
   rtlog: { title: '实时日志', live: '实时', paused: '已暂停', empty: '暂无日志', auto: '自动刷新' },
   account: { title: '账号与密码', username: '用户名', email: '邮箱', saveAccount: '保存账号', changePwd: '修改密码', oldPwd: '原密码', newPwd: '新密码', pwdOk: '密码已修改', accountOk: '账号已更新' },
   sys: { title: '系统信息', version: '版本', dbStatus: '数据库', configured: '已连接', serverTime: '服务器时间', timezone: '时区', scanTime: '提醒扫描时间', yourSubs: '我的订阅', totalUsers: '用户总数', totalSubs: '订阅总数' },
@@ -115,7 +123,7 @@ const zh = {
     active: '已启用', inactive: '已停用', calendarOn: '已显示在日历', calendarOff: '未显示在日历', statementDayValue: '每月 {n} 日出账', dueDayValue: '每月 {n} 日计划还款', monthDayValue: '每月 {n} 日', remindValue: '提前 {n} 天提醒', repaymentWindow: '账单至还款窗口',
     cycleTitle: '账单日 → 计划还款日', statementDate: '下个账单日', plannedDueDate: '计划还款日', windowDays: '{n} 天窗口', datePending: '等待派生日期', cycleUnavailable: '服务端尚未返回完整的账单与计划还款日期', cycleAria: '账单日 {statement}，计划还款日 {due}，间隔 {days} 天，当前状态：{phase}',
     phase: { 'before-statement': '等待出账', 'repayment-window': '还款窗口', overdue: '已过计划日', unknown: '等待计算' },
-    disclaimerTitle: '仅作计划提醒', disclaimer: 'Subly 不会读取账单、验证欠款或代你还款。日期与提醒仅依据你填写的规则和服务端派生结果，请以银行账单与官方通知为准。'
+    disclaimerTitle: '仅作计划提醒', disclaimer: 'Subly 不会自动读取账单、验证欠款或代你还款；手动拉取的账单邮件预览仅保存在浏览器中，不做任何账单解析。日期与提醒仅依据你填写的规则和服务端派生结果，请以银行账单与官方通知为准。'
   },
   calendar: {
     title: '续费与还款日历', noEvents: '本月无续费或计划还款事件', today: '今天', prevMonth: '上个月', nextMonth: '下个月', more: '还有 {n} 项',

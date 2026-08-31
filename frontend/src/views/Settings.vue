@@ -303,6 +303,54 @@
       </div>
       <p v-if="whMsg" class="feedback" :class="whOk ? 'ok' : 'err'" :role="whOk ? 'status' : 'alert'">{{ whMsg }}</p>
     </form>
+
+    <!-- 邮件账户（IMAP） -->
+    <form class="card sect panel-card channel-card" @submit.prevent="saveImap">
+      <div class="panel-head">
+        <div>
+          <div class="panel-title"><span class="panel-signal"></span>{{ t('imap.title') }}</div>
+          <p class="muted">{{ t('imap.tip') }}</p>
+        </div>
+        <span class="status-tag" :class="imapConfigured ? 'ok' : 'off'">
+          {{ imapConfigured ? t('imap.configured') : t('imap.notConfigured') }}
+        </span>
+      </div>
+      <div class="form-grid wide">
+        <div class="field">
+          <label for="imap-email">{{ t('imap.email') }}</label>
+          <input id="imap-email" v-model="im.email" name="imap_email" type="email" autocomplete="email"
+                 :placeholder="'name@126.com'" :disabled="imapBusy" />
+        </div>
+        <div class="field">
+          <label for="imap-provider">{{ t('imap.provider') }}</label>
+          <select id="imap-provider" v-model="im.provider" name="imap_provider" :disabled="imapBusy">
+            <option value="126">126 邮箱</option>
+            <option value="qq">QQ 邮箱</option>
+          </select>
+        </div>
+        <div class="field span-2">
+          <label for="imap-password">{{ t('imap.password') }}</label>
+          <input id="imap-password" v-model="im.password" name="imap_password" type="password"
+                 autocomplete="new-password" :placeholder="t('imap.passwordPh')" :disabled="imapBusy" />
+        </div>
+      </div>
+      <div class="actions-row wrap">
+        <button class="btn" type="submit" :disabled="imapBusy">{{ t('settings.save') }}</button>
+        <button class="btn ghost" type="button" :disabled="imapBusy" @click="testImap">{{ imapTesting ? t('imap.testing') : t('imap.test') }}</button>
+        <button class="btn ghost" type="button" :disabled="imapBusy" @click="fetchImap">{{ imapFetching ? t('imap.fetching') : t('imap.fetch') }}</button>
+      </div>
+      <p v-if="imMsg" class="feedback" :class="imOk ? 'ok' : 'err'" :role="imOk ? 'status' : 'alert'">{{ imMsg }}</p>
+      <div v-if="preview.length" class="imap-preview">
+        <div class="imap-preview-title">{{ t('imap.previewTitle') }}</div>
+        <ul>
+          <li v-for="m in preview" :key="m.uid">
+            <span class="imap-from">{{ m.from }}</span>
+            <span class="imap-subject">{{ m.subject }}</span>
+            <span class="imap-date muted">{{ m.date }}</span>
+          </li>
+        </ul>
+      </div>
+    </form>
     </section>
 
     <div id="backup" class="grid two settings-anchor">
@@ -826,6 +874,86 @@ async function testWebhook() {
   }
 }
 
+// ---------- 邮件账户（IMAP）----------
+const im = reactive({
+  email: auth.user?.imap_email || '',
+  provider: auth.user?.imap_provider || '126',
+  password: ''
+})
+// 授权码只写不回显：imap_configured 来自后端状态布尔
+const imapConfigured = computed(() => Boolean(auth.user?.imap_configured))
+const imapBusy = ref(false)
+const imapTesting = ref(false)
+const imapFetching = ref(false)
+const imMsg = ref('')
+const imOk = ref(false)
+const preview = ref([])
+
+async function persistImap() {
+  if (imapBusy.value) return false
+  imapBusy.value = true
+  try {
+    const patch = { imap_email: im.email.trim() }
+    // provider 只在用户显式选择时提交；已配置但下拉尚未变更时不回退默认值，
+    // 防止把 A 服务商的授权码随 B 服务商的主机名一起发送。
+    if (!imapConfigured.value || im.provider !== (auth.user?.imap_provider || '126')) {
+      patch.imap_provider = im.provider
+    }
+    // 授权码留空 = 不修改（只在填写时提交）
+    if (im.password.trim()) patch.imap_password = im.password
+    await auth.updateMe(patch)
+    im.password = ''
+    imOk.value = true
+    imMsg.value = t('settings.saved')
+    return true
+  } catch (e) {
+    imOk.value = false
+    imMsg.value = e.response?.data?.detail || t('common.networkError')
+    return false
+  } finally {
+    imapBusy.value = false
+  }
+}
+
+async function saveImap() {
+  await persistImap()
+}
+
+async function testImap() {
+  if (imapTesting.value) return
+  imapTesting.value = true
+  try {
+    const saved = await persistImap()
+    if (!saved) return
+    await api.post('/api/imap/test')
+    imOk.value = true
+    imMsg.value = t('imap.testOk')
+  } catch (e) {
+    imOk.value = false
+    imMsg.value = e.response?.data?.detail || t('imap.loadFailed')
+  } finally {
+    imapTesting.value = false
+  }
+}
+
+async function fetchImap() {
+  if (imapFetching.value) return
+  imapFetching.value = true
+  try {
+    const saved = await persistImap()
+    if (!saved) return
+    const data = (await api.post('/api/imap/fetch', { days: 30, limit: 20 })).data
+    preview.value = data.messages || []
+    imOk.value = true
+    imMsg.value = t('imap.fetchOk', { n: data.count || 0 })
+  } catch (e) {
+    imOk.value = false
+    imMsg.value = e.response?.data?.detail || t('imap.loadFailed')
+  } finally {
+    imapFetching.value = false
+  }
+}
+
 async function refreshRates() {
   if (ratesRefreshing.value) return
   rateMsg.value = ''
@@ -936,6 +1064,55 @@ h1 { margin: 8px 0 8px; }
 .field.span-2 { grid-column: span 2; }
 hr { border: none; border-top: 1px solid var(--border); margin: 16px 0; }
 .feedback { margin: 10px 0 0; font-size: 13px; line-height: 1.5; }
+/* 邮件账户（IMAP） */
+.status-tag { padding: 4px 10px; border-radius: 999px; font-size: 12px; font-weight: 750; }
+.status-tag.ok { background: color-mix(in srgb, var(--success) 12%, transparent); color: var(--success-text); }
+.status-tag.off { background: var(--surface-2); color: var(--text-soft); }
+.form-grid.wide { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 14px; }
+.form-grid.wide .span-2 { grid-column: 1 / -1; }
+.actions-row.wrap { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.imap-preview { margin-top: 14px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-2); padding: 10px 12px; }
+.imap-preview-title { color: var(--text-soft); font-size: 11px; font-weight: 750; letter-spacing: .04em; margin-bottom: 6px; }
+.imap-preview ul { margin: 0; padding: 0; list-style: none; display: grid; gap: 6px; max-height: 260px; overflow-y: auto; }
+.imap-preview li { display: grid; grid-template-columns: minmax(90px, auto) minmax(0, 1fr) auto; gap: 8px; align-items: baseline; font-size: 12px; padding: 5px 6px; border-radius: 8px; background: color-mix(in srgb, var(--surface) 70%, transparent); }
+.imap-from { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.imap-subject { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.imap-date { font-size: 11px; white-space: nowrap; }
+@media (max-width: 560px) {
+  .imap-preview li { grid-template-columns: 1fr; }
+  .imap-date { display: none; }
+}
+/* 邮件账户（IMAP）：状态 chip 与最近邮件预览 */
+.imap-status-ok { color: var(--success-text); background: color-mix(in srgb, var(--success) 12%, var(--surface)); }
+.imap-status-off { color: var(--text-soft); background: var(--surface-2); }
+.panel-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.status-tag { flex: 0 0 auto; padding: 4px 10px; border-radius: 999px; font-size: 12px; font-weight: 750; }
+.imap-preview { margin-top: 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-2); overflow: hidden; }
+.imap-preview-title { padding: 9px 12px; font-size: 12px; font-weight: 800; color: var(--text-soft); border-bottom: 1px solid var(--border); }
+.imap-preview ul { max-height: 320px; margin: 0; padding: 0; list-style: none; overflow-y: auto; }
+.imap-preview li { display: grid; grid-template-columns: minmax(90px, 160px) minmax(0, 1fr) auto; gap: 10px; align-items: baseline; padding: 8px 12px; border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent); font-size: 12px; }
+.imap-preview li:last-child { border-bottom: 0; }
+.imap-from { color: var(--primary); font-weight: 750; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.imap-subject { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.imap-date { color: var(--text-soft); white-space: nowrap; }
+@media (max-width: 620px) {
+  .imap-preview li { grid-template-columns: 1fr; gap: 2px; }
+  .imap-date { justify-self: end; }
+}
+/* 邮件账户（IMAP）：配置状态 chip 与邮件预览列表 */
+.status-tag { display: inline-flex; padding: 4px 10px; border-radius: 999px; font-size: 12px; font-weight: 750; }
+.status-tag.ok { background: color-mix(in srgb, var(--success) 12%, var(--surface)); color: var(--success-text); }
+.status-tag.off { background: var(--surface-2); color: var(--text-soft); }
+.imap-preview { margin-top: 14px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-2); padding: 10px 12px; }
+.imap-preview-title { color: var(--text-soft); font-size: 11px; font-weight: 750; letter-spacing: .05em; margin-bottom: 6px; }
+.imap-preview ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; max-height: 260px; overflow-y: auto; }
+.imap-preview li { display: grid; grid-template-columns: minmax(0, 160px) minmax(0, 1fr) auto; gap: 8px; align-items: baseline; font-size: 12px; }
+.imap-from { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.imap-subject { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.imap-date { font-size: 11px; white-space: nowrap; }
+@media (max-width: 620px) {
+  .imap-preview li { grid-template-columns: 1fr; gap: 2px; }
+}
 .ok { color: var(--success-text); }
 .err { color: var(--danger-text); word-break: break-all; }
 .actions-row { display: flex; align-items: center; gap: 10px; margin-top: 12px; }
