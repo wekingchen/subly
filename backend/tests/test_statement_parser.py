@@ -136,6 +136,8 @@ def test_parse_ccb_multi_card_and_settlement_amount():
     # 有交易卡的 due_date/period
     assert by_card["5468"].due_date == date(2026, 9, 16)
     assert by_card["5468"].bill_period_start == date(2026, 7, 28)
+    # 授信额度（平铺标签流提取）
+    assert by_card["5468"].credit_limit == 60000.0
     # 账户级勾稽（结算金额口径）
     v = parsed.verify_all()["_account"]
     assert v["ok"] is True
@@ -151,6 +153,8 @@ def test_parse_citic_datakey_and_refund():
     assert inst and inst[0].installment_note == "第5/24期"
     pay = [i for i in st.items if i.tx_type == "payment"]
     assert pay and pay[0].amount == -287.45
+    # 信用额度（平铺锚定：完整标签 + CNY 邻接）
+    assert st.credit_limit == 50000.0
     v = parsed.verify_all()["2811"]
     assert v["ok"] is True
 
@@ -248,6 +252,26 @@ def test_statement_like_title_with_bad_body_is_loud_error():
     )
     with pytest.raises(StatementParseError):
         parse_email(raw)
+
+
+def test_citic_credit_limit_anchor_requires_full_label():
+    """「信用额度调整说明」类文案不得被误当成额度（紧邻 CNY 验证）。"""
+    from statement_fixtures import build_mime
+    html = """<html><body>
+    <div>信用额度调整说明</div><div>20260801</div>
+    <span data-key="billDate">2026年08月23日</span>
+    <span data-key="paymentDate">2026年09月11日</span>
+    <div data-key="accountInfo.cardNo">6226-88**-****-2811</div>
+    <table><tr><td data-key="accountChange.cardNo">6226-88**-****-2811</td>
+    <td data-key="accountChange.previousBalance">0.00</td>
+    <td data-key="accountChange.previousPayment">0.00</td>
+    <td data-key="accountChange.currentNewBalance">0.00</td>
+    <td data-key="accountChange.currentBalance">0.00</td>
+    <td data-key="accountChange.minimumPayment">0.00</td></tr></table>
+    </body></html>"""
+    raw = build_mime(html, ADDR["citic"], "中信银行信用卡电子账单", "citic-neg-1")
+    parsed = parse_email(raw, from_address=ADDR["citic"])
+    assert parsed.statements[0].credit_limit is None
 
 
 def test_statement_title_variants_match():

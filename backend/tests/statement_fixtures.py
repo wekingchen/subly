@@ -57,7 +57,7 @@ def load_ccb() -> bytes:
     html = """<html><body>
     <table><tr><td>账单周期Statement Cycle</td><td>2026/07/28-2026/08/27</td></tr>
     <tr><td>本期到期还款日Payment Due Date</td><td>2026/09/16</td></tr>
-    <tr><td>本期账单日Statement Date</td><td>2026-08-27</td></tr></table>
+    <tr><td>本期账单日Statement Date</td><td>2026-08-27</td><td>授信额度 Credit Limit</td><td>CNY</td><td>60,000</td></tr></table>
     <table><tr>
       <td>账户币种Currency</td><td>上期全部应还款额Last Statement Balance</td><td>+</td>
       <td>消费/取现/其它费用New Spending</td><td>-</td><td>还款/退货/费用返还Payment/Credit</td><td>=</td><td>本期全部应还款额New Balance</td>
@@ -86,6 +86,7 @@ def load_citic() -> bytes:
     html = """<html><body>
     <span data-key="billDate">2026年08月23日</span>
     <span data-key="paymentDate">2026年09月11日</span>
+    <table><tr><td>信用额度</td><td>CNY</td><td>50,000</td></tr></table>
     <div>总账信息 本期应还款总额 CNY 3048.63</div>
     <div data-key="accountInfo.cardNo">6226-88**-****-2811</div>
     <table name="明细账单">

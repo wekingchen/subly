@@ -426,6 +426,7 @@ def _parse_ccb(html: str) -> list[ParsedStatement]:
     period_start = period_end = statement_date = due_date = None
     total_due = None
     ccb_spend = ccb_repay = None
+    ccb_credit_limit = None
     i = 0
     while i < len(flat):
         t = re.sub(r"\s+", "", flat[i])
@@ -437,6 +438,9 @@ def _parse_ccb(html: str) -> list[ParsedStatement]:
             due_date = parse_date(flat[i + 1])
         elif t in ("本期全部应还款额NewBalance", "本期全部应还款额") and i + 2 < len(flat):
             total_due = _f(parse_money(flat[i + 2]))
+        elif t.startswith("授信额度CreditLimit") and i + 2 < len(flat):
+            # 真实样本：本期账单日 Statement Date 2026-08-27 | 授信额度 Credit Limit CNY 60,000
+            ccb_credit_limit = _f(parse_money(flat[i + 2]))
         elif "消费/取现/其它费用" in t and i + 3 <= len(flat):
             # 平铺序：…消费/取现/其它费用…还款/退货/费用返还…=本期应还；数值在下一「币种行」
             for j in range(i + 1, min(i + 12, len(flat))):
@@ -507,6 +511,7 @@ def _parse_ccb(html: str) -> list[ParsedStatement]:
     for stmt in statements.values():
         if stmt.total_due is None and total_due is not None:
             stmt.total_due = total_due
+        stmt.credit_limit = ccb_credit_limit
         stmt.summary = {"spend": ccb_spend, "repay": ccb_repay}
     return list(statements.values())
 
@@ -562,16 +567,29 @@ def _parse_citic(html: str) -> list[ParsedStatement]:
     # 总账日期：data-key 直读（billDate/paymentDate），fallback 平铺行
     statement_date = parse_date(dk.get("billDate", [""])[0])
     due_date = parse_date(dk.get("paymentDate", [""])[0])
-    if statement_date is None or due_date is None:
-        flat = []
-        for cells in extract_rows(html):
-            flat.extend(cells)
-        for i, t in enumerate(flat):
-            s = re.sub(r"\s+", "", t)
-            if statement_date is None and s.startswith("账单日") and i + 1 < len(flat):
-                statement_date = parse_date(flat[i + 1])
-            elif due_date is None and s.startswith("到期还款日") and i + 1 < len(flat):
-                due_date = parse_date(flat[i + 1])
+    # 授信额度：中信账单无固定 data-key，平铺文本锚定（取不到保持 None，
+    # 不猜——探索样本未确认该字段位置）。
+    # 锚点必须是完整标签「信用额度」且邻接「币种|金额」两格，防止
+    # 「信用额度调整说明」类文案误命中（审核修复）。
+    citic_credit_limit = None
+    flat = []
+    for cells in extract_rows(html):
+        flat.extend(cells)
+    for i, t in enumerate(flat):
+        s = re.sub(r"\s+", "", t)
+        if statement_date is None and s.startswith("账单日") and i + 1 < len(flat):
+            statement_date = parse_date(flat[i + 1])
+        elif due_date is None and s.startswith("到期还款日") and i + 1 < len(flat):
+            due_date = parse_date(flat[i + 1])
+        elif citic_credit_limit is None and s == "信用额度" and i + 2 < len(flat):
+            # 紧邻两格须为「币种 + 金额」（如 CNY | 60,000），否则跳过
+            if re.fullmatch(r"[A-Z]{3}", flat[i + 1].strip()):
+                val = parse_money(flat[i + 2])
+                if val is not None:
+                    citic_credit_limit = float(val)
+    # 统一补写：无论 statement 由 accountChange 还是交易明细创建都获得额度
+    for stmt in statements.values():
+        stmt.credit_limit = citic_credit_limit
     # 交易行：data-for="priCnyTxn in ..." 内的 data-key 字段按出现顺序成组
     trn_dates = dk.get("priCnyTxn.transactionDate", [])
     post_dates = dk.get("priCnyTxn.tallyDate", [])
