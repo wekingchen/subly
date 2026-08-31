@@ -34,6 +34,9 @@ def init_engine(url: str | None = None):
     engine = create_engine(
         url,
         pool_pre_ping=True,
+        # SQLAlchemy 数据库异常默认会携带绑定参数（可能含授权码等敏感值），
+        # hide_parameters 让异常/日志只显示占位符，防止凭据进入日志。
+        hide_parameters=True,
         connect_args={"check_same_thread": False},
     )
 

@@ -1,4 +1,4 @@
-"""IMAP 邮件能力测试：全部 mock imaplib，不连真实邮箱。"""
+"""IMAP 多账户能力测试：全部 mock imaplib，不连真实邮箱。"""
 
 import pytest
 from fastapi.testclient import TestClient
@@ -9,7 +9,7 @@ from sqlalchemy.pool import StaticPool
 from app import main
 from app.database import Base, get_db
 from app.deps import get_current_user
-from app.models import User
+from app.models import ImapAccount, User
 from app.services import imap_client
 
 
@@ -38,86 +38,159 @@ def imap_env():
         engine.dispose()
 
 
-def save_imap(client, **fields):
-    return client.patch("/api/me", json=fields)
+def add_account(client, email="alice@126.com", password="secret-code", provider="126"):
+    return client.post(
+        "/api/imap/accounts",
+        json={"email": email, "password": password, "provider": provider},
+    )
 
 
-def test_imap_configured_status_and_password_never_echoed(imap_env):
-    client, db, user = imap_env
+def test_create_and_list_accounts_never_echo_password(imap_env):
+    client, _, _ = imap_env
+    resp = add_account(client)
+    assert resp.status_code == 201
+    body = resp.json()
+    assert body["email"] == "alice@126.com"
+    assert body["provider"] == "126"
+    # 响应永不包含授权码
+    assert "password" not in body
 
-    # 未配置：状态 false
-    me = client.get("/api/auth/me").json()
-    assert me["imap_configured"] is False
-    # 授权码永不回显；email/provider 非敏感、需回显供设置页初始化
-    assert "imap_password" not in me
+    listed = client.get("/api/imap/accounts").json()["accounts"]
+    assert len(listed) == 1
+    assert listed[0]["email"] == "alice@126.com"
+    assert all("password" not in a for a in listed)
 
-    # 保存配置
-    resp = save_imap(
-        client,
-        imap_email="alice@126.com",
-        imap_password="auth-code-123",
-        imap_provider="126",
+
+def test_multiple_accounts_per_user(imap_env):
+    """核心需求：一个用户可以保存多个邮箱。"""
+    client, _, _ = imap_env
+    assert add_account(client, "a@126.com", provider="126").status_code == 201
+    assert add_account(client, "b@qq.com", provider="qq").status_code == 201
+    listed = client.get("/api/imap/accounts").json()["accounts"]
+    assert {a["email"] for a in listed} == {"a@126.com", "b@qq.com"}
+    assert {a["provider"] for a in listed} == {"126", "qq"}
+
+
+def test_duplicate_email_rejected(imap_env):
+    client, _, _ = imap_env
+    assert add_account(client, "a@126.com").status_code == 201
+    resp = add_account(client, "a@126.com")
+    assert resp.status_code == 409
+
+
+def test_integrity_error_converts_to_409_not_500(imap_env, monkeypatch):
+    """并发重复创建绕过预查询时，唯一约束 IntegrityError 必须转 409（且不泄漏授权码）。"""
+    from sqlalchemy.exc import IntegrityError
+
+    client, db, _ = imap_env
+    add_account(client)
+
+    real_commit = db.commit
+
+    def conflicting_commit():
+        # 模拟并发窗口：另一个请求抢先插入了相同 email
+        raise IntegrityError("INSERT fails", None, Exception("UNIQUE constraint"))
+
+    monkeypatch.setattr(db, "commit", conflicting_commit)
+    resp = add_account(client, "new@126.com")
+    assert resp.status_code == 409
+    assert "new@126.com" not in resp.text
+    monkeypatch.setattr(db, "commit", real_commit)
+
+
+def test_provider_must_be_preset(imap_env):
+    client, _, _ = imap_env
+    resp = add_account(client, "a@example.com", provider="evil.example.com")
+    assert resp.status_code == 400
+
+
+def test_create_requires_password(imap_env):
+    client, _, _ = imap_env
+    resp = client.post(
+        "/api/imap/accounts", json={"email": "a@126.com", "provider": "126"}
+    )
+    assert resp.status_code == 400
+
+
+def test_update_account_keep_password_when_blank(imap_env):
+    """编辑时授权码留空 = 不修改（旧授权码继续生效）。"""
+    client, db, _ = imap_env
+    account_id = add_account(client).json()["id"]
+
+    resp = client.patch(
+        f"/api/imap/accounts/{account_id}",
+        json={"email": "alice@126.com", "provider": "126", "password": ""},
     )
     assert resp.status_code == 200
-    assert resp.json()["imap_configured"] is True
-    # 回显永不包含授权码
-    assert "imap_password" not in resp.json()
+    row = db.get(ImapAccount, account_id)
+    assert row.password == "secret-code"  # 未被清掉
 
-    me = client.get("/api/auth/me").json()
-    assert me["imap_configured"] is True
-    assert "imap_password" not in me
-
-    # 留空（未设字段）不改旧值：只发其他字段
-    resp = save_imap(client, theme="dark")
-    assert resp.json()["imap_configured"] is True
-    assert user.imap_password == "auth-code-123"
-
-    # 空串 = 清除授权码 → 配置不再完整
-    resp = save_imap(client, imap_password="")
+    # 提供新授权码则更新
+    resp = client.patch(
+        f"/api/imap/accounts/{account_id}",
+        json={"email": "alice@126.com", "provider": "qq", "password": "new-code"},
+    )
     assert resp.status_code == 200
-    assert resp.json()["imap_configured"] is False
-    assert user.imap_password is None
+    db.expire_all()
+    row = db.get(ImapAccount, account_id)
+    assert row.password == "new-code"
+    assert row.provider == "qq"
 
 
-def test_imap_provider_must_be_preset(imap_env):
-    client, _, _ = imap_env
-    resp = save_imap(
-        client,
-        imap_email="a@example.com",
-        imap_password="x",
-        imap_provider="evil.example.com",
+def test_update_other_users_account_404(imap_env):
+    """不能操作他人账户（404 不暴露存在性）。"""
+    client, db, _ = imap_env
+    other = User(username="bob", email="bob@example.com", password_hash="h")
+    db.add(other)
+    db.commit()
+    other_account = ImapAccount(
+        user_id=other.id, email="bob@126.com", password="p", provider="126"
     )
-    assert resp.status_code == 400
+    db.add(other_account)
+    db.commit()
 
-
-def test_test_endpoint_requires_config(imap_env):
-    client, _, _ = imap_env
-    resp = client.post("/api/imap/test")
-    assert resp.status_code == 400
-
-
-def test_fetch_endpoint_requires_config(imap_env):
-    client, _, _ = imap_env
-    resp = client.post("/api/imap/fetch", json={"days": 7, "limit": 5})
-    assert resp.status_code == 400
-
-
-def test_test_endpoint_success_and_sanitized_failure(imap_env, monkeypatch):
-    client, db, user = imap_env
-    save_imap(
-        client,
-        imap_email="alice@126.com",
-        imap_password="secret-code",
-        imap_provider="126",
+    resp = client.patch(
+        f"/api/imap/accounts/{other_account.id}",
+        json={"email": "x@126.com", "provider": "126", "password": "y"},
     )
+    assert resp.status_code == 404
+    assert client.post(f"/api/imap/accounts/{other_account.id}/test").status_code == 404
+    assert client.delete(f"/api/imap/accounts/{other_account.id}").status_code == 404
+
+
+def test_delete_account(imap_env):
+    client, db, _ = imap_env
+    account_id = add_account(client).json()["id"]
+    assert client.delete(f"/api/imap/accounts/{account_id}").json()["ok"] is True
+    assert db.get(ImapAccount, account_id) is None
+    assert client.get("/api/imap/accounts").json()["accounts"] == []
+
+
+def test_accounts_not_in_backup_meta(imap_env):
+    """IMAP 凭据不进备份：_user_meta 无 imap 字段。"""
+    from app.routers import backup
+
+    client, _, user = imap_env
+    add_account(client)
+    exported = backup._user_meta(user)
+    assert not any("imap" in key for key in exported)
+
+
+def test_test_endpoint_sanitized_failure(imap_env, monkeypatch):
+    client, _, _ = imap_env
+    account_id = add_account(client).json()["id"]
 
     class FakeClient:
         def __init__(self, *args, **kwargs):
             pass
 
         def login(self, email, password):
-            if password == "bad":
-                raise imap_client.imaplib.IMAP4.error("LOGIN failed with secret-code")
+            if password == "secret-code":
+                return
+            raise imap_client.imaplib.IMAP4.error("LOGIN failed with secret-code")
+
+        def xatom(self, name, arg):
+            pass
 
         def logout(self):
             pass
@@ -127,27 +200,26 @@ def test_test_endpoint_success_and_sanitized_failure(imap_env, monkeypatch):
 
     monkeypatch.setattr(imap_client.imaplib, "IMAP4_SSL", FakeClient)
 
-    ok = client.post("/api/imap/test")
+    ok = client.post(f"/api/imap/accounts/{account_id}/test")
     assert ok.status_code == 200
     assert ok.json()["ok"] is True
 
-    # 密码错误 → 502 泛化文案，不泄漏底层异常与授权码
-    save_imap(client, imap_password="bad")
-    bad = client.post("/api/imap/test")
+    # 授权码错误 → 502 泛化文案，不泄漏底层异常与授权码
+    client.patch(
+        f"/api/imap/accounts/{account_id}",
+        json={"email": "alice@126.com", "provider": "126", "password": "wrong"},
+    )
+    bad = client.post(f"/api/imap/accounts/{account_id}/test")
     assert bad.status_code == 502
     assert "secret-code" not in bad.json()["detail"]
     assert "imap.126.com" not in bad.json()["detail"]
 
 
 def test_fetch_returns_headers_preview(imap_env, monkeypatch):
-    client, db, user = imap_env
-    save_imap(
-        client,
-        imap_email="alice@qq.com",
-        imap_password="secret-code",
-        imap_provider="qq",
-    )
-
+    client, _, _ = imap_env
+    account_id = add_account(
+        client, "alice@qq.com", provider="qq"
+    ).json()["id"]
 
     raw = (
         b"From: =?utf-8?B?5L2Z55ub?=<bill@cmbchina.com>\r\n"
@@ -163,13 +235,15 @@ def test_fetch_returns_headers_preview(imap_env, monkeypatch):
         def login(self, email, password):
             pass
 
+        def xatom(self, name, arg):
+            self.id_sent = name == "ID"
+
         def select(self, folder, readonly=False):
             return "OK", [b"1"]
 
         def uid(self, command, *args):
             if command == "search":
                 return "OK", [b"10 9"]
-            # fetch：返回原始头部字节
             return "OK", [(b"1 (UID 10 RFC822.HEADER)", raw), b")"]
 
         def logout(self):
@@ -180,35 +254,97 @@ def test_fetch_returns_headers_preview(imap_env, monkeypatch):
 
     monkeypatch.setattr(imap_client.imaplib, "IMAP4_SSL", FakeClient)
 
-    resp = client.post("/api/imap/fetch", json={"days": 7, "limit": 10})
+    resp = client.post(f"/api/imap/accounts/{account_id}/fetch", json={"days": 7, "limit": 10})
     assert resp.status_code == 200
     body = resp.json()
     assert body["count"] == 2
     # UID 倒序（最新在前）
     assert [m["uid"] for m in body["messages"]] == ["10", "9"]
     first = body["messages"][0]
-    # 显示名（RFC2047 解码）优先；地址字段保留完整发件人地址
     assert first["from"] == "余盛"
     assert first["from_address"] == "bill@cmbchina.com"
     assert first["subject"] == "测试主题"
-    # 正文绝不出现
     assert "BODY-SHOULD-NOT-APPEAR" not in resp.text
-    # 授权码不泄漏
     assert "secret-code" not in resp.text
+
+
+def test_netease_requires_id_command_before_select(imap_env, monkeypatch):
+    """网易修复回归：登录后必须先发 ID，再 SELECT；SELECT 阶段的
+    IMAP4.error（如 Unsafe Login 拒绝）必须转 502 而非 500 逃逸。"""
+    client, _, _ = imap_env
+    account_id = add_account(client, "a@126.com", provider="126").json()["id"]
+
+    calls = []
+
+    class NeteaseClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def login(self, email, password):
+            calls.append("login")
+
+        def xatom(self, name, arg):
+            calls.append(f"ID:{name}")
+
+        def select(self, folder, readonly=False):
+            calls.append("select")
+            return "OK", [b"1"]
+
+        def uid(self, command, *args):
+            if command == "search":
+                return "OK", [b"5"]
+            return "OK", [(b"1 (UID 5 RFC822.HEADER)", b"From: x@a\r\nSubject: s\r\n\r\n"), b")"]
+
+        def logout(self):
+            pass
+
+        def shutdown(self):
+            pass
+
+    monkeypatch.setattr(imap_client.imaplib, "IMAP4_SSL", NeteaseClient)
+    resp = client.post(f"/api/imap/accounts/{account_id}/fetch", json={"days": 7, "limit": 5})
+    assert resp.status_code == 200
+    # 顺序约束：ID 必须发生在 select 之前
+    assert calls.index("ID:ID") < calls.index("select")
+
+
+def test_select_rejection_converts_to_502(imap_env, monkeypatch):
+    """SELECT 被服务端拒绝（网易 Unsafe Login）时是 IMAP4.error，不得 500。"""
+    client, _, _ = imap_env
+    account_id = add_account(client, "a@126.com", provider="126").json()["id"]
+
+    class RejectClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def login(self, email, password):
+            pass
+
+        def xatom(self, name, arg):
+            pass
+
+        def select(self, folder, readonly=False):
+            raise imap_client.imaplib.IMAP4.error("SELECT Unsafe Login. Please contact kefu@188.com")
+
+        def logout(self):
+            pass
+
+        def shutdown(self):
+            pass
+
+    monkeypatch.setattr(imap_client.imaplib, "IMAP4_SSL", RejectClient)
+    resp = client.post(f"/api/imap/accounts/{account_id}/fetch", json={"days": 7, "limit": 5})
+    assert resp.status_code == 502
+    assert "kefu@188.com" not in resp.json()["detail"]
 
 
 def test_fetch_limit_and_days_validation(imap_env):
     client, _, _ = imap_env
-    save_imap(
-        client,
-        imap_email="alice@qq.com",
-        imap_password="x",
-        imap_provider="qq",
-    )
-    assert client.post("/api/imap/fetch", json={"days": 0}).status_code == 422
-    assert client.post("/api/imap/fetch", json={"days": 91}).status_code == 422
-    assert client.post("/api/imap/fetch", json={"limit": 0}).status_code == 422
-    assert client.post("/api/imap/fetch", json={"limit": 51}).status_code == 422
+    account_id = add_account(client, "a@qq.com", provider="qq").json()["id"]
+    assert client.post(f"/api/imap/accounts/{account_id}/fetch", json={"days": 0}).status_code == 422
+    assert client.post(f"/api/imap/accounts/{account_id}/fetch", json={"days": 91}).status_code == 422
+    assert client.post(f"/api/imap/accounts/{account_id}/fetch", json={"limit": 0}).status_code == 422
+    assert client.post(f"/api/imap/accounts/{account_id}/fetch", json={"limit": 51}).status_code == 422
 
 
 def test_provider_host_blocks_dangerous_literal():
@@ -223,40 +359,86 @@ def test_provider_host_blocks_dangerous_literal():
         del imap_client.IMAP_PROVIDERS["bad"]
 
 
-def test_backup_does_not_export_imap_credentials(imap_env):
-    client, db, user = imap_env
-    save_imap(
-        client,
-        imap_email="alice@126.com",
-        imap_password="secret-code",
-        imap_provider="126",
-    )
-    from app.routers import backup
-
-    exported = backup._user_meta(user)
-    assert "imap_password" not in exported
-    assert "imap_email" not in exported
-    assert "imap_provider" not in exported
-
-
 def test_tls_context_enforces_certificate_and_hostname():
     """imaplib 默认 context 是 CERT_NONE；必须显式启用证书+主机名校验（MITM 防护）。"""
-    ctx = imap_client._ssl_context()
     import ssl
 
+    ctx = imap_client._ssl_context()
     assert ctx.verify_mode == ssl.CERT_REQUIRED
     assert ctx.check_hostname is True
+
+
+def test_old_single_account_migrates_via_run_migrations(imap_env):
+    """旧库升级路径：users 表 3 列有值 → run_migrations 搬进 imap_accounts。"""
+    from sqlalchemy import text
+
+    from app.migrate import run_migrations
+
+    client, db, user = imap_env
+    db.execute(text("ALTER TABLE users ADD COLUMN imap_email VARCHAR(255)"))
+    db.execute(text("ALTER TABLE users ADD COLUMN imap_password VARCHAR(255)"))
+    db.execute(text("ALTER TABLE users ADD COLUMN imap_provider VARCHAR(16)"))
+    db.execute(text(
+        "UPDATE users SET imap_email='old@126.com', imap_password='old-code', "
+        "imap_provider='126' WHERE id = :uid"
+    ), {"uid": user.id})
+    db.commit()
+
+    # 对内存库引擎执行真实启动迁移（imap_accounts 表已由 create_all 建好）
+    run_migrations(db.get_bind())
+
+    listed = client.get("/api/imap/accounts").json()["accounts"]
+    assert len(listed) == 1
+    assert listed[0]["email"] == "old@126.com"
+    assert listed[0]["provider"] == "126"
+
+    # 幂等：再跑一遍不重复插入
+    run_migrations(db.get_bind())
+    assert len(client.get("/api/imap/accounts").json()["accounts"]) == 1
+
+
+def test_run_migrations_skips_users_without_imap_columns(imap_env):
+    """全新库 / 无旧列库：run_migrations 不报错、不动 imap_accounts。"""
+    client, db, _ = imap_env
+    from app.migrate import run_migrations
+
+    run_migrations(db.get_bind())
+    assert client.get("/api/imap/accounts").json()["accounts"] == []
+
+
+def test_run_migrations_silence_is_not_allowed_on_insert_failure(imap_env):
+    """迁移 INSERT 失败必须响亮（RuntimeError），不能静默跳过带病启动。"""
+    import sqlalchemy as sa
+    from unittest.mock import patch
+
+    from app.migrate import run_migrations
+
+    client, db, user = imap_env
+    db.execute(sa.text("ALTER TABLE users ADD COLUMN imap_email VARCHAR(255)"))
+    db.execute(sa.text("ALTER TABLE users ADD COLUMN imap_password VARCHAR(255)"))
+    db.execute(sa.text("ALTER TABLE users ADD COLUMN imap_provider VARCHAR(16)"))
+    db.execute(sa.text(
+        "UPDATE users SET imap_email='old@126.com', imap_password='old-code', "
+        "imap_provider='126' WHERE id = :uid"
+    ), {"uid": user.id})
+    db.commit()
+
+    real_text = sa.text
+
+    def failing_text(sql):
+        if "INSERT INTO imap_accounts" in sql:
+            raise RuntimeError("disk full")
+        return real_text(sql)
+
+    with patch("app.migrate.text", side_effect=failing_text):
+        with pytest.raises(RuntimeError, match="IMAP"):
+            run_migrations(db.get_bind())
 
 
 def test_session_timeout_converts_to_connection_error(imap_env, monkeypatch):
     """TLS 建立后 LOGIN 阶段的 TimeoutError/OSError 也必须转成泛化 502，不能 500 逃逸。"""
     client, _, _ = imap_env
-    save_imap(
-        client,
-        imap_email="alice@126.com",
-        imap_password="x",
-        imap_provider="126",
-    )
+    account_id = add_account(client).json()["id"]
 
     class HangClient:
         def __init__(self, *args, **kwargs):
@@ -269,22 +451,19 @@ def test_session_timeout_converts_to_connection_error(imap_env, monkeypatch):
             pass
 
     monkeypatch.setattr(imap_client.imaplib, "IMAP4_SSL", HangClient)
-    resp = client.post("/api/imap/test")
+    resp = client.post(f"/api/imap/accounts/{account_id}/test")
     assert resp.status_code == 502
     assert "timed out" not in resp.json()["detail"]
 
 
-def test_user_out_returns_email_and_provider_but_not_password(imap_env):
-    """重载后设置页需要真实 email/provider 初始化，防止授权码发给错误服务商。"""
-    client, _, _ = imap_env
-    save_imap(
-        client,
-        imap_email="alice@qq.com",
-        imap_password="x",
-        imap_provider="qq",
+def test_fetch_rejects_accounts_of_other_users(imap_env, monkeypatch):
+    client, db, _ = imap_env
+    other = User(username="carol", email="carol@example.com", password_hash="h")
+    db.add(other)
+    db.commit()
+    other_account = ImapAccount(
+        user_id=other.id, email="carol@qq.com", password="p", provider="qq"
     )
-    me = client.get("/api/auth/me").json()
-    assert me["imap_email"] == "alice@qq.com"
-    assert me["imap_provider"] == "qq"
-    assert me["imap_configured"] is True
-    assert "imap_password" not in me
+    db.add(other_account)
+    db.commit()
+    assert client.post(f"/api/imap/accounts/{other_account.id}/fetch").status_code == 404

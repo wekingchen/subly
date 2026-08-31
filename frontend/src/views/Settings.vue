@@ -304,41 +304,51 @@
       <p v-if="whMsg" class="feedback" :class="whOk ? 'ok' : 'err'" :role="whOk ? 'status' : 'alert'">{{ whMsg }}</p>
     </form>
 
-    <!-- 邮件账户（IMAP） -->
-    <form class="card sect panel-card channel-card" @submit.prevent="saveImap">
+    <!-- 邮件账户（IMAP，多账户） -->
+    <div class="card sect panel-card channel-card">
       <div class="panel-head">
         <div>
           <div class="panel-title"><span class="panel-signal"></span>{{ t('imap.title') }}</div>
           <p class="muted">{{ t('imap.tip') }}</p>
         </div>
-        <span class="status-tag" :class="imapConfigured ? 'ok' : 'off'">
-          {{ imapConfigured ? t('imap.configured') : t('imap.notConfigured') }}
-        </span>
       </div>
-      <div class="form-grid wide">
-        <div class="field">
-          <label for="imap-email">{{ t('imap.email') }}</label>
-          <input id="imap-email" v-model="im.email" name="imap_email" type="email" autocomplete="email"
-                 :placeholder="'name@126.com'" :disabled="imapBusy" />
-        </div>
-        <div class="field">
-          <label for="imap-provider">{{ t('imap.provider') }}</label>
-          <select id="imap-provider" v-model="im.provider" name="imap_provider" :disabled="imapBusy">
+
+      <!-- 账户列表 -->
+      <ul class="imap-accounts" v-if="imapAccounts.length">
+        <li v-for="acct in imapAccounts" :key="acct.id" class="imap-account-item">
+          <div class="imap-account-main">
+            <span class="imap-account-email">{{ acct.email }}</span>
+            <span class="imap-account-provider">{{ providerLabel(acct.provider) }}</span>
+          </div>
+          <div class="imap-account-actions">
+            <button class="btn ghost sm" type="button" :disabled="acct.busy" @click="testAccount(acct)">{{ acct.busy ? t('imap.testing') : t('imap.test') }}</button>
+            <button class="btn ghost sm" type="button" :disabled="acct.busy" @click="fetchAccount(acct)">{{ acct.busy ? t('imap.fetching') : t('imap.fetch') }}</button>
+            <button class="btn ghost sm" type="button" :disabled="acct.busy || !!editingId" @click="startEdit(acct)">{{ t('common.edit') }}</button>
+            <button class="btn ghost sm danger" type="button" :disabled="acct.busy" @click="removeAccount(acct)">{{ t('common.delete') }}</button>
+          </div>
+        </li>
+      </ul>
+      <p v-else-if="imapAccountsLoading" class="muted imap-empty">{{ t('common.loading') }}</p>
+      <p v-else-if="imapAccountsError" class="feedback err imap-empty">{{ t('imap.loadFailedList') }} <button class="btn ghost sm" type="button" @click="loadImapAccounts">{{ t('imap.retry') }}</button></p>
+      <p v-else class="muted imap-empty">{{ t('imap.empty') }}</p>
+
+      <!-- 添加 / 编辑表单（单行折叠） -->
+      <form class="imap-account-form" @submit.prevent="editingId ? saveEdit() : addAccount()">
+        <div class="imap-form-row">
+          <input v-model="imForm.email" type="email" name="imap_new_email" autocomplete="email"
+                 :placeholder="t('imap.email')" :disabled="imapBusy" aria-label="邮箱地址" />
+          <select v-model="imForm.provider" name="imap_new_provider" :disabled="imapBusy" aria-label="邮箱服务商">
             <option value="126">126 邮箱</option>
             <option value="qq">QQ 邮箱</option>
           </select>
+          <input v-model="imForm.password" type="password" name="imap_new_password"
+                 autocomplete="new-password" :placeholder="editingId ? t('imap.passwordEditPh') : t('imap.password')"
+                 :disabled="imapBusy" aria-label="IMAP 授权码" />
+          <button class="btn" type="submit" :disabled="imapBusy">{{ editingId ? t('common.save') : t('imap.add') }}</button>
+          <button v-if="editingId" class="btn ghost" type="button" @click="cancelEdit">{{ t('common.cancel') }}</button>
         </div>
-        <div class="field span-2">
-          <label for="imap-password">{{ t('imap.password') }}</label>
-          <input id="imap-password" v-model="im.password" name="imap_password" type="password"
-                 autocomplete="new-password" :placeholder="t('imap.passwordPh')" :disabled="imapBusy" />
-        </div>
-      </div>
-      <div class="actions-row wrap">
-        <button class="btn" type="submit" :disabled="imapBusy">{{ t('settings.save') }}</button>
-        <button class="btn ghost" type="button" :disabled="imapBusy" @click="testImap">{{ imapTesting ? t('imap.testing') : t('imap.test') }}</button>
-        <button class="btn ghost" type="button" :disabled="imapBusy" @click="fetchImap">{{ imapFetching ? t('imap.fetching') : t('imap.fetch') }}</button>
-      </div>
+      </form>
+
       <p v-if="imMsg" class="feedback" :class="imOk ? 'ok' : 'err'" :role="imOk ? 'status' : 'alert'">{{ imMsg }}</p>
       <div v-if="preview.length" class="imap-preview">
         <div class="imap-preview-title">{{ t('imap.previewTitle') }}</div>
@@ -350,7 +360,7 @@
           </li>
         </ul>
       </div>
-    </form>
+    </div>
     </section>
 
     <div id="backup" class="grid two settings-anchor">
@@ -874,83 +884,161 @@ async function testWebhook() {
   }
 }
 
-// ---------- 邮件账户（IMAP）----------
-const im = reactive({
-  email: auth.user?.imap_email || '',
-  provider: auth.user?.imap_provider || '126',
-  password: ''
-})
-// 授权码只写不回显：imap_configured 来自后端状态布尔
-const imapConfigured = computed(() => Boolean(auth.user?.imap_configured))
+// ---------- 邮件账户（IMAP，多账户）----------
+// 账户列表行内附加 busy 状态（测试/拉取进行中禁用该行按钮）
+const imapAccounts = ref([])
+const editingId = ref(null)
+const imForm = reactive({ email: '', provider: '126', password: '' })
 const imapBusy = ref(false)
-const imapTesting = ref(false)
-const imapFetching = ref(false)
 const imMsg = ref('')
 const imOk = ref(false)
 const preview = ref([])
+const previewAccountId = ref(null)
 
-async function persistImap() {
-  if (imapBusy.value) return false
-  imapBusy.value = true
+const PROVIDER_LABELS = { '126': '126 邮箱', qq: 'QQ 邮箱' }
+const providerLabel = (p) => PROVIDER_LABELS[p] || p
+
+const imapAccountsLoading = ref(false)
+const imapAccountsError = ref(false)
+
+async function loadImapAccounts() {
+  imapAccountsLoading.value = true
+  imapAccountsError.value = false
   try {
-    const patch = { imap_email: im.email.trim() }
-    // provider 只在用户显式选择时提交；已配置但下拉尚未变更时不回退默认值，
-    // 防止把 A 服务商的授权码随 B 服务商的主机名一起发送。
-    if (!imapConfigured.value || im.provider !== (auth.user?.imap_provider || '126')) {
-      patch.imap_provider = im.provider
-    }
-    // 授权码留空 = 不修改（只在填写时提交）
-    if (im.password.trim()) patch.imap_password = im.password
-    await auth.updateMe(patch)
-    im.password = ''
+    const { data } = await api.get('/api/imap/accounts')
+    imapAccounts.value = (data.accounts || []).map((a) => ({ ...a, busy: false }))
+  } catch {
+    // 失败要响亮：不能把加载失败伪装成"尚未添加账户"
+    imapAccounts.value = []
+    imapAccountsError.value = true
+  } finally {
+    imapAccountsLoading.value = false
+  }
+}
+loadImapAccounts()
+
+function resetImapForm() {
+  imForm.email = ''
+  imForm.provider = '126'
+  imForm.password = ''
+  editingId.value = null
+}
+
+function startEdit(acct) {
+  editingId.value = acct.id
+  imForm.email = acct.email
+  imForm.provider = acct.provider
+  imForm.password = ''
+  imMsg.value = ''
+}
+
+function cancelEdit() {
+  resetImapForm()
+}
+
+async function addAccount() {
+  if (imapBusy.value) return
+  imapBusy.value = true
+  imMsg.value = ''
+  try {
+    await api.post('/api/imap/accounts', {
+      email: imForm.email.trim(),
+      provider: imForm.provider,
+      password: imForm.password
+    })
+    resetImapForm()
     imOk.value = true
-    imMsg.value = t('settings.saved')
-    return true
+    imMsg.value = t('imap.added')
+    await loadImapAccounts()
   } catch (e) {
     imOk.value = false
     imMsg.value = e.response?.data?.detail || t('common.networkError')
-    return false
   } finally {
     imapBusy.value = false
   }
 }
 
-async function saveImap() {
-  await persistImap()
-}
-
-async function testImap() {
-  if (imapTesting.value) return
-  imapTesting.value = true
+async function saveEdit() {
+  if (imapBusy.value) return
+  imapBusy.value = true
+  imMsg.value = ''
   try {
-    const saved = await persistImap()
-    if (!saved) return
-    await api.post('/api/imap/test')
+    // 授权码留空 = 不修改（只发 email/provider）
+    const patch = { email: imForm.email.trim(), provider: imForm.provider }
+    if (imForm.password.trim()) patch.password = imForm.password
+    await api.patch(`/api/imap/accounts/${editingId.value}`, patch)
+    resetImapForm()
     imOk.value = true
-    imMsg.value = t('imap.testOk')
+    imMsg.value = t('settings.saved')
+    await loadImapAccounts()
   } catch (e) {
     imOk.value = false
-    imMsg.value = e.response?.data?.detail || t('imap.loadFailed')
+    imMsg.value = e.response?.data?.detail || t('common.networkError')
   } finally {
-    imapTesting.value = false
+    imapBusy.value = false
   }
 }
 
-async function fetchImap() {
-  if (imapFetching.value) return
-  imapFetching.value = true
+async function removeAccount(acct) {
+  // 有操作进行中时禁止删除，防止拉取返回后把已删账户的邮件写回预览
+  if (acct.busy) return
+  if (!window.confirm(t('imap.deleteConfirm', { email: acct.email }))) return
   try {
-    const saved = await persistImap()
-    if (!saved) return
-    const data = (await api.post('/api/imap/fetch', { days: 30, limit: 20 })).data
-    preview.value = data.messages || []
+    await api.delete(`/api/imap/accounts/${acct.id}`)
+    if (previewAccountId.value === acct.id) {
+      preview.value = []
+      previewAccountId.value = null
+    }
     imOk.value = true
-    imMsg.value = t('imap.fetchOk', { n: data.count || 0 })
+    imMsg.value = t('imap.deleted')
+    await loadImapAccounts()
+  } catch (e) {
+    imOk.value = false
+    imMsg.value = e.response?.data?.detail || t('common.networkError')
+  }
+}
+
+async function testAccount(acct) {
+  if (acct.busy) return
+  acct.busy = true
+  imMsg.value = ''
+  try {
+    await api.post(`/api/imap/accounts/${acct.id}/test`)
+    imOk.value = true
+    imMsg.value = t('imap.testOkNamed', { email: acct.email })
   } catch (e) {
     imOk.value = false
     imMsg.value = e.response?.data?.detail || t('imap.loadFailed')
   } finally {
-    imapFetching.value = false
+    acct.busy = false
+  }
+}
+
+// 拉取请求序号：响应返回时若已有更新的拉取/删除发生，丢弃过期结果，
+// 避免把已删除或非当前账户的邮件写进预览。
+let fetchSeq = 0
+
+async function fetchAccount(acct) {
+  if (acct.busy) return
+  acct.busy = true
+  const seq = ++fetchSeq
+  previewAccountId.value = acct.id
+  imMsg.value = ''
+  try {
+    const data = (await api.post(`/api/imap/accounts/${acct.id}/fetch`, { days: 30, limit: 20 })).data
+    if (seq !== fetchSeq) return // 已有更新的操作接管预览，丢弃过期响应
+    preview.value = data.messages || []
+    imOk.value = true
+    imMsg.value = t('imap.fetchOkNamed', { n: data.count || 0, email: acct.email })
+  } catch (e) {
+    if (seq === fetchSeq) {
+      preview.value = []
+      previewAccountId.value = null
+      imOk.value = false
+      imMsg.value = e.response?.data?.detail || t('imap.loadFailed')
+    }
+  } finally {
+    acct.busy = false
   }
 }
 
@@ -1113,6 +1201,23 @@ hr { border: none; border-top: 1px solid var(--border); margin: 16px 0; }
 @media (max-width: 620px) {
   .imap-preview li { grid-template-columns: 1fr; gap: 2px; }
 }
+/* 邮件账户（IMAP）：账户列表与添加/编辑表单 */
+.imap-accounts { list-style: none; margin: 0 0 12px; padding: 0; display: grid; gap: 8px; }
+.imap-account-item { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 9px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-2); }
+.imap-account-main { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.imap-account-email { font-weight: 750; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.imap-account-provider { flex: 0 0 auto; font-size: 11px; color: var(--text-soft); padding: 2px 8px;
+  border-radius: 999px; background: color-mix(in srgb, var(--primary) 10%, transparent); }
+.imap-account-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.imap-account-actions .btn.sm { padding: 4px 10px; font-size: 12px; }
+.imap-account-actions .btn.danger { color: var(--danger-text); }
+.imap-empty { margin: 0 0 12px; }
+.imap-form-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: stretch; }
+.imap-form-row input[type="email"] { flex: 2 1 180px; min-width: 0; }
+.imap-form-row select { flex: 1 1 110px; min-width: 0; }
+.imap-form-row input[type="password"] { flex: 2 1 160px; min-width: 0; }
+.imap-form-row .btn { flex: 0 0 auto; }
 .ok { color: var(--success-text); }
 .err { color: var(--danger-text); word-break: break-all; }
 .actions-row { display: flex; align-items: center; gap: 10px; margin-top: 12px; }

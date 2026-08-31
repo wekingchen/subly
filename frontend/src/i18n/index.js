@@ -16,12 +16,15 @@ const zh = {
     filterLabel: '按投递状态筛选', loadMore: '加载更多', loadingMore: '正在加载…', loadFailed: '投递记录加载失败，请稍后重试。', scanFailed: '扫描失败，请稍后重试。'
   },
   imap: {
-    title: '邮件账户', tip: '为后续信用卡账单邮件解析做准备。授权码只写入不回显，已配置时留空表示不修改。126 / QQ 邮箱需在邮箱网页端开启 IMAP 并获取授权码。',
+    title: '邮件账户', tip: '绑定一个或多个邮箱，为后续信用卡账单邮件解析做准备。授权码只写入不回显，编辑时留空表示不修改。126 / QQ 邮箱需在邮箱网页端开启 IMAP 并获取授权码。',
     email: '邮箱地址', provider: '邮箱服务商', password: 'IMAP 授权码',
-    passwordPh: '已配置时留空表示不修改', configured: '已配置', notConfigured: '未配置',
+    passwordEditPh: '留空表示不修改授权码', add: '添加账户',
+    empty: '尚未添加邮箱账户', deleteConfirm: '确定删除邮箱账户 {email} 吗？',
+    added: '账户已添加。', deleted: '账户已删除。',
     test: '测试连接', testing: '正在连接…', fetch: '拉取最近邮件', fetching: '正在拉取…',
-    testOk: '连接成功，凭据有效。', fetchOk: '拉取到 {n} 封邮件。', saveFirst: '请先保存配置',
-    previewTitle: '最近邮件预览（仅头部，不保存）', emptyPreview: '暂无邮件', loadFailed: 'IMAP 操作失败，请检查邮箱地址、授权码与网络连接。'
+    testOkNamed: '{email} 连接成功，凭据有效。', fetchOkNamed: '{email} 拉取到 {n} 封邮件。',
+    previewTitle: '最近邮件预览（仅头部，不保存）', emptyPreview: '暂无邮件', loadFailed: 'IMAP 操作失败，请检查邮箱地址、授权码与网络连接。',
+    loadFailedList: '账户列表加载失败。', retry: '重试'
   },
   rtlog: { title: '实时日志', live: '实时', paused: '已暂停', empty: '暂无日志', auto: '自动刷新' },
   account: { title: '账号与密码', username: '用户名', email: '邮箱', saveAccount: '保存账号', changePwd: '修改密码', oldPwd: '原密码', newPwd: '新密码', pwdOk: '密码已修改', accountOk: '账号已更新' },
@@ -214,7 +217,7 @@ const zh = {
     resultCount: '显示 {shown} / {total} 项服务', clearFilters: '清除筛选', noFilterResults: '没有符合当前筛选条件的服务', loadFailed: '服务列表加载失败，请重试。', refreshFailed: '刷新失败，当前继续显示上次加载的服务列表。',
     exportList: '导出列表', refresh: '刷新', batch: '批量', selectAll: '全选', batchFetch: '抓取所选'
   },
-  common: { loading: '加载中...', processing: '处理中…', skipMain: '跳到主要内容', actions: '操作', confirm: '确认', close: '关闭', networkError: '请求失败，请检查网络后重试' }
+  common: { loading: '加载中...', processing: '处理中…', skipMain: '跳到主要内容', actions: '操作', confirm: '确认', close: '关闭', edit: '编辑', delete: '删除', save: '保存', cancel: '取消', networkError: '请求失败，请检查网络后重试' }
 }
 
 export default createI18n({

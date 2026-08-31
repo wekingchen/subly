@@ -1,34 +1,32 @@
-"""IMAP 邮件账户：连接测试与最近邮件预览。
+"""IMAP 邮件账户：一户多邮箱的增删改查、连接测试与最近邮件预览。
 
-凭据只写不回显：授权码任何 API 永不返回；邮箱配置以 imap_configured
-布尔状态表达。拉取仅返回邮件头部预览，不落库。
+凭据只写不回显：授权码任何 API 永不返回；账户列表仅暴露 id/邮箱/服务商。
+拉取仅返回邮件头部预览，不落库。
 """
 import logging
 import threading
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
+from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app import activity
 from app.database import get_db
 from app.deps import get_current_user
-from app.models import User
+from app.models import ImapAccount, User
 from app.services import imap_client
 
-router = APIRouter(prefix="/api/imap", tags=["imap"])
+router = APIRouter(prefix="/api/imap/accounts", tags=["imap"])
 logger = logging.getLogger(__name__)
 
 # 同步阻塞外部 IO：全局并发上限，防止慢速 IMAP 占满工作线程池
 # （对齐图标抓取管线的 semaphore 先例）。
 _IMAP_SEMAPHORE = threading.Semaphore(2)
 
-
-def _require_config(user: User) -> tuple[str, str, str]:
-    """读取已保存的 IMAP 配置；不完整返回 400。"""
-    if not user.imap_email or not user.imap_password or not user.imap_provider:
-        raise HTTPException(400, "请先在设置中保存邮箱地址与 IMAP 授权码")
-    return user.imap_email, user.imap_password, user.imap_provider
+# 单用户账户数上限：防止无限增长
+MAX_ACCOUNTS_PER_USER = 10
 
 
 def _service_error(exc: Exception, action: str, user: User) -> HTTPException:
@@ -39,42 +37,199 @@ def _service_error(exc: Exception, action: str, user: User) -> HTTPException:
     return HTTPException(502, "IMAP 操作失败，请检查邮箱地址、授权码与网络连接")
 
 
+def _account_for_user(user: User, account_id: int, db: Session) -> ImapAccount:
+    """取本用户的指定账户；不存在返回 404（不区分他人账户，避免探测）。"""
+    account = db.scalar(
+        select(ImapAccount).where(
+            ImapAccount.id == account_id,
+            ImapAccount.user_id == user.id,
+        )
+    )
+    if not account:
+        raise HTTPException(404, "邮件账户不存在")
+    return account
+
+
+def _validate_provider(provider: str) -> str:
+    if provider not in imap_client.IMAP_PROVIDERS:
+        raise HTTPException(400, "不支持的邮箱服务商，目前仅支持 126 与 QQ 邮箱")
+    return provider
+
+
+def _validate_email(email: str | None) -> str:
+    email = (email or "").strip()
+    if not email or "@" not in email or len(email) > 255:
+        raise HTTPException(400, "邮箱地址格式不正确")
+    return email
+
+
+class ImapAccountIn(BaseModel):
+    email: str
+    provider: str
+    # 创建时必填；更新时 None/空串 = 不修改授权码
+    password: str | None = None
+
+
 class ImapFetchIn(BaseModel):
     days: int = Field(default=30, ge=1, le=90)
     limit: int = Field(default=20, ge=1, le=50)
 
 
-@router.post("/test")
-def test_imap(user: User = Depends(get_current_user)):
-    email, password, provider = _require_config(user)
+@router.get("")
+def list_accounts(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    accounts = db.scalars(
+        select(ImapAccount)
+        .where(ImapAccount.user_id == user.id)
+        .order_by(ImapAccount.id)
+    ).all()
+    return {
+        "accounts": [
+            {"id": a.id, "email": a.email, "provider": a.provider}
+            for a in accounts
+        ]
+    }
+
+
+@router.post("", status_code=201)
+def create_account(
+    payload: ImapAccountIn,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    email = _validate_email(payload.email)
+    provider = _validate_provider(payload.provider)
+    if not payload.password or not payload.password.strip():
+        raise HTTPException(400, "请填写 IMAP 授权码")
+    existing = db.scalar(
+        select(ImapAccount).where(
+            ImapAccount.user_id == user.id, ImapAccount.email == email
+        )
+    )
+    if existing:
+        raise HTTPException(409, "该邮箱已存在，请直接编辑或测试")
+    count = len(
+        db.scalars(select(ImapAccount.id).where(ImapAccount.user_id == user.id)).all()
+    )
+    if count >= MAX_ACCOUNTS_PER_USER:
+        raise HTTPException(400, f"最多可添加 {MAX_ACCOUNTS_PER_USER} 个邮件账户")
+    account = ImapAccount(
+        user_id=user.id,
+        email=email,
+        password=payload.password.strip(),
+        provider=provider,
+    )
+    db.add(account)
+    # 并发下查重/计数可能同时通过，由唯一约束兜底；IntegrityError 转泛化 409，
+    # 避免数据库异常（参数含授权码）进入全局 500 日志。
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        logger.warning(
+            "event=imap_account_create_conflict user_id=%s error_type=%s",
+            user.id, type(exc).__name__,
+        )
+        raise HTTPException(409, "该邮箱已存在或添加冲突，请刷新后重试")
+    db.refresh(account)
+    activity.log("imap.account_added", "新增邮件账户", user=user)
+    return {"id": account.id, "email": account.email, "provider": account.provider}
+
+
+@router.patch("/{account_id}")
+def update_account(
+    account_id: int,
+    payload: ImapAccountIn,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    account = _account_for_user(user, account_id, db)
+    email = _validate_email(payload.email)
+    provider = _validate_provider(payload.provider)
+    # 同用户下改邮箱时查重（排除自身）
+    dup = db.scalar(
+        select(ImapAccount).where(
+            ImapAccount.user_id == user.id,
+            ImapAccount.email == email,
+            ImapAccount.id != account.id,
+        )
+    )
+    if dup:
+        raise HTTPException(409, "该邮箱已存在，请直接编辑或测试")
+    account.email = email
+    account.provider = provider
+    # 授权码 None/空串 = 不修改
+    if payload.password is not None and payload.password.strip():
+        account.password = payload.password.strip()
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        logger.warning(
+            "event=imap_account_update_conflict user_id=%s error_type=%s",
+            user.id, type(exc).__name__,
+        )
+        raise HTTPException(409, "该邮箱已存在或更新冲突，请刷新后重试")
+    activity.log("imap.account_updated", "更新邮件账户", user=user)
+    return {"id": account.id, "email": account.email, "provider": account.provider}
+
+
+@router.delete("/{account_id}")
+def delete_account(
+    account_id: int,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    account = _account_for_user(user, account_id, db)
+    db.delete(account)
+    db.commit()
+    activity.log("imap.account_deleted", "删除邮件账户", user=user)
+    return {"ok": True}
+
+
+def _run_imap(action: str, user: User, run):
+    """公共包裹：限并发 + 统一异常转 502 + activity 日志。run 返回 API 响应。"""
     if not _IMAP_SEMAPHORE.acquire(timeout=5):
         raise HTTPException(503, "IMAP 操作繁忙，请稍后再试")
     try:
-        result = imap_client.test_connection(email, password, provider)
+        result = run()
     except (imap_client.ImapConnectionError, imap_client.ImapConfigError) as exc:
-        raise _service_error(exc, "test", user)
+        raise _service_error(exc, action, user)
     finally:
         _IMAP_SEMAPHORE.release()
+    return result
+
+
+@router.post("/{account_id}/test")
+def test_account(
+    account_id: int,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    account = _account_for_user(user, account_id, db)
+    result = _run_imap(
+        "test",
+        user,
+        lambda: imap_client.test_connection(account.email, account.password, account.provider),
+    )
     activity.log("imap.test", "IMAP 连接测试成功", user=user)
     return result
 
 
-@router.post("/fetch")
-def fetch_imap(
+@router.post("/{account_id}/fetch")
+def fetch_account(
+    account_id: int,
     payload: ImapFetchIn | None = None,
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    email, password, provider = _require_config(user)
+    account = _account_for_user(user, account_id, db)
     body = payload or ImapFetchIn()
-    # 同步阻塞外部 IO：限并发，慢速邮箱不占满工作线程池
-    if not _IMAP_SEMAPHORE.acquire(timeout=5):
-        raise HTTPException(503, "IMAP 操作繁忙，请稍后再试")
-    try:
-        messages = imap_client.fetch_recent(email, password, provider, body.days, body.limit)
-    except (imap_client.ImapConnectionError, imap_client.ImapConfigError) as exc:
-        raise _service_error(exc, "fetch", user)
-    finally:
-        _IMAP_SEMAPHORE.release()
+    messages = _run_imap(
+        "fetch",
+        user,
+        lambda: imap_client.fetch_recent(
+            account.email, account.password, account.provider, body.days, body.limit
+        ),
+    )
     activity.log("imap.fetch", f"IMAP 拉取最近邮件 {len(messages)} 封", user=user)
     return {"messages": messages, "count": len(messages)}

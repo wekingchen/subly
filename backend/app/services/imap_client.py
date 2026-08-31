@@ -17,6 +17,23 @@ IMAP_PROVIDERS = {
 IMAP_TIMEOUT_SECONDS = 20
 MAX_SUBJECT_LENGTH = 120
 
+# 网易系 IMAP（126/163/网易企业邮）要求登录后先发 ID 命令自报客户端身份，
+# 否则后续 SELECT/SEARCH 会被以 "Unsafe Login" 拒绝——表现为「测试连接成功
+# 但拉取失败」。QQ 邮箱无此要求，发送 ID 亦无害。名称必须在白名单里：
+# xatom 对不在 imaplib.Commands 的名字会动态注册，绕过状态机校验。
+_ID_COMMAND_NAME = "ID"
+
+
+def _client_session(client) -> None:
+    """登录后发送 ID 握手（网易系必需）。失败不阻断流程。"""
+    try:
+        client.xatom(
+            _ID_COMMAND_NAME,
+            '("name" "Subly" "version" "1.0")',
+        )
+    except (imaplib.IMAP4.error, OSError, TimeoutError):
+        pass  # 非网易服务商可能不支持 ID；忽略
+
 # TLS 必须验证服务器证书与主机名：imaplib 默认 context 是 CERT_NONE，
 # 不显式传入会把授权码暴露给中间人。
 _SSL_CONTEXT = ssl.create_default_context()
@@ -101,6 +118,7 @@ def test_connection(email: str, password: str, provider: str) -> dict:
             # TLS 建立后的登录阶段也可能因服务端无响应抛 OSError/TimeoutError，
             # 统一转成不含底层细节的连接错误，避免 500 逃逸。
             raise ImapConnectionError("login-failed") from exc
+        _client_session(client)
         try:
             client.logout()
         except (imaplib.IMAP4.error, OSError):
@@ -136,6 +154,7 @@ def fetch_recent(email: str, password: str, provider: str, days: int, limit: int
             client.login(email, password)
         except (imaplib.IMAP4.error, OSError, TimeoutError) as exc:
             raise ImapConnectionError("login-failed") from exc
+        _client_session(client)
         try:
             status, _ = client.select("INBOX", readonly=True)
             if status != "OK":
@@ -162,8 +181,9 @@ def fetch_recent(email: str, password: str, provider: str, days: int, limit: int
                     "date": _decode_header_value(msg.get("Date")),
                 })
             return messages
-        except (OSError, TimeoutError) as exc:
-            # SELECT/SEARCH/FETCH 期间的网络异常统一转成连接错误
+        except (imaplib.IMAP4.error, OSError, TimeoutError) as exc:
+            # SELECT/SEARCH/FETCH 期间的协议/网络异常（含网易 "Unsafe Login"
+            # 拒绝等 IMAP4.error 子类）统一转成连接错误，避免 500 逃逸。
             raise ImapConnectionError(type(exc).__name__) from exc
     finally:
         try:

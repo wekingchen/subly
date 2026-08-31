@@ -44,6 +44,8 @@ _COLUMNS = [
     ("users", "imap_email", "VARCHAR(255)"),
     ("users", "imap_password", "VARCHAR(255)"),
     ("users", "imap_provider", "VARCHAR(16)"),
+    # v2 多账户改造后 users 表不再使用这些列，仅保留补列以兼容最老升级路径；
+    # 数据由下方 _migrate_imap_accounts 一次性搬到 imap_accounts 表。
     ("exchange_rates", "is_manual", "BOOLEAN NOT NULL DEFAULT 0"),
     ("exchange_rates", "user_id", "INTEGER"),
     ("icon_library_services", "category_keys", "JSON"),
@@ -229,6 +231,45 @@ def run_migrations(engine: Engine) -> None:
                 _scrub_outbound_urls(conn)
         except Exception as e:  # noqa: BLE001
             print(f"[migrate] 跳过 users 出网配置清理：{e}")
+
+        # IMAP 单账户（users 表 3 列）→ 多账户表（imap_accounts）一次性搬迁。
+        # 幂等：仅当旧列存在且新表里该用户还没有任何账户时执行。
+        # 失败必须响亮：新代码已不读 users.imap_*，静默跳过会让旧凭据在新界面
+        # 中"消失"且每次重启重复跳过，因此抛 RuntimeError 阻止带病启动。
+        if (
+            _table_exists(conn, "users")
+            and _table_exists(conn, "imap_accounts")
+            and _column_exists(conn, "users", "imap_email")
+            and _column_exists(conn, "users", "imap_password")
+            and _column_exists(conn, "users", "imap_provider")
+        ):
+            try:
+                rows = conn.execute(text(
+                    "SELECT id, imap_email, imap_password, imap_provider FROM users "
+                    "WHERE imap_email IS NOT NULL AND imap_password IS NOT NULL "
+                    "AND imap_provider IS NOT NULL"
+                )).all()
+                migrated = 0
+                for uid, email, password, provider in rows:
+                    has_account = conn.execute(text(
+                        "SELECT COUNT(*) FROM imap_accounts WHERE user_id = :uid"
+                    ), {"uid": uid}).scalar()
+                    if has_account:
+                        continue
+                    conn.execute(text(
+                        "INSERT INTO imap_accounts (user_id, email, password, provider) "
+                        "VALUES (:uid, :email, :password, :provider)"
+                    ), {"uid": uid, "email": email, "password": password, "provider": provider})
+                    migrated += 1
+                if migrated:
+                    print(f"[migrate] 已迁移 {migrated} 条旧版单账户 IMAP 配置")
+            except Exception as exc:  # noqa: BLE001
+                logger.exception(
+                    "event=migration_imap_accounts_failed error_type=%s", type(exc).__name__
+                )
+                raise RuntimeError(
+                    "数据库数据迁移失败：无法将旧版 IMAP 配置迁移到 imap_accounts 表"
+                ) from exc
 
 
 def _normalize_currency_codes(conn) -> int:
