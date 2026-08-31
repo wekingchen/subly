@@ -177,12 +177,23 @@ class NotStatementEmail(ValueError):
 # （标题变体/英文/被网关改写都不漏），解析失败时按标题区分「非账单
 # 邮件（忽略）」与「疑似模板漂移（响亮报错）」。
 _STATEMENT_TITLE_WORDS = ("账单", "对账单", "月结单", "statement")
+# 「对账单」但不含「信用卡」的多为借记/储蓄账户对账单（真实案例：
+# 民生「民生银行账户对账单，请妥善保管」）——不是信用卡账单，归忽略。
+_NON_CARD_TITLE_WORDS = ("对账单",)
 
 
 def looks_like_statement(subject: str | None) -> bool:
     """按标题判断是否像账单邮件（失败分类用，真实样本规律）。"""
     text = (subject or "").strip().lower()
     return bool(text) and any(w in text for w in _STATEMENT_TITLE_WORDS)
+
+
+def is_non_card_statement(subject: str | None) -> bool:
+    """「对账单」但不含「信用卡」→ 借记/储蓄账户对账单（非信用卡账单）。"""
+    text = (subject or "").strip()
+    if not text:
+        return False
+    return any(w in text for w in _NON_CARD_TITLE_WORDS) and "信用卡" not in text
 
 
 def parse_email(raw_mime: bytes, from_address: str | None = None) -> ParsedEmail:
@@ -205,6 +216,8 @@ def parse_email(raw_mime: bytes, from_address: str | None = None) -> ParsedEmail
     if not parsed:
         # 正文解析不出账单：标题含账单特征 → 疑似模板漂移（响亮）；
         # 不含 → 大概率本来就是营销/通知页，归忽略
+        if is_non_card_statement(subject):
+            raise NotStatementEmail("非信用卡对账单（借记/储蓄账户账单），不参与解析")
         if looks_like_statement(subject):
             raise StatementParseError("未识别到账单结构（银行模板可能已变化）")
         raise NotStatementEmail("正文无账单结构且标题无账单特征")

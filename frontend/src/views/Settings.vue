@@ -366,9 +366,14 @@
       </form>
 
       <p v-if="imMsg" class="feedback" :class="imOk ? 'ok' : 'err'" :role="imOk ? 'status' : 'alert'">{{ imMsg }}</p>
-      <ul v-if="syncErrorDetails.length" class="sync-error-list">
+      <ul v-if="syncErrorDetails.length || unmatchedDetails.length" class="sync-error-list">
+        <li v-for="(u, i) in unmatchedDetails" :key="'u' + i" class="sync-error-item">
+          <span class="sync-error-subject">{{ u.subject }}</span>
+          <span class="sync-error-reason">{{ u.error }}</span>
+        </li>
         <li v-for="e in syncErrorDetails" :key="e.uid" class="sync-error-item">
           <span class="sync-error-subject">{{ e.subject }}</span>
+          <span v-if="e.from" class="sync-error-from">{{ e.from }}</span>
           <span class="sync-error-reason">{{ e.error }}</span>
         </li>
       </ul>
@@ -1082,31 +1087,57 @@ async function fetchAccount(acct) {
 
 // 手动解析账单：拉白名单银行账单邮件 → 按卡落库（展示用，不进通知/iCal）
 const syncErrorDetails = ref([])
+const unmatchedDetails = ref([])
 // 错误明细只在「解析账单」操作里展示；其他 IMAP 操作接管反馈时一并清空，
 // 避免旧账户的失败列表被误认为属于当前操作（审核修复）。
 function clearSyncFeedback() {
   imMsg.value = ''
   syncErrorDetails.value = []
+  unmatchedDetails.value = []
 }
 async function syncStatements(acct) {
   if (acct.busy) return
   acct.busy = true
   imMsg.value = ''
   syncErrorDetails.value = []
+  unmatchedDetails.value = []
   try {
     const d = (await api.post(`/api/imap/accounts/${acct.id}/sync-statements`, { days: 31 })).data
     const parts = [t('imap.syncSaved', { n: d.saved || 0 })]
     if (d.skipped) parts.push(t('imap.syncSkipped', { n: d.skipped }))
     if (d.ignored?.length) parts.push(t('imap.syncIgnored', { n: d.ignored.length }))
-    if (d.unmatched?.length) parts.push(t('imap.syncUnmatched', { n: d.unmatched.length }))
+    if (d.unmatched?.length) {
+      parts.push(t('imap.syncUnmatched', { n: d.unmatched.length }))
+      // 未匹配卡展开明细：尾号+银行，用户可直接建对应卡后重新解析
+      unmatchedDetails.value = d.unmatched.map((u) => ({
+        subject: t('imap.unmatchedCardItem', { last4: u.last_four }),
+        error: t('imap.unmatchedCardReason', { bank: bankNameOf(u.bank_key) })
+      }))
+    }
     if (d.mismatched?.length) parts.push(t('imap.syncMismatched', { n: d.mismatched.length }))
     if (d.errors?.length) {
       parts.push(t('imap.syncErrors', { n: d.errors.length }))
-      // 失败要响亮：逐封展示主题与原因，让用户能区分营销邮件与模板漂移
-      syncErrorDetails.value = (d.errors || []).map((e) => ({
+      // 失败要响亮：逐封展示主题与原因；忽略列表也展示主题，便于确认
+      // QQ 里拉到的邮件是否与预期一致（如平安账单被误归忽略）
+      syncErrorDetails.value = [
+        ...(d.errors || []).map((e) => ({
+          uid: e.uid,
+          subject: e.subject || `UID ${e.uid}`,
+          from: e.from_address || '',
+          error: e.error || ''
+        })),
+        ...(d.ignored || []).map((e) => ({
+          uid: e.uid,
+          subject: e.subject || `UID ${e.uid}`,
+          from: e.from_address || '',
+          error: t('imap.ignoredReason')
+        }))
+      ]
+    } else if (d.ignored?.length) {
+      syncErrorDetails.value = (d.ignored || []).map((e) => ({
         uid: e.uid,
         subject: e.subject || `UID ${e.uid}`,
-        error: e.error || ''
+        error: t('imap.ignoredReason')
       }))
     }
     imOk.value = !d.mismatched?.length && !d.errors?.length
@@ -1310,6 +1341,7 @@ hr { border: none; border-top: 1px solid var(--border); margin: 16px 0; }
   border-radius: 8px; background: var(--surface-2); font-size: 12px; }
 .sync-error-subject { font-weight: 750; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sync-error-reason { color: var(--text-soft); font-size: 11px; }
+.sync-error-from { color: var(--text-soft); font-size: 10px; font-family: monospace; }
 .ok { color: var(--success-text); }
 .err { color: var(--danger-text); word-break: break-all; }
 .actions-row { display: flex; align-items: center; gap: 10px; margin-top: 12px; }

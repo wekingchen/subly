@@ -2,7 +2,9 @@
   <section class="stmt-section">
     <div class="stmt-head">
       <strong>{{ t('creditCards.statementsTitle') }}</strong>
-      <span v-if="loaded && !statements.length" class="muted stmt-empty">{{ t('creditCards.statementsEmpty') }}</span>
+      <span v-if="loaded && !statements.length" class="muted stmt-empty">
+        {{ unmatchedCount ? t('creditCards.statementsUnmatched') : t('creditCards.statementsEmpty') }}
+      </span>
       <span v-else-if="error" class="stmt-err">{{ t('creditCards.statementsLoadFailed') }}
         <button type="button" class="btn ghost sm" @click="load">{{ t('imap.retry') }}</button>
       </span>
@@ -73,6 +75,7 @@ const { t } = useI18n()
 const statements = ref([])
 const loaded = ref(false)
 const error = ref(false)
+const unmatchedCount = ref(0)
 const expanded = ref(null)
 const detail = ref(null)
 const detailLoading = ref(false)
@@ -101,6 +104,7 @@ async function load() {
   try {
     const { data } = await api.get(`/api/credit-cards/${props.cardId}/statements`)
     statements.value = data.statements || []
+    unmatchedCount.value = data.unmatched_count || 0
     loaded.value = true
   } catch {
     error.value = true

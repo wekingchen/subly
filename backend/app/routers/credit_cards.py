@@ -210,7 +210,29 @@ def list_card_statements(
         )
         .order_by(CreditCardStatement.statement_date.desc(), CreditCardStatement.id.desc())
     ).all()
-    return {"statements": [_statement_out(s) for s in stmts]}
+    # 本卡尾号的未匹配账单数：解析到了这张卡的账单，但没关联上（尾号冲突/
+    # 当时未建卡），详情页可据此给出「去重新解析关联」的准确提示
+    unmatched_count = db.scalar(
+        select(func.count()).select_from(CreditCardStatement)
+        .where(
+            CreditCardStatement.user_id == user.id,
+            CreditCardStatement.card_id.is_(None),
+            CreditCardStatement.card_last_four == card.last_four,
+            CreditCardStatement.bank_key.in_(_bank_keys_for(card.bank_name)),
+        )
+    ) or 0
+    return {
+        "statements": [_statement_out(s) for s in stmts],
+        "unmatched_count": unmatched_count,
+    }
+
+
+def _bank_keys_for(bank_name: str) -> list[str]:
+    """卡的 bank_name → 可能的银行 key 列表（匹配语义与 sync 一致）。"""
+    from app.services.match_bank import bank_matches_card
+    from app.bank_senders import BANK_SENDER_DOMAINS
+
+    return [k for k in BANK_SENDER_DOMAINS if bank_matches_card(bank_name, k)]
 
 
 @router.get("/{card_id}/statements/{statement_id}/items")

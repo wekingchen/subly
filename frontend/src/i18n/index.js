@@ -29,7 +29,10 @@ const zh = {
     banksHint: '不选 = 接收全部银行的账单邮件；勾选后仅拉取所选银行的账单',
     syncStatements: '解析账单', syncing: '解析中…',
     syncSaved: '已保存 {n} 份账单', syncSkipped: '跳过重复 {n} 封', syncIgnored: '忽略非账单邮件 {n} 封',
-    syncUnmatched: '未匹配卡 {n} 张', syncMismatched: '勾稽异常 {n} 项', syncErrors: '解析失败 {n} 封'
+    syncUnmatched: '未匹配卡 {n} 张', syncMismatched: '勾稽异常 {n} 项', syncErrors: '解析失败 {n} 封',
+    ignoredReason: '非账单邮件（标题无账单特征），已忽略',
+    unmatchedCardItem: '检测到尾号 {last4} 的账单，未匹配到你的卡片',
+    unmatchedCardReason: '确认「信用卡管理」里该行卡片的银行与卡号后四位与此一致后，重新点「解析账单」即可自动关联'
   },
   rtlog: { title: '实时日志', live: '实时', paused: '已暂停', empty: '暂无日志', auto: '自动刷新' },
   account: { title: '账号与密码', username: '用户名', email: '邮箱', saveAccount: '保存账号', changePwd: '修改密码', oldPwd: '原密码', newPwd: '新密码', pwdOk: '密码已修改', accountOk: '账号已更新' },
@@ -132,7 +135,7 @@ const zh = {
     cycleTitle: '账单日 → 计划还款日', statementDate: '下个账单日', plannedDueDate: '计划还款日', windowDays: '{n} 天窗口', datePending: '等待派生日期', cycleUnavailable: '服务端尚未返回完整的账单与计划还款日期', cycleAria: '账单日 {statement}，计划还款日 {due}，间隔 {days} 天，当前状态：{phase}',
     phase: { 'before-statement': '等待出账', 'repayment-window': '还款窗口', overdue: '已过计划日', unknown: '等待计算' },
     disclaimerTitle: '仅作计划提醒', disclaimer: 'Subly 不会验证欠款或代你还款；账单邮件仅在你手动点击「解析账单」时读取并保存明细用于对账展示，金额以银行账单为准。日期与提醒仅依据你填写的规则和服务端派生结果，请以银行账单与官方通知为准。',
-    statementsTitle: '账单明细', statementsEmpty: '尚未解析到账单，可在设置页邮件账户点击「解析账单」', statementsLoadFailed: '账单加载失败',
+    statementsTitle: '账单明细', statementsEmpty: '尚未解析到这张卡的账单，可在设置页邮件账户点击「解析账单」', statementsUnmatched: '解析到了这张卡尾号的账单，但未关联成功（同尾号多卡或建卡时间晚于解析），重新点「解析账单」即可关联', statementsLoadFailed: '账单加载失败',
     dueOn: '还款日 {d}', minDue: '最低还款', periodUnknown: '未知账单期',
     txDate: '交易日', txDesc: '描述', txAmount: '金额', txType: '类型',
     txType_purchase: '消费', txType_payment: '还款', txType_refund: '退款', txType_installment: '分期', txType_interest: '利息', txType_fee: '费用', txType_unknown: '其他',

@@ -14,6 +14,7 @@ from statement_fixtures import ALL_LOADERS, load_ccb, load_cmb, load_cmbc, load_
 
 from app.services.credit_card_statement_parser import (  # noqa: E402
     NotStatementEmail,
+    is_non_card_statement,
     StatementParseError,
     detect_bank,
     looks_like_statement,
@@ -267,3 +268,23 @@ def test_mismatch_detected_on_corrupted_totals():
     parsed = parse_email(bad.encode(), from_address=ADDR["cmb"])
     v = parsed.verify_all()["6310"]
     assert v["ok"] is False
+
+
+def test_debit_statement_is_ignored_not_failed():
+    """借记/储蓄账户对账单（「对账单」无「信用卡」）→ 忽略而非解析失败。
+
+    真实案例：QQ 邮箱里的「民生银行账户对账单，请妥善保管」——民生域名、
+    标题含「对账单」，但正文是借记账户模板，不是信用卡账单。
+    """
+    from statement_fixtures import build_mime
+    raw = build_mime(
+        "<html><body>借记账户交易明细 某某账户</body></html>",
+        "master@creditcard.cmbc.com.cn",
+        "民生银行账户对账单,请妥善保管",  # 无「信用卡」
+        "debit-1",
+    )
+    with pytest.raises(NotStatementEmail):
+        parse_email(raw)
+    # 带着标题判断函数也验证
+    assert is_non_card_statement("民生银行账户对账单,请妥善保管")
+    assert not is_non_card_statement("民生信用卡2026年07月电子对账单")  # 有「信用卡」

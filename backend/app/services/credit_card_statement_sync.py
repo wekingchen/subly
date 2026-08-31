@@ -109,6 +109,8 @@ def sync_statements(
             result.errors.append({
                 "uid": uid,
                 "subject": (mail.get("subject") or "")[:80],
+                "from_address": (mail.get("from_address") or "")[:120],
+                "bank_key": bank_key,
                 "error": reason,
             })
             continue

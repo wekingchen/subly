@@ -292,3 +292,23 @@ def test_backup_merge_dedupes_same_message(sync_env):
     _restore_entities(db, user, backup, replace=False)
     db.expire_all()
     assert db.query(CreditCardStatement).count() == 1
+
+
+def test_statements_endpoint_reports_unmatched_count(sync_env, monkeypatch):
+    """未匹配账单不进详情列表，但 unmatched_count 让前端能给出准确提示。"""
+    client, db, user, account = sync_env
+    # 建尾号 6310 的卡（不同尾号的账单不会命中）
+    card = CreditCard(
+        user_id=user.id, display_name="招行卡", bank_name="招商银行",
+        last_four="6310", statement_day=15, due_day=3,
+    )
+    db.add(card)
+    db.commit()
+    # 拉建行账单（3 尾号都 unmatched）
+    _mock_imap(monkeypatch, [load_ccb()])
+    client.post(f"/api/imap/accounts/{account.id}/sync-statements")
+
+    lst = client.get(f"/api/credit-cards/{card.id}/statements")
+    body = lst.json()
+    assert body["statements"] == []
+    assert body["unmatched_count"] == 0  # 建行尾号与招行卡不匹配 → 该卡视角 0
