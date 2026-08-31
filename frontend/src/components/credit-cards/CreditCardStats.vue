@@ -13,19 +13,18 @@
       <div class="stat-icon" aria-hidden="true">→</div>
       <div class="stat-body">
         <span class="stat-label">{{ t('creditCards.dueSoon') }}</span>
-        <strong class="stat-value mono-data">{{ dueSoonCount }}</strong>
-        <p class="stat-desc" v-if="nearest">{{ t('creditCards.nearestDue', { name: nearest.card.display_name, n: nearest.days }) }}</p>
-        <p class="stat-desc" v-else>{{ t('creditCards.noUpcomingDue') }}</p>
-        <!-- 移动端：用去重银行 logo 组代替数量 -->
-        <div class="mobile-banks" v-if="dueSoonBanks.length">
+        <!-- 全端一致：去重银行 logo 组代替数量（同银行多卡只显一个徽标） -->
+        <div class="bank-logos" v-if="dueSoonBanks.length">
           <CreditCardBrandBadge
             v-for="bank in dueSoonBanks"
             :key="bank.key"
             :bank-name="bank.name"
-            class="mobile-bank-badge"
+            class="bank-logo-badge"
           />
         </div>
-        <span class="mobile-none" v-else>{{ t('creditCards.noUpcomingDue') }}</span>
+        <strong v-else class="stat-value mono-data">0</strong>
+        <p class="stat-desc" v-if="nearest">{{ t('creditCards.nearestDue', { name: nearest.card.display_name, n: nearest.days }) }}</p>
+        <p class="stat-desc" v-else>{{ t('creditCards.noUpcomingDue') }}</p>
       </div>
     </article>
     <button
@@ -38,15 +37,14 @@
       <div class="stat-icon" aria-hidden="true">⚡</div>
       <div class="stat-body">
         <span class="stat-label">{{ t('creditCards.interestFreeTitle') }}</span>
-        <strong class="stat-value mono-data">{{ best ? t('creditCards.interestFreeDays', { n: best.interest_free_days }) : '—' }}</strong>
+        <!-- 全端一致：银行 logo + 最长免息天数（同银行免息期一致，只显一个 logo） -->
+        <span class="interest-line" v-if="best">
+          <CreditCardBrandBadge :bank-name="best.bank_name" class="bank-logo-badge" />
+          <strong class="stat-value mono-data">{{ t('creditCards.interestFreeDays', { n: best.interest_free_days }) }}</strong>
+        </span>
+        <strong v-else class="stat-value mono-data">—</strong>
         <p class="stat-desc" v-if="best">{{ t('creditCards.interestFreeBest', { name: best.display_name }) }}</p>
         <p class="stat-desc" v-else>{{ t('creditCards.interestFreeEmpty') }}</p>
-        <!-- 移动端：银行 logo + 天数（同银行免息期一致，只显一个 logo） -->
-        <div class="mobile-interest" v-if="best">
-          <CreditCardBrandBadge :bank-name="best.bank_name" class="mobile-bank-badge" />
-          <span class="mobile-interest-text mono-data">{{ t('creditCards.interestFreeDays', { n: best.interest_free_days }) }}</span>
-        </div>
-        <span class="mobile-none" v-else>{{ t('creditCards.interestFreeEmpty') }}</span>
       </div>
     </button>
   </section>
@@ -113,8 +111,12 @@ const best = computed(() => {
 .stat-clickable:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
 .stat-clickable[aria-pressed="true"] { border-color: var(--signal-cyan); box-shadow: 0 0 0 1px color-mix(in srgb, var(--signal-cyan) 34%, transparent), 0 6px 18px color-mix(in srgb, var(--signal-cyan) 16%, transparent); }
 
-/* 移动端 logo 组：默认隐藏，≤620px 才显示；桌面数字不变 */
-.mobile-banks, .mobile-interest, .mobile-none { display: none; }
+/* 银行 logo 展示：全端一致，桌面与移动仅尺寸差异 */
+.bank-logos { display: flex; flex-wrap: wrap; gap: 5px; margin: 4px 0 0; }
+.bank-logo-badge { display: inline-flex; width: 30px; height: 22px; border-radius: 6px; border: 1px solid var(--border); overflow: hidden; }
+.bank-logo-badge :deep(img) { width: 100%; height: 100%; object-fit: contain; background: #fff; }
+.interest-line { display: inline-flex; align-items: center; gap: 8px; margin-top: 3px; }
+.interest-line .stat-value { margin: 0; }
 
 @media (max-width: 620px) {
   .stats { grid-template-columns: 1fr; gap: 0; padding: 2px 14px; }
@@ -128,17 +130,12 @@ const best = computed(() => {
   .stat-clickable:hover { box-shadow: none; }
   .stat-clickable[aria-pressed="true"] { box-shadow: inset 3px 0 0 var(--signal-cyan); }
 
-  /* 第二行：7 天内还款的银行 logo 组（去重）；无还款时显示提示文字 */
-  .mobile-banks { display: flex; flex-wrap: wrap; gap: 5px; margin-left: 2px; }
-  .mobile-bank-badge { display: inline-flex; width: 26px; height: 20px; border-radius: 6px; border: 1px solid var(--border); overflow: hidden; }
-  .mobile-bank-badge :deep(img) { width: 100%; height: 100%; object-fit: contain; background: #fff; }
-  /* 有 logo 组时隐藏数字行，用 logo 组本身承担信息 */
-  .is-due .stat-value { display: none; }
-  .mobile-none { display: inline; color: var(--text-soft); font-size: 11px; }
+  /* 第二行：7 天内还款的银行 logo 组（去重）；无还款时显示数字 0 */
+  .bank-logos { margin: 0; }
+  .bank-logo-badge { width: 26px; height: 20px; }
 
   /* 第三行：银行 logo + 最长免息天数 */
-  .mobile-interest { display: inline-flex; align-items: center; gap: 7px; margin-left: 2px; }
-  .mobile-interest-text { font-size: 15px; font-weight: 800; }
-  .is-interest .stat-value { display: none; }
+  .interest-line { gap: 6px; }
+  .interest-line .stat-value { font-size: 15px; }
 }
 </style>
