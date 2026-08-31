@@ -54,7 +54,7 @@
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import CreditCardBrandBadge from './CreditCardBrandBadge.vue'
-import { calendarDayDiff, countUpcomingCreditCardDues, nearestCreditCardDue } from '../../utils/creditCardDates'
+import { calendarDayDiff, nearestCreditCardDue } from '../../utils/creditCardDates'
 import { matchBankBrand } from '../../utils/creditCardBanks'
 
 const props = defineProps({
@@ -68,7 +68,6 @@ defineEmits(['toggle-interest-sort'])
 const { t } = useI18n()
 const activeCount = computed(() => props.cards.filter((card) => card.is_active).length)
 const totalCount = computed(() => props.cards.length)
-const dueSoonCount = computed(() => countUpcomingCreditCardDues(props.cards, props.today, 7))
 const nearest = computed(() => nearestCreditCardDue(props.cards, props.today))
 
 // 移动端第二行：7 天内有计划还款的启用卡，按银行去重（同银行多卡只显一个 logo）。
