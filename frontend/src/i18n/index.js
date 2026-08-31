@@ -139,7 +139,7 @@ const zh = {
     active: '已启用', inactive: '已停用', calendarOn: '已显示在日历', calendarOff: '未显示在日历', statementDayValue: '每月 {n} 日出账', dueDayValue: '每月 {n} 日计划还款', monthDayValue: '每月 {n} 日', remindValue: '提前 {n} 天提醒', repaymentWindow: '账单至还款窗口',
     cycleTitle: '账单日 → 计划还款日', statementDate: '下个账单日', plannedDueDate: '计划还款日', windowDays: '{n} 天窗口', datePending: '等待派生日期', cycleUnavailable: '服务端尚未返回完整的账单与计划还款日期', cycleAria: '账单日 {statement}，计划还款日 {due}，间隔 {days} 天，当前状态：{phase}',
     phase: { 'before-statement': '等待出账', 'repayment-window': '还款窗口', overdue: '已过计划日', unknown: '等待计算' },
-    disclaimerTitle: '仅作计划提醒', disclaimer: 'Subly 不会验证欠款或代你还款；账单邮件仅在你手动点击「解析账单」时读取并保存明细用于对账展示，金额以银行账单为准。日期与提醒仅依据你填写的规则和服务端派生结果，请以银行账单与官方通知为准。',
+    disclaimerTitle: '仅作计划提醒', disclaimer: 'Subly 不会验证欠款或代你还款；账单邮件在账单日次日起自动抓取（最多连续 3 天）或你手动点击「解析账单」时读取并保存明细用于对账展示，金额以银行账单为准。日期与提醒仅依据你填写的规则和服务端派生结果，请以银行账单与官方通知为准。',
     statementsTitle: '账单明细', statementsEmpty: '尚未解析到这张卡的账单，可在设置页邮件账户点击「解析账单」', statementsUnmatched: '解析到了这张卡尾号的账单，但未关联成功（同尾号多卡或建卡时间晚于解析），重新点「解析账单」即可关联', statementsLoadFailed: '账单加载失败',
     dueOn: '还款日 {d}', minDue: '最低还款', periodUnknown: '未知账单期',
     txDate: '交易日', txDesc: '描述', txAmount: '金额', txType: '类型',

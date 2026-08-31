@@ -1115,44 +1115,30 @@ async function syncStatements(acct) {
       }))
     }
     if (d.mismatched?.length) parts.push(t('imap.syncMismatched', { n: d.mismatched.length }))
-    if (d.updated_cards?.length) {
-      parts.push(t('imap.syncUpdated', { n: d.updated_cards.length }))
-      // 回写明细：哪张卡的哪些字段被账单数据覆盖
-      syncErrorDetails.value = [
-        ...(syncErrorDetails.value || []),
-        ...d.updated_cards.map((u) => ({
-          uid: `card-${u.last_four}`,
-          subject: t('imap.updatedCardItem', { last4: u.last_four }),
-          from: '',
-          error: u.fields.map((f) => t(`imap.updatedField_${f}`)).join('、')
-        }))
-      ]
-    }
-    if (d.errors?.length) {
-      parts.push(t('imap.syncErrors', { n: d.errors.length }))
-      // 失败要响亮：逐封展示主题与原因；忽略列表也展示主题，便于确认
-      // QQ 里拉到的邮件是否与预期一致（如平安账单被误归忽略）
-      syncErrorDetails.value = [
-        ...(d.errors || []).map((e) => ({
-          uid: e.uid,
-          subject: e.subject || `UID ${e.uid}`,
-          from: e.from_address || '',
-          error: e.error || ''
-        })),
-        ...(d.ignored || []).map((e) => ({
-          uid: e.uid,
-          subject: e.subject || `UID ${e.uid}`,
-          from: e.from_address || '',
-          error: t('imap.ignoredReason')
-        }))
-      ]
-    } else if (d.ignored?.length) {
-      syncErrorDetails.value = (d.ignored || []).map((e) => ({
+    if (d.updated_cards?.length) parts.push(t('imap.syncUpdated', { n: d.updated_cards.length }))
+    if (d.errors?.length) parts.push(t('imap.syncErrors', { n: d.errors.length }))
+    // 明细统一构造后一次赋值：卡片回写 + 解析错误 + 忽略邮件，
+    // 避免分支间相互覆盖（审核修复）
+    syncErrorDetails.value = [
+      ...(d.updated_cards || []).map((u) => ({
+        uid: `card-${u.last_four}`,
+        subject: t('imap.updatedCardItem', { last4: u.last_four }),
+        from: '',
+        error: u.fields.map((f) => t(`imap.updatedField_${f}`)).join('、')
+      })),
+      ...(d.errors || []).map((e) => ({
         uid: e.uid,
         subject: e.subject || `UID ${e.uid}`,
+        from: e.from_address || '',
+        error: e.error || ''
+      })),
+      ...(d.ignored || []).map((e) => ({
+        uid: e.uid,
+        subject: e.subject || `UID ${e.uid}`,
+        from: e.from_address || '',
         error: t('imap.ignoredReason')
       }))
-    }
+    ]
     imOk.value = !d.mismatched?.length && !d.errors?.length
     imMsg.value = parts.join('，')
   } catch (e) {

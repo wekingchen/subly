@@ -320,6 +320,39 @@ class CreditCardStatement(Base):
     )
 
 
+class CreditCardStatementPollRun(Base):
+    """账单自动抓取运行态（每卡每期一条）。
+
+    记录「账单日次日 23:50 起最多 3 次自动抓取」的尝试状态；
+    属运行态数据，不进 JSON 备份。
+    """
+
+    __tablename__ = "credit_card_statement_poll_runs"
+    __table_args__ = (
+        UniqueConstraint(
+            "credit_card_id", "statement_date",
+            name="uq_poll_run_card_statement",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    credit_card_id: Mapped[int] = mapped_column(
+        ForeignKey("credit_cards.id"), index=True
+    )
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    statement_date: Mapped[date] = mapped_column(Date)   # 本期名义账单日 occurrence
+    status: Mapped[str] = mapped_column(String(16), default="pending")  # pending|succeeded|exhausted|expired
+    attempt_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_attempt_date: Mapped[date | None] = mapped_column(Date, nullable=True)  # 同日幂等
+    statement_id: Mapped[int | None] = mapped_column(
+        ForeignKey("credit_card_statements.id"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now()
+    )
+
+
 class CreditCardStatementItem(Base):
     """账单交易明细行。金额正=消费/支出，负=还款/退款；amount 是结算币（CNY）。"""
 

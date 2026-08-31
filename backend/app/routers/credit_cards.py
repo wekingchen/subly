@@ -13,6 +13,7 @@ from app.models import (
     CreditCardNotificationOutbox,
     CreditCardStatement,
     CreditCardStatementItem,
+    CreditCardStatementPollRun,
     User,
 )
 from app.schemas import CreditCardIn, CreditCardOut, CreditCardUpdate
@@ -151,6 +152,11 @@ def delete_credit_card(
         db.execute(
             delete(CreditCardStatement).where(CreditCardStatement.id.in_(stmt_ids))
         )
+    db.execute(
+        delete(CreditCardStatementPollRun).where(
+            CreditCardStatementPollRun.credit_card_id == card.id
+        )
+    )
     db.delete(card)
     _invalidate_scan_checkpoint(db)
     db.commit()

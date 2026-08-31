@@ -25,6 +25,10 @@ from app.services.credit_card_statement_parser import (
 logger = logging.getLogger(__name__)
 
 
+class ImapBusyError(RuntimeError):
+    """IMAP 并发饱和（信号量等待超时）：应映射 503 而非 502。"""
+
+
 class StatementSyncResult:
     def __init__(self) -> None:
         self.parsed = 0        # 成功解析的邮件数
@@ -137,20 +141,69 @@ def _apply_writebacks(db, writeback_candidates: dict, result) -> None:
             })
 
 
+def _matched_statement_record(db: Session, account: ImapAccount, message_id: str, last_four: str):
+    """按 (source, message_id, 尾号) 查已落库的账单记录（含新插入未提交）。"""
+    from app.models import CreditCardStatement as _CCS
+
+    return db.scalar(
+        select(_CCS).where(
+            _CCS.source_account_id == account.id,
+            _CCS.message_id == message_id,
+            _CCS.card_last_four == last_four,
+        )
+    )
+
+
 def sync_statements(
     db: Session,
     account: ImapAccount,
     user,
     days: int = 31,
 ) -> StatementSyncResult:
-    """拉取该账户白名单银行账单邮件并落库。IMAP 异常向上抛（路由转 502）。"""
+    """拉取该账户白名单银行账单邮件并落库（自行提交）。
+
+    手动路由入口：获取共享 IMAP 信号量后执行 core 并提交。
+    """
+    if not imap_client.IMAP_SEMAPHORE.acquire(timeout=5):
+        # 独立异常类型：本地并发饱和应映射 503，不该伪装成凭据/网络故障 502
+        raise ImapBusyError()
+    try:
+        result = sync_statements_core(db, account, user, days=days)
+        db.commit()
+        if result.saved:
+            activity.log(
+                "bill.sync",
+                f"解析账单 {result.saved} 份（新保存），未匹配 {len(result.unmatched)}，勾稽异常 {len(result.mismatched)}",
+                user=user,
+            )
+        return result
+    finally:
+        imap_client.IMAP_SEMAPHORE.release()
+
+
+def sync_statements_core(
+    db: Session,
+    account: ImapAccount,
+    user,
+    days: int = 31,
+    since_date=None,
+) -> StatementSyncResult:
+    """同步核心：拉取→解析→匹配→勾稽→落库→回写候选；**不 commit**。
+
+    调用方（手动路由 / 自动轮询）负责事务边界。since_date 指定拉取
+    窗口起点（自动轮询传业务日期，保持时区事实源一致）。
+    返回结果含 matched_statements（成功落库/已存在的卡账单元数据），
+    供自动轮询判定某卡本期是否已抓到。
+    """
     result = StatementSyncResult()
+    result.matched_statements = []
     writeback_candidates: dict[int, dict] = {}  # card_id → {card, best(parsed, st)}
     predicate = None
     if account.banks:
         predicate = lambda addr: sender_matches_banks(addr, account.banks)  # noqa: E731
     mails = imap_client.fetch_full_mime(
-        account.email, account.password, account.provider, days, predicate=predicate
+        account.email, account.password, account.provider, days,
+        predicate=predicate, today=since_date,
     )
     for mail in mails:
         uid = mail["uid"]
@@ -281,11 +334,15 @@ def sync_statements(
         result.skipped += mail_skipped
     # 统一回写：每卡取最新账单（全部邮件处理完后执行，旧邮件不会覆盖新邮件）
     _apply_writebacks(db, writeback_candidates, result)
-    db.commit()
-    if result.saved:
-        activity.log(
-            "bill.sync",
-            f"解析账单 {result.saved} 份（新保存），未匹配 {len(result.unmatched)}，勾稽异常 {len(result.mismatched)}",
-            user=user,
-        )
+    # matched 元数据：供自动轮询判定某卡本期是否已抓到（card_id+账单 id+状态）
+    for entry in writeback_candidates.values():
+        card = entry["card"]
+        parsed, st = entry["best"]
+        record = _matched_statement_record(db, account, parsed.message_id, st.card_last_four)
+        result.matched_statements.append({
+            "card": card,
+            "statement": st,
+            "record_id": record.id if record else None,
+            "record_statement_date": record.statement_date if record else None,
+        })
     return result

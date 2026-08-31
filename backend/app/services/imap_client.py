@@ -8,9 +8,14 @@ import imaplib
 import logging
 import re
 import ssl
+import threading
 from email.utils import parseaddr
 
 logger = logging.getLogger(__name__)
+
+# 同步阻塞外部 IO：全局并发上限（手动路由与自动调度共用），
+# 防止慢速 IMAP 占满工作线程池。
+IMAP_SEMAPHORE = threading.Semaphore(2)
 
 # 预设服务商：主机/端口固定，不暴露给用户配置
 IMAP_PROVIDERS = {
@@ -163,6 +168,7 @@ def fetch_recent(
     limit: int,
     predicate=None,
     max_scan: int = 200,
+    today=None,
 ) -> list[dict]:
     """拉取最近 N 天邮件头部（不取正文），按 UID 倒序返回最多 limit 封。
 
@@ -175,7 +181,9 @@ def fetch_recent(
     from datetime import date, timedelta
 
     host = provider_host(provider)
-    since = (date.today() - timedelta(days=days)).strftime("%d-%b-%Y")
+    if today is None:
+        today = date.today()  # 业务日期可由调用方传入（自动轮询保持时区一致）
+    since = (today - timedelta(days=days)).strftime("%d-%b-%Y")
     try:
         client = imaplib.IMAP4_SSL(
             host,
@@ -336,6 +344,7 @@ def fetch_full_mime(
     max_scan: int = 200,
     max_message_bytes: int = 5 * 1024 * 1024,
     max_total_bytes: int = MAX_TOTAL_BYTES,
+    today=None,
 ) -> list[dict]:
     """拉取最近 N 天**完整邮件**（含正文），供账单解析。
 
@@ -347,7 +356,9 @@ def fetch_full_mime(
     from datetime import date, timedelta
 
     host = provider_host(provider)
-    since = (date.today() - timedelta(days=days)).strftime("%d-%b-%Y")
+    if today is None:
+        today = date.today()  # 业务日期可由调用方传入（自动轮询保持时区一致）
+    since = (today - timedelta(days=days)).strftime("%d-%b-%Y")
     try:
         client = imaplib.IMAP4_SSL(
             host,

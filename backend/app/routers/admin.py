@@ -14,6 +14,7 @@ from app.models import (
     CreditCardNotificationOutbox,
     CreditCardStatement,
     CreditCardStatementItem,
+    CreditCardStatementPollRun,
     Currency,
     NotificationLog,
     NotificationOutbox,
@@ -154,6 +155,11 @@ def delete_user(
             )
         )
     db.execute(delete(CreditCardStatement).where(CreditCardStatement.user_id == user_id))
+    db.execute(
+        delete(CreditCardStatementPollRun).where(
+            CreditCardStatementPollRun.user_id == user_id
+        )
+    )
     db.execute(delete(CreditCard).where(CreditCard.user_id == user_id))
     db.execute(delete(NotificationLog).where(NotificationLog.user_id == user_id))
     db.execute(delete(NotificationOutbox).where(NotificationOutbox.user_id == user_id))

@@ -4,7 +4,6 @@
 拉取仅返回邮件头部预览，不落库。
 """
 import logging
-import threading
 
 from typing import Any
 
@@ -24,9 +23,7 @@ from app.services import imap_client
 router = APIRouter(prefix="/api/imap/accounts", tags=["imap"])
 logger = logging.getLogger(__name__)
 
-# 同步阻塞外部 IO：全局并发上限，防止慢速 IMAP 占满工作线程池
-# （对齐图标抓取管线的 semaphore 先例）。
-_IMAP_SEMAPHORE = threading.Semaphore(2)
+# 并发守卫移至 imap_client.IMAP_SEMAPHORE（手动路由与自动调度共享）
 
 # 单用户账户数上限：防止无限增长
 MAX_ACCOUNTS_PER_USER = 10
@@ -220,6 +217,14 @@ def delete_account(
                 CreditCardStatementItem.statement_id.in_(stmt_ids)
             )
         )
+        # 账单被删的 poll run 置空关联（防悬空 ID；已 succeeded 的历史不动）
+        from app.models import CreditCardStatementPollRun
+
+        db.execute(
+            CreditCardStatementPollRun.__table__.update()
+            .where(CreditCardStatementPollRun.statement_id.in_(stmt_ids))
+            .values(statement_id=None)
+        )
         db.execute(
             delete(CreditCardStatement).where(CreditCardStatement.id.in_(stmt_ids))
         )
@@ -231,14 +236,14 @@ def delete_account(
 
 def _run_imap(action: str, user: User, run):
     """公共包裹：限并发 + 统一异常转 502 + activity 日志。run 返回 API 响应。"""
-    if not _IMAP_SEMAPHORE.acquire(timeout=5):
+    if not imap_client.IMAP_SEMAPHORE.acquire(timeout=5):
         raise HTTPException(503, "IMAP 操作繁忙，请稍后再试")
     try:
         result = run()
     except (imap_client.ImapConnectionError, imap_client.ImapConfigError) as exc:
         raise _service_error(exc, action, user)
     finally:
-        _IMAP_SEMAPHORE.release()
+        imap_client.IMAP_SEMAPHORE.release()
     return result
 
 
@@ -295,20 +300,19 @@ def sync_statements_endpoint(
     """手动解析账单：拉白名单银行账单邮件正文 → 解析 → 按卡落库。
 
     IMAP 层异常转 502（同 test/fetch）；单封邮件解析失败不中断，
-    计入 errors 返回。
+    计入 errors 返回。信号量与提交由 sync_statements 统一管理。
     """
-    from app.services.credit_card_statement_sync import sync_statements
+    from app.services.credit_card_statement_sync import ImapBusyError, sync_statements
 
     account = _account_for_user(user, account_id, db)
     body = payload or ImapSyncIn()
-    if not _IMAP_SEMAPHORE.acquire(timeout=5):
-        raise HTTPException(503, "IMAP 操作繁忙，请稍后再试")
     try:
         result = sync_statements(db, account, user, days=body.days)
+    except ImapBusyError:
+        # 本地并发饱和 ≠ 凭据/网络故障：503 + 明确文案（审核修复）
+        raise HTTPException(503, "IMAP 操作繁忙，请稍后再试")
     except (imap_client.ImapConnectionError, imap_client.ImapConfigError) as exc:
         raise _service_error(exc, "sync", user)
-    finally:
-        _IMAP_SEMAPHORE.release()
     return result.as_dict()
 
 

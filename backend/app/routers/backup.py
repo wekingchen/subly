@@ -25,6 +25,7 @@ from app.models import (
     CreditCardNotificationOutbox,
     CreditCardStatement,
     CreditCardStatementItem,
+    CreditCardStatementPollRun,
     Currency,
     ImapAccount,
     ExchangeRate,
@@ -578,6 +579,11 @@ def _restore_entities(
                 )
             db.execute(
                 delete(CreditCardStatement).where(CreditCardStatement.user_id == user.id)
+            )
+            db.execute(
+                delete(CreditCardStatementPollRun).where(
+                    CreditCardStatementPollRun.user_id == user.id
+                )
             )
             db.execute(delete(CreditCard).where(CreditCard.id.in_(old_card_ids)))
         db.flush()

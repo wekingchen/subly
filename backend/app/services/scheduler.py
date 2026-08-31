@@ -823,6 +823,23 @@ def start_scheduler() -> None:
         id="startup_notification_catchup",
         replace_existing=True,
     )
+    # 账单自动抓取：账单日次日 23:50 起最多连续 3 天尝试（用户需求，
+    # 首个自动轮询任务；成功即停，状态在 credit_card_statement_poll_runs）
+    _scheduler.add_job(
+        _scheduled_credit_card_statement_poll_job,
+        CronTrigger(hour=23, minute=50, timezone=tz),
+        id="daily_credit_card_statement_poll",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+    _scheduler.add_job(
+        _startup_statement_poll_catchup_job,
+        "date",
+        run_date=datetime.now(tz) + timedelta(seconds=2),
+        id="startup_statement_poll_catchup",
+        replace_existing=True,
+    )
     _scheduler.start()
     logger.info(
         "event=scheduler_started reminder_scan_time=%02d:%02d timezone=%s",
@@ -844,6 +861,26 @@ def _refresh_rates_job() -> None:
         )
     finally:
         db.close()
+
+
+def _scheduled_credit_card_statement_poll_job() -> None:
+    """每日 23:50 的账单自动抓取扫描（隔离异常，不影响其他 job）。"""
+    from app.services import credit_card_statement_polling
+
+    try:
+        credit_card_statement_polling.run_poll(_local_today())
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("event=credit_card_statement_poll_failed error_type=%s", type(exc).__name__)
+
+
+def _startup_statement_poll_catchup_job() -> None:
+    """启动补偿：窗口内的 pending 抓取补做一次，过窗的标 expired。"""
+    from app.services import credit_card_statement_polling
+
+    try:
+        credit_card_statement_polling.run_startup_catchup(_local_today())
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("event=credit_card_statement_poll_catchup_failed error_type=%s", type(exc).__name__)
 
 
 def shutdown_scheduler() -> None:
