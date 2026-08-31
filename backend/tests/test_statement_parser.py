@@ -13,8 +13,10 @@ sys.path.insert(0, str(Path(__file__).parent))
 from statement_fixtures import ALL_LOADERS, load_ccb, load_cmb, load_cmbc, load_citic, load_pab  # noqa: E402
 
 from app.services.credit_card_statement_parser import (  # noqa: E402
+    NotStatementEmail,
     StatementParseError,
     detect_bank,
+    looks_like_statement,
     parse_email,
 )
 from app.services.statement_dates import parse_date, parse_period, resolve_md  # noqa: E402
@@ -199,11 +201,63 @@ def test_parse_rejects_unknown_bank():
 def test_parse_rejects_no_html():
     raw = (
         "From: B <ccsvc@message.cmbchina.com>\r\n"
-        "Subject: s\r\nMessage-ID: <m2>\r\n"
+        "Subject: 招商银行信用卡电子账单\r\nMessage-ID: <m2>\r\n"
         "Content-Type: text/plain; charset=UTF-8\r\n\r\nplain"
     ).encode()
     with pytest.raises(StatementParseError):
         parse_email(raw)
+
+
+def test_non_statement_email_is_ignored_not_failed():
+    """银行营销邮件（标题无账单特征 + 正文无账单结构）→ NotStatementEmail。"""
+    from statement_fixtures import build_mime
+    raw = build_mime(
+        "<html><body>限时优惠 立即申请</body></html>",
+        "ccsvc@message.cmbchina.com",
+        "招商银行信用卡分期优惠推荐",  # 营销标题
+        "promo-1",
+    )
+    with pytest.raises(NotStatementEmail):
+        parse_email(raw)
+
+
+def test_valid_body_with_variant_title_still_parses():
+    """审核回归：正文结构有效但标题是变体（无「账单」）→ 仍正常解析，不静默忽略。"""
+    from statement_fixtures import load_cmb
+    raw = load_cmb().decode().replace(
+        "Subject: 招商银行信用卡电子账单", "Subject: CMB Credit Card e-Statement"
+    ).encode()
+    parsed = parse_email(raw, from_address=ADDR["cmb"])
+    assert parsed.bank_key == "cmb"
+    assert len(parsed.statements) == 1
+    assert parsed.statements[0].card_last_four == "6310"
+
+
+def test_statement_like_title_with_bad_body_is_loud_error():
+    """标题像账单但正文解析不出 → StatementParseError（模板漂移响亮），不是忽略。"""
+    from statement_fixtures import build_mime
+    raw = build_mime(
+        "<html><body>页面已改版</body></html>",
+        "ccsvc@message.cmbchina.com",
+        "招商银行信用卡电子账单",
+        "drift-1",
+    )
+    with pytest.raises(StatementParseError):
+        parse_email(raw)
+
+
+def test_statement_title_variants_match():
+    """5 家真实账单标题规律：含「账单/对账单/月结单/statement」。"""
+    assert looks_like_statement("民生信用卡2026年07月电子对账单")
+    assert looks_like_statement("平安信用卡电子账单")
+    assert looks_like_statement("招商银行信用卡电子账单")
+    assert looks_like_statement("中国建设银行信用卡电子账单")
+    assert looks_like_statement("中信银行信用卡电子对账单")  # 变体
+    assert looks_like_statement("招商银行月结单")  # 变体
+    assert looks_like_statement("CMB Credit Card e-Statement")  # 英文
+    assert not looks_like_statement("还款成功通知")
+    assert not looks_like_statement("限时办卡享好礼")
+    assert not looks_like_statement("")
 
 
 def test_mismatch_detected_on_corrupted_totals():

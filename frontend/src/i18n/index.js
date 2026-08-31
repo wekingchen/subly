@@ -28,7 +28,7 @@ const zh = {
     allBanks: '全部银行', banksLabel: '账单银行：',
     banksHint: '不选 = 接收全部银行的账单邮件；勾选后仅拉取所选银行的账单',
     syncStatements: '解析账单', syncing: '解析中…',
-    syncSaved: '已保存 {n} 份账单', syncSkipped: '跳过重复 {n} 封',
+    syncSaved: '已保存 {n} 份账单', syncSkipped: '跳过重复 {n} 封', syncIgnored: '忽略非账单邮件 {n} 封',
     syncUnmatched: '未匹配卡 {n} 张', syncMismatched: '勾稽异常 {n} 项', syncErrors: '解析失败 {n} 封'
   },
   rtlog: { title: '实时日志', live: '实时', paused: '已暂停', empty: '暂无日志', auto: '自动刷新' },

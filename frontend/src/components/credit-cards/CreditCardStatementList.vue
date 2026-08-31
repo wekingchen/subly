@@ -26,7 +26,7 @@
           <template v-else-if="detail">
             <div class="stmt-meta">
               <span v-if="s.min_due != null">{{ t('creditCards.minDue') }}: <MoneyText :value="s.min_due" currency="CNY" position="prefix" /></span>
-              <span v-if="s.credit_limit != null">{{ t('creditCards.creditLimit') }}: {{ formatLimit(s.credit_limit) }}</span>
+              <span v-if="s.credit_limit != null">{{ t('creditCards.creditLimit') }}: {{ formatMoney(s.credit_limit) }}</span>
             </div>
             <div v-if="isDesktop" class="tbl-wrap">
               <table>
@@ -62,6 +62,7 @@ import { useI18n } from 'vue-i18n'
 import api from '../../api'
 import MoneyText from '../MoneyText.vue'
 import { useBreakpoint } from '../../composables/useBreakpoint'
+import { formatMoney } from '../../utils/money'
 
 // 账单明细：打开卡片详情时懒加载；金额一律 MoneyText（与订阅卡同源）。
 const props = defineProps({

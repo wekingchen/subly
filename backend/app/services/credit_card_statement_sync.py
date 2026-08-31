@@ -16,6 +16,7 @@ from app.bank_senders import sender_matches_banks
 from app.models import CreditCard, CreditCardStatement, CreditCardStatementItem, ImapAccount
 from app.services import imap_client
 from app.services.credit_card_statement_parser import (
+    NotStatementEmail,
     StatementParseError,
     detect_bank,
     parse_email,
@@ -29,16 +30,18 @@ class StatementSyncResult:
         self.parsed = 0        # 成功解析的邮件数
         self.saved = 0         # 新入库的 statement 数
         self.skipped = 0       # 已存在（去重）的邮件数
+        self.ignored: list[dict] = []      # 非账单邮件（营销/通知），不参与统计
         self.unmatched: list[dict] = []    # [{last_four, bank_key}] 无候选卡
         self.ambiguous: list[dict] = []    # 同尾号多卡
         self.mismatched: list[dict] = []   # 勾稽失败
-        self.errors: list[dict] = []       # [{uid, error}]
+        self.errors: list[dict] = []       # [{uid, subject, error}]
 
     def as_dict(self) -> dict:
         return {
             "parsed": self.parsed,
             "saved": self.saved,
             "skipped": self.skipped,
+            "ignored": self.ignored,
             "unmatched": self.unmatched,
             "ambiguous": self.ambiguous,
             "mismatched": self.mismatched,
@@ -91,8 +94,23 @@ def sync_statements(
             continue
         try:
             parsed = parse_email(mail["raw"], from_address=mail["from_address"])
+        except NotStatementEmail:
+            # 银行营销/通知邮件：正常忽略（标题无账单特征），不算失败
+            result.ignored.append({"uid": uid, "subject": (mail.get("subject") or "")[:80]})
+            continue
         except StatementParseError as exc:
-            result.errors.append({"uid": uid, "error": str(exc)[:200]})
+            # 失败要响亮：日志带 uid/主题/原因（不含邮件正文与凭据），
+            # 前端展示原因明细，用户能直接判断是营销邮件还是模板漂移。
+            reason = str(exc)[:200]
+            logger.warning(
+                "event=bill_parse_failed user_id=%s account_id=%s uid=%s subject=%r error=%s",
+                user.id, account.id, uid, mail.get("subject", "")[:60], reason,
+            )
+            result.errors.append({
+                "uid": uid,
+                "subject": (mail.get("subject") or "")[:80],
+                "error": reason,
+            })
             continue
         result.parsed += 1
         # 逐卡 upsert（而非邮件级提前跳过）：已有记录也重新执行卡片匹配，

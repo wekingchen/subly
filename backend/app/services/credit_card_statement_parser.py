@@ -167,22 +167,47 @@ def detect_bank(from_address: str | None) -> str | None:
     return None
 
 
+class NotStatementEmail(ValueError):
+    """银行发来的非账单邮件（营销/通知/还款提醒等），应忽略而非报错。"""
+
+
+# 标题账单特征：5 家真实账单标题全部含「账单」或「对账单」
+# （民生/平安/招行/建行/中信样本验证）；营销与通知邮件不含这些词。
+# 标题只是「解析失败后的分类依据」而非解析前门禁：正文能解析就保存
+# （标题变体/英文/被网关改写都不漏），解析失败时按标题区分「非账单
+# 邮件（忽略）」与「疑似模板漂移（响亮报错）」。
+_STATEMENT_TITLE_WORDS = ("账单", "对账单", "月结单", "statement")
+
+
+def looks_like_statement(subject: str | None) -> bool:
+    """按标题判断是否像账单邮件（失败分类用，真实样本规律）。"""
+    text = (subject or "").strip().lower()
+    return bool(text) and any(w in text for w in _STATEMENT_TITLE_WORDS)
+
+
 def parse_email(raw_mime: bytes, from_address: str | None = None) -> ParsedEmail:
     """解析一封完整邮件。非已知银行/结构不符时抛 StatementParseError。"""
     msg = email.message_from_bytes(raw_mime, policy=email.policy.default)
     bank_key = detect_bank(from_address or _header_addr(msg, "From"))
     if not bank_key:
         raise StatementParseError("未知银行发件人")
+    subject = _subject_text(msg)
     html = _html_body(msg)
     if not html:
-        raise StatementParseError("邮件无 HTML 正文")
+        # 无正文：标题含账单特征 → 报错（可疑）；不含 → 非账单邮件忽略
+        if looks_like_statement(subject):
+            raise StatementParseError("邮件无 HTML 正文")
+        raise NotStatementEmail("无正文且标题无账单特征（营销或通知邮件）")
     parser = PARSERS.get(bank_key)
     if not parser:
         raise StatementParseError(f"银行 {bank_key} 暂不支持解析")
     parsed = parser(html)
     if not parsed:
-        raise StatementParseError("未识别到账单结构（银行模板可能已变化）")
-    subject = _subject_text(msg)
+        # 正文解析不出账单：标题含账单特征 → 疑似模板漂移（响亮）；
+        # 不含 → 大概率本来就是营销/通知页，归忽略
+        if looks_like_statement(subject):
+            raise StatementParseError("未识别到账单结构（银行模板可能已变化）")
+        raise NotStatementEmail("正文无账单结构且标题无账单特征")
     # Message-ID 缺失时退化为正文哈希（稳定、账户内唯一），保证去重键永不为空：
     # 空 message_id 会让同来源的所有无 ID 邮件互相「撞车」被去重跳过。
     message_id = (_header_addr(msg, "Message-ID") or "").strip("<>")

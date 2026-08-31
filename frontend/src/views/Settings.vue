@@ -366,6 +366,12 @@
       </form>
 
       <p v-if="imMsg" class="feedback" :class="imOk ? 'ok' : 'err'" :role="imOk ? 'status' : 'alert'">{{ imMsg }}</p>
+      <ul v-if="syncErrorDetails.length" class="sync-error-list">
+        <li v-for="e in syncErrorDetails" :key="e.uid" class="sync-error-item">
+          <span class="sync-error-subject">{{ e.subject }}</span>
+          <span class="sync-error-reason">{{ e.error }}</span>
+        </li>
+      </ul>
       <div v-if="preview.length" class="imap-preview">
         <div class="imap-preview-title">{{ t('imap.previewTitle') }}</div>
         <ul>
@@ -959,7 +965,7 @@ function startEdit(acct) {
   imForm.provider = acct.provider
   imForm.password = ''
   imForm.banks = [...(acct.banks || [])]
-  imMsg.value = ''
+  clearSyncFeedback()
 }
 
 function cancelEdit() {
@@ -969,7 +975,7 @@ function cancelEdit() {
 async function addAccount() {
   if (imapBusy.value) return
   imapBusy.value = true
-  imMsg.value = ''
+  clearSyncFeedback()
   try {
     await api.post('/api/imap/accounts', {
       email: imForm.email.trim(),
@@ -992,7 +998,7 @@ async function addAccount() {
 async function saveEdit() {
   if (imapBusy.value) return
   imapBusy.value = true
-  imMsg.value = ''
+  clearSyncFeedback()
   try {
     // 授权码留空 = 不修改（只发 email/provider/banks）
     const patch = { email: imForm.email.trim(), provider: imForm.provider, banks: [...imForm.banks] }
@@ -1014,6 +1020,7 @@ async function removeAccount(acct) {
   // 有操作进行中时禁止删除，防止拉取返回后把已删账户的邮件写回预览
   if (acct.busy) return
   if (!window.confirm(t('imap.deleteConfirm', { email: acct.email }))) return
+  clearSyncFeedback()
   try {
     await api.delete(`/api/imap/accounts/${acct.id}`)
     if (previewAccountId.value === acct.id) {
@@ -1032,7 +1039,7 @@ async function removeAccount(acct) {
 async function testAccount(acct) {
   if (acct.busy) return
   acct.busy = true
-  imMsg.value = ''
+  clearSyncFeedback()
   try {
     await api.post(`/api/imap/accounts/${acct.id}/test`)
     imOk.value = true
@@ -1054,7 +1061,7 @@ async function fetchAccount(acct) {
   acct.busy = true
   const seq = ++fetchSeq
   previewAccountId.value = acct.id
-  imMsg.value = ''
+  clearSyncFeedback()
   try {
     const data = (await api.post(`/api/imap/accounts/${acct.id}/fetch`, { days: 30, limit: 20 })).data
     if (seq !== fetchSeq) return // 已有更新的操作接管预览，丢弃过期响应
@@ -1074,17 +1081,34 @@ async function fetchAccount(acct) {
 }
 
 // 手动解析账单：拉白名单银行账单邮件 → 按卡落库（展示用，不进通知/iCal）
+const syncErrorDetails = ref([])
+// 错误明细只在「解析账单」操作里展示；其他 IMAP 操作接管反馈时一并清空，
+// 避免旧账户的失败列表被误认为属于当前操作（审核修复）。
+function clearSyncFeedback() {
+  imMsg.value = ''
+  syncErrorDetails.value = []
+}
 async function syncStatements(acct) {
   if (acct.busy) return
   acct.busy = true
   imMsg.value = ''
+  syncErrorDetails.value = []
   try {
     const d = (await api.post(`/api/imap/accounts/${acct.id}/sync-statements`, { days: 31 })).data
     const parts = [t('imap.syncSaved', { n: d.saved || 0 })]
     if (d.skipped) parts.push(t('imap.syncSkipped', { n: d.skipped }))
+    if (d.ignored?.length) parts.push(t('imap.syncIgnored', { n: d.ignored.length }))
     if (d.unmatched?.length) parts.push(t('imap.syncUnmatched', { n: d.unmatched.length }))
     if (d.mismatched?.length) parts.push(t('imap.syncMismatched', { n: d.mismatched.length }))
-    if (d.errors?.length) parts.push(t('imap.syncErrors', { n: d.errors.length }))
+    if (d.errors?.length) {
+      parts.push(t('imap.syncErrors', { n: d.errors.length }))
+      // 失败要响亮：逐封展示主题与原因，让用户能区分营销邮件与模板漂移
+      syncErrorDetails.value = (d.errors || []).map((e) => ({
+        uid: e.uid,
+        subject: e.subject || `UID ${e.uid}`,
+        error: e.error || ''
+      }))
+    }
     imOk.value = !d.mismatched?.length && !d.errors?.length
     imMsg.value = parts.join('，')
   } catch (e) {
@@ -1281,6 +1305,11 @@ hr { border: none; border-top: 1px solid var(--border); margin: 16px 0; }
 .imap-form-row select { flex: 1 1 110px; min-width: 0; }
 .imap-form-row input[type="password"] { flex: 2 1 160px; min-width: 0; }
 .imap-form-row .btn { flex: 0 0 auto; }
+.sync-error-list { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 4px; max-height: 200px; overflow-y: auto; }
+.sync-error-item { display: flex; flex-direction: column; gap: 1px; padding: 6px 10px; border: 1px solid var(--border);
+  border-radius: 8px; background: var(--surface-2); font-size: 12px; }
+.sync-error-subject { font-weight: 750; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sync-error-reason { color: var(--text-soft); font-size: 11px; }
 .ok { color: var(--success-text); }
 .err { color: var(--danger-text); word-break: break-all; }
 .actions-row { display: flex; align-items: center; gap: 10px; margin-top: 12px; }
