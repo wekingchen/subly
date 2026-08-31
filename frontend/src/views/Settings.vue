@@ -1115,6 +1115,19 @@ async function syncStatements(acct) {
       }))
     }
     if (d.mismatched?.length) parts.push(t('imap.syncMismatched', { n: d.mismatched.length }))
+    if (d.updated_cards?.length) {
+      parts.push(t('imap.syncUpdated', { n: d.updated_cards.length }))
+      // 回写明细：哪张卡的哪些字段被账单数据覆盖
+      syncErrorDetails.value = [
+        ...(syncErrorDetails.value || []),
+        ...d.updated_cards.map((u) => ({
+          uid: `card-${u.last_four}`,
+          subject: t('imap.updatedCardItem', { last4: u.last_four }),
+          from: '',
+          error: u.fields.map((f) => t(`imap.updatedField_${f}`)).join('、')
+        }))
+      ]
+    }
     if (d.errors?.length) {
       parts.push(t('imap.syncErrors', { n: d.errors.length }))
       // 失败要响亮：逐封展示主题与原因；忽略列表也展示主题，便于确认

@@ -108,7 +108,8 @@ def load_pab() -> bytes:
     html = """<html><body>
     <table><tr><td>本期账单日</td></tr><tr><td>2026-08-13</td></tr>
     <tr><td>本期还款日</td></tr><tr><td>2026-09-01</td></tr>
-    <tr><td>信用额度</td></tr><tr><td>&yen; 100,000.00</td></tr></table>
+    <tr><td>信用额度</td></tr><tr><td>&yen; 100,000.00</td></tr>
+    <tr><td>本期最低应还金额</td><td>&yen; 330.51</td></tr></table>
     <table><tr>
       <td>本期应还金额 New Balance</td><td>=</td><td>上期账单金额 Pre Statement</td><td>-</td><td>上期还款金额 Pre Payment</td><td>+</td><td>本期账单金额 New Charges</td>
     </tr><tr><td></td>

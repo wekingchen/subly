@@ -35,6 +35,7 @@ class StatementSyncResult:
         self.ambiguous: list[dict] = []    # 同尾号多卡
         self.mismatched: list[dict] = []   # 勾稽失败
         self.errors: list[dict] = []       # [{uid, subject, error}]
+        self.updated_cards: list[dict] = []  # [{last_four, fields}] 账单数据回写卡片
 
     def as_dict(self) -> dict:
         return {
@@ -46,7 +47,43 @@ class StatementSyncResult:
             "ambiguous": self.ambiguous,
             "mismatched": self.mismatched,
             "errors": self.errors,
+            "updated_cards": self.updated_cards,
         }
+
+
+def _apply_statement_to_card(card: CreditCard, st) -> list[str]:
+    """用账单邮件的账单日/还款日/总额度覆盖卡片（以最新邮件为准）。
+
+    名义日取具体日期的 .day；只在邮件数据非空时覆盖。返回实际更新的
+    字段名列表（用于结果响亮展示）；无变化返回空列表。
+    """
+    from app.services import credit_card_notification_outbox
+
+    updated: list[str] = []
+    if st.statement_date is not None:
+        day = st.statement_date.day
+        if card.statement_day != day:
+            card.statement_day = day
+            updated.append("statement_day")
+    if st.due_date is not None:
+        day = st.due_date.day
+        if card.due_day != day:
+            card.due_day = day
+            updated.append("due_day")
+    if st.credit_limit is not None and card.credit_limit != float(st.credit_limit):
+        card.credit_limit = float(st.credit_limit)
+        updated.append("credit_limit")
+    if updated:
+        # 卡片字段变化影响提醒扫描（账单日/还款日参与派生），使 checkpoint 失效
+        credit_card_notification_outbox.invalidate_scan_checkpoint(_session_of(card))
+    return updated
+
+
+def _session_of(card: CreditCard):
+    """从持久化对象取其 Session（SQLAlchemy inspect）。"""
+    from sqlalchemy import inspect as sa_inspect
+
+    return sa_inspect(card).session
 
 
 def _bank_prefixes(banks: list[str] | None) -> list[str] | None:
@@ -142,6 +179,16 @@ def sync_statements(
             scope = ok_scope or st.card_last_four
             if scope in verify and not verify[scope]["ok"]:
                 verify_status = "mismatch"
+            # 账单数据回写卡片：账单日/还款日/总额度以最新邮件为准直接覆盖
+            # （用户需求）。名义日取账单具体日期的 .day（如 2026-08-13 → 13）；
+            # 勾稽失败的账单不回写（数据可信度存疑时不改用户手填值）。
+            if card is not None and verify_status == "ok":
+                updated_fields = _apply_statement_to_card(card, st)
+                if updated_fields:
+                    result.updated_cards.append({
+                        "last_four": st.card_last_four,
+                        "fields": updated_fields,
+                    })
             record = db.scalar(
                 select(CreditCardStatement).where(
                     CreditCardStatement.source_account_id == account.id,

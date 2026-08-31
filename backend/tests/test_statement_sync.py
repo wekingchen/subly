@@ -311,4 +311,48 @@ def test_statements_endpoint_reports_unmatched_count(sync_env, monkeypatch):
     lst = client.get(f"/api/credit-cards/{card.id}/statements")
     body = lst.json()
     assert body["statements"] == []
-    assert body["unmatched_count"] == 0  # 建行尾号与招行卡不匹配 → 该卡视角 0
+    assert body["unmatched_count"] == 0  # 建行尾号与招行卡不匹配 → 该卡视角 0\n
+
+def test_sync_updates_card_fields_from_statement(sync_env, monkeypatch):
+    """账单日/还款日/总额度以最新邮件为准覆盖卡片（用户需求）。"""
+    client, db, user, account = sync_env
+    # 卡片初始值与账单不同：账单日 15（邮件 8/15? 招行账单日=期末 8/15）、还款日 3（邮件 9/3）、额度 50000（邮件 60000）
+    card = CreditCard(
+        user_id=user.id, display_name="招行卡", bank_name="招商银行",
+        last_four="6310", statement_day=10, due_day=20, credit_limit=50000.0,
+    )
+    db.add(card)
+    db.commit()
+    _mock_imap(monkeypatch, [load_cmb()])
+    resp = client.post(f"/api/imap/accounts/{account.id}/sync-statements")
+    body = resp.json()
+    assert body["updated_cards"], "应有回写记录"
+    upd = body["updated_cards"][0]
+    assert upd["last_four"] == "6310"
+    assert set(upd["fields"]) == {"statement_day", "due_day", "credit_limit"}
+
+    db.expire_all()
+    card = db.get(CreditCard, card.id)
+    assert card.statement_day == 15   # 2026-08-15 → 15
+    assert card.due_day == 3          # 2026-09-03 → 3
+    assert card.credit_limit == 60000.0
+
+
+def test_sync_does_not_overwrite_on_mismatch(sync_env, monkeypatch):
+    """勾稽失败的账单不回写卡片（数据可信度存疑时不改手填值）。"""
+    client, db, user, account = sync_env
+    card = CreditCard(
+        user_id=user.id, display_name="招行卡", bank_name="招商银行",
+        last_four="6310", statement_day=10, due_day=20,
+    )
+    db.add(card)
+    db.commit()
+    # 篡改招行汇总金额 → mismatch
+    raw = load_cmb().decode().replace("&yen; 608.11</DIV>", "&yen; 9,999.99</DIV>").encode()
+    _mock_imap(monkeypatch, [raw])
+    resp = client.post(f"/api/imap/accounts/{account.id}/sync-statements")
+    assert resp.json()["mismatched"]
+    db.expire_all()
+    card = db.get(CreditCard, card.id)
+    assert card.statement_day == 10  # 未被覆盖
+    assert card.due_day == 20

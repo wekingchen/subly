@@ -162,6 +162,9 @@ def test_parse_pab_group_inherit_and_installment_note():
     assert st.statement_date == date(2026, 8, 13)
     assert st.due_date == date(2026, 9, 1)
     assert st.credit_limit == 100000.0
+    # 本期应还/最低还款（此前漏赋值导致详情页显示 CNY 0.00）
+    assert st.total_due == 1597.53
+    assert st.min_due == 330.51  # 合成样本值（真实样本 998.25）
     inst = [i for i in st.items if i.tx_type == "installment"]
     # 平安「本金03-02期」= 总3期-第2期
     assert inst and inst[0].installment_note == "第2/3期"

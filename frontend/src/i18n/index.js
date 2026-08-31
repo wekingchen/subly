@@ -31,6 +31,11 @@ const zh = {
     syncSaved: '已保存 {n} 份账单', syncSkipped: '跳过重复 {n} 封', syncIgnored: '忽略非账单邮件 {n} 封',
     syncUnmatched: '未匹配卡 {n} 张', syncMismatched: '勾稽异常 {n} 项', syncErrors: '解析失败 {n} 封',
     ignoredReason: '非账单邮件（标题无账单特征），已忽略',
+    syncUpdated: '已按账单更新 {n} 张卡的资料',
+    updatedCardItem: '尾号 {last4} 的卡片资料已按最新账单更新',
+    updatedField_statement_day: '账单日',
+    updatedField_due_day: '还款日',
+    updatedField_credit_limit: '总额度',
     unmatchedCardItem: '检测到尾号 {last4} 的账单，未匹配到你的卡片',
     unmatchedCardReason: '确认「信用卡管理」里该行卡片的银行与卡号后四位与此一致后，重新点「解析账单」即可自动关联'
   },

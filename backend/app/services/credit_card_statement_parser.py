@@ -636,9 +636,10 @@ def _parse_pab(html: str) -> list[ParsedStatement]:
     current_card: str | None = None
     group: str | None = None
     statement_date = due_date = None
-    credit_limit = None
+    credit_limit = min_due = None
     # 平安汇总区是「1-td 标签行 + 1-td 值行」相邻对（行38/39、40/41、45/46），
     # 在行序列上做前后配对。
+    pab_total_due = None
     pab_charges = pab_payment = None
     for idx, cells in enumerate(rows):
         if not cells:
@@ -646,12 +647,14 @@ def _parse_pab(html: str) -> list[ParsedStatement]:
         joined = "".join(cells)
         stripped = re.sub(r"\s+", "", joined)
         if "本期应还金额" in stripped and "=" in stripped and "上期还款金额" in stripped:
-            # 公式行后最近的数值行：6+ 个金额 [应还, 上期账单, 上期还款, 本期账单, …]
+            # 公式行后最近的数值行：6 个金额
+            # [本期应还, 上期账单, 上期还款, 本期账单(新增), 调整, 利息]
             for j in range(idx + 1, min(idx + 4, len(rows))):
                 vals = [parse_money(c) for c in rows[j] if c and parse_money(c) is not None]
                 if len(vals) >= 4:
-                    pab_charges = float(vals[3])   # 本期账单金额（新增交易）
-                    pab_payment = float(vals[2])   # 上期还款金额
+                    pab_total_due = float(vals[0])  # 本期应还金额
+                    pab_charges = float(vals[3])    # 本期账单金额（新增交易）
+                    pab_payment = float(vals[2])    # 上期还款金额
                     break
             continue
         if len(cells) == 1:
@@ -666,11 +669,14 @@ def _parse_pab(html: str) -> list[ParsedStatement]:
                 credit_limit = _f(parse_money(nxt_val))
             continue
         if len(cells) == 2:
-            # 分组标题：卡片（尾号）主卡 + 合计 / 分期 + 合计
+            # 分组标题：卡片（尾号）主卡 + 合计 / 分期 + 合计；
+            # 另有汇总行「本期最低应还金额 | ¥xxx」（2-td 相邻对）
             m = _PAB_CARD_TITLE.search(cells[0])
             if m:
                 current_card = m[1]
                 group = None
+            elif "本期最低应还金额" in stripped and len(cells) >= 2:
+                min_due = _f(parse_money(cells[1])) or min_due
             elif "分期" in stripped:
                 group = "分期"
             continue
@@ -699,6 +705,8 @@ def _parse_pab(html: str) -> list[ParsedStatement]:
         stmt.statement_date = statement_date
         stmt.due_date = due_date
         stmt.credit_limit = credit_limit
+        stmt.total_due = pab_total_due  # 本期应还金额（此前漏赋值导致前端显示 0）
+        stmt.min_due = min_due
         stmt.summary = {"charges": pab_charges, "payment": pab_payment}
     return list(statements.values())
 
