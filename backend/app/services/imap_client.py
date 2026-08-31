@@ -141,8 +141,9 @@ def fetch_recent(
     predicate=None,
     max_scan: int = 200,
 ) -> list[dict]:
-    """拉取收件箱最近 N 天邮件头部（不取正文），按 UID 倒序返回最多 limit 封。
+    """拉取最近 N 天邮件头部（不取正文），按 UID 倒序返回最多 limit 封。
 
+    扫描 INBOX 及归档/订阅类文件夹（银行账单常被 QQ 自动分拣出 INBOX）。
     predicate(from_name, from_address) -> bool：可选过滤器（如账单银行白名单）。
     limit 指过滤后的命中数上限：按 UID 倒序最多扫描 max_scan 封头部，
     命中累计到 limit 即停，避免白名单邮件被无关邮件挤出截断窗口而漏掉。
@@ -168,36 +169,40 @@ def fetch_recent(
             raise ImapConnectionError("login-failed") from exc
         _client_session(client)
         try:
-            status, _ = client.select("INBOX", readonly=True)
-            if status != "OK":
-                raise ImapConnectionError("select-failed")
-            status, data = client.uid("search", None, f'(SINCE "{since}")')
-            if status != "OK":
-                raise ImapConnectionError("search-failed")
-            uids = sorted((data[0] or b"").split(), key=lambda u: int(u), reverse=True)
             messages = []
-            # 最新的 UID 数值最大：倒序扫描，命中累计到 limit 即停。
-            # max_scan 封顶防止大收件箱产生无界 IO；limit 未满时属正常
-            # （指定时间窗内命中邮件就这么多），不视为错误。
-            for uid in uids[:max_scan]:
-                status, msg_data = client.uid("fetch", uid, "(BODY.PEEK[HEADER])")
-                if status != "OK" or not msg_data or msg_data[0] is None:
+            for folder in _list_scan_folders(client):
+                try:
+                    status, _ = client.select(f'"{folder}"', readonly=True)
+                except (imaplib.IMAP4.error, OSError, TimeoutError) as exc:
+                    raise ImapConnectionError(type(exc).__name__) from exc
+                if status != "OK":
                     continue
-                import email
+                status, data = client.uid("search", None, f'(SINCE "{since}")')
+                if status != "OK":
+                    continue
+                uids = sorted((data[0] or b"").split(), key=lambda u: int(u), reverse=True)
+                # 最新的 UID 数值最大：倒序扫描，命中累计到 limit 即停。
+                # max_scan 封顶防止大收件箱产生无界 IO；limit 未满时属正常
+                # （指定时间窗内命中邮件就这么多），不视为错误。
+                for uid in uids[:max_scan]:
+                    status, msg_data = client.uid("fetch", uid, "(BODY.PEEK[HEADER])")
+                    if status != "OK" or not msg_data or msg_data[0] is None:
+                        continue
+                    import email
 
-                msg = email.message_from_bytes(msg_data[0][1])
-                sender_name, sender_addr = _parse_from(msg.get("From"))
-                if predicate is not None and not predicate(sender_name, sender_addr):
-                    continue
-                messages.append({
-                    "uid": uid.decode("ascii", errors="replace"),
-                    "from": sender_name,
-                    "from_address": sender_addr,
-                    "subject": _decode_header_value(msg.get("Subject")) or "（无主题）",
-                    "date": _decode_header_value(msg.get("Date")),
-                })
-                if len(messages) >= limit:
-                    break
+                    msg = email.message_from_bytes(msg_data[0][1])
+                    sender_name, sender_addr = _parse_from(msg.get("From"))
+                    if predicate is not None and not predicate(sender_name, sender_addr):
+                        continue
+                    messages.append({
+                        "uid": uid.decode("ascii", errors="replace"),
+                        "from": sender_name,
+                        "from_address": sender_addr,
+                        "subject": _decode_header_value(msg.get("Subject")) or "（无主题）",
+                        "date": _decode_header_value(msg.get("Date")),
+                    })
+                    if len(messages) >= limit:
+                        return messages
             return messages
         except (imaplib.IMAP4.error, OSError, TimeoutError) as exc:
             # SELECT/SEARCH/FETCH 期间的协议/网络异常（含网易 "Unsafe Login"
@@ -214,6 +219,79 @@ def fetch_recent(
             pass
 
 
+def _imap_utf7_decode(s: str) -> str:
+    """RFC 3501 修改 UTF-7 解码（'&...-' 段是替换 ','→'/' 的 Base64 UTF-16BE）。
+
+    Python 标准库没有 imap4-utf-7 codec；QQ 等服务商的中文文件夹名用此编码。
+    解码失败时原样返回（关键词匹配退化为 ASCII 名）。
+    """
+    import base64
+
+    out: list[str] = []
+    i = 0
+    while i < len(s):
+        if s[i] == "&":
+            j = s.find("-", i)
+            if j == -1:
+                out.append(s[i:])
+                break
+            chunk = s[i + 1:j]
+            if not chunk:
+                out.append("&")
+            else:
+                b64 = chunk.replace(",", "/")
+                b64 += "=" * (-len(b64) % 4)
+                try:
+                    out.append(base64.b64decode(b64).decode("utf-16-be"))
+                except Exception:  # noqa: BLE001
+                    out.append(s[i:j])
+            i = j + 1
+        else:
+            out.append(s[i])
+            i += 1
+    return "".join(out)
+
+
+def _list_scan_folders(client) -> list[str]:
+    """发现应扫描的文件夹：INBOX + 名称含归档/订阅/广告/archive 的文件夹。
+
+    QQ 邮箱会把银行账单自动分拣进「邮件归档」「订阅邮件」等分类文件夹，
+    INBOX 里看不到。用 LIST 动态发现（各家命名不同，不硬编码），
+    跳过垃圾箱/已发送/草稿。文件夹名按 RFC 3501 修改 UTF-7 解码后匹配。
+    """
+    folders = ["INBOX"]
+    try:
+        status, data = client.list()
+        if status != "OK" or not data:
+            return folders
+        # LIST 行形如 b'(\\HasNoChildren) "/" "Other Users/邮件归档"'
+        # 或 b'(\\HasNoChildren) "." &XfJT0ZAB-...' （修改 UTF-7 编码名）
+        for line in data:
+            if not isinstance(line, bytes):
+                continue
+            m = re.match(rb'^\((?:[^)]*)\)\s+"?([^"]+)"?\s+(.+)$', line)
+            if not m:
+                continue
+            name = m[2].strip()
+            if name.startswith(b'"') and name.endswith(b'"'):
+                name = name[1:-1]
+            raw_name = name.decode("utf-8", errors="replace")
+            folder = _imap_utf7_decode(raw_name)
+            if not folder or folder.upper() == "INBOX":
+                continue
+            upper = folder.upper()
+            skip_words = ("TRASH", "DELETE", "SPAM", "JUNK", "SENT", "DRAFT", "垃圾", "已删除", "已发送", "草稿")
+            if any(w in upper for w in skip_words):
+                continue
+            hit_words = ("归档", "订阅", "广告", "ARCHIVE", "SUBSCRIPTION", "PROMOTION")
+            if any(w in folder.upper() or w in folder for w in hit_words):
+                # SELECT 时用原始名（服务器认的是编码后的名字）
+                folders.append(raw_name)
+    except (imaplib.IMAP4.error, OSError, TimeoutError, AttributeError):
+        pass  # LIST 失败退化为只扫 INBOX
+    return folders
+
+
 def fetch_full_mime(
     email: str,
     password: str,
@@ -223,8 +301,9 @@ def fetch_full_mime(
     max_scan: int = 200,
     max_message_bytes: int = 5 * 1024 * 1024,
 ) -> list[dict]:
-    """拉取收件箱最近 N 天**完整邮件**（含正文），供账单解析。
+    """拉取最近 N 天**完整邮件**（含正文），供账单解析。
 
+    扫描 INBOX 及归档/订阅类文件夹（银行账单常被 QQ 自动分拣出 INBOX）。
     predicate(from_address) -> bool 过滤发件人（账单银行白名单）。
     返回 [{uid, from_address, subject, raw(bytes)}]；单封超过
     max_message_bytes 直接跳过（防止异常大邮件撑爆内存）。
@@ -249,46 +328,58 @@ def fetch_full_mime(
             raise ImapConnectionError("login-failed") from exc
         _client_session(client)
         try:
-            status, _ = client.select("INBOX", readonly=True)
-            if status != "OK":
-                raise ImapConnectionError("select-failed")
-            status, data = client.uid("search", None, f'(SINCE "{since}")')
-            if status != "OK":
-                raise ImapConnectionError("search-failed")
-            uids = sorted((data[0] or b"").split(), key=lambda u: int(u), reverse=True)
             out: list[dict] = []
-            # 两阶段拉取：先取头部+大小（发件人过滤与大小判断都不需要正文），
-            # 只对通过筛选的邮件下载完整 BODY——避免把大附件/无关邮件整个
-            # 拉进内存后才丢弃（审核修复：资源保护必须发生在下载之前）。
-            for uid in uids[:max_scan]:
-                status, head_data = client.uid("fetch", uid, "(BODY.PEEK[HEADER] RFC822.SIZE)")
-                if status != "OK" or not head_data or head_data[0] is None:
+            seen_message_ids: set[str] = set()
+            for folder in _list_scan_folders(client):
+                try:
+                    status, _ = client.select(f'"{folder}"', readonly=True)
+                except (imaplib.IMAP4.error, OSError, TimeoutError) as exc:
+                    raise ImapConnectionError(type(exc).__name__) from exc
+                if status != "OK":
+                    continue  # 文件夹打不开（权限/不存在）→ 跳过，不阻断其他文件夹
+                status, data = client.uid("search", None, f'(SINCE "{since}")')
+                if status != "OK":
                     continue
-                if not isinstance(head_data[0], tuple):
-                    continue
-                meta_raw = head_data[0][1]
-                size_raw = head_data[0][0] if isinstance(head_data[0][0], bytes) else b""
-                msize = re.search(rb"RFC822.SIZE\s+(\d+)", size_raw)
-                if msize and int(msize[1]) > max_message_bytes:
-                    continue  # 超限：不下载正文
-                import email as _email
+                uids = sorted((data[0] or b"").split(), key=lambda u: int(u), reverse=True)
+                # 两阶段拉取：先取头部+大小（发件人过滤与大小判断都不需要正文），
+                # 只对通过筛选的邮件下载完整 BODY——避免把大附件/无关邮件整个
+                # 拉进内存后才丢弃（审核修复：资源保护必须发生在下载之前）。
+                for uid in uids[:max_scan]:
+                    status, head_data = client.uid("fetch", uid, "(BODY.PEEK[HEADER] RFC822.SIZE)")
+                    if status != "OK" or not head_data or head_data[0] is None:
+                        continue
+                    if not isinstance(head_data[0], tuple):
+                        continue
+                    meta_raw = head_data[0][1]
+                    size_raw = head_data[0][0] if isinstance(head_data[0][0], bytes) else b""
+                    msize = re.search(rb"RFC822.SIZE\s+(\d+)", size_raw)
+                    if msize and int(msize[1]) > max_message_bytes:
+                        continue  # 超限：不下载正文
+                    import email as _email
 
-                head_msg = _email.message_from_bytes(meta_raw)
-                _, sender_addr = _parse_from(head_msg.get("From"))
-                if predicate is not None and not predicate(sender_addr):
-                    continue
-                status, body_data = client.uid("fetch", uid, "(BODY.PEEK[])")
-                if status != "OK" or not body_data or body_data[0] is None:
-                    continue
-                raw = body_data[0][1] if isinstance(body_data[0], tuple) else b""
-                if not raw:
-                    continue
-                out.append({
-                    "uid": uid.decode("ascii", errors="replace"),
-                    "from_address": sender_addr,
-                    "subject": _decode_header_value(head_msg.get("Subject")),
-                    "raw": raw,
-                })
+                    head_msg = _email.message_from_bytes(meta_raw)
+                    _, sender_addr = _parse_from(head_msg.get("From"))
+                    if predicate is not None and not predicate(sender_addr):
+                        continue
+                    # 跨文件夹去重（同一封邮件可能被 QQ 复制进多个文件夹）：
+                    # Message-ID 全局唯一，比 UID 稳定（UID 每文件夹独立编号）
+                    mid = str(head_msg.get("Message-ID") or "").strip()
+                    if mid and mid in seen_message_ids:
+                        continue
+                    if mid:
+                        seen_message_ids.add(mid)
+                    status, body_data = client.uid("fetch", uid, "(BODY.PEEK[])")
+                    if status != "OK" or not body_data or body_data[0] is None:
+                        continue
+                    raw = body_data[0][1] if isinstance(body_data[0], tuple) else b""
+                    if not raw:
+                        continue
+                    out.append({
+                        "uid": uid.decode("ascii", errors="replace"),
+                        "from_address": sender_addr,
+                        "subject": _decode_header_value(head_msg.get("Subject")),
+                        "raw": raw,
+                    })
             return out
         except (imaplib.IMAP4.error, OSError, TimeoutError) as exc:
             raise ImapConnectionError(type(exc).__name__) from exc
