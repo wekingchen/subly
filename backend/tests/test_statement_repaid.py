@@ -430,3 +430,68 @@ def test_summary_unknown_cycle_count(repaid_env):
     assert body["unknown_cycle_count"] == 1
     assert body["per_card"][0]["cycles"] == []
     assert body["per_card"][0]["count"] == 1
+
+
+def test_summary_negative_total_due_is_surplus(repaid_env):
+    """负 total_due（溢缴款/多还/退款冲抵）是合法业务数据：汇总原样保留负数，
+    金额为负的账单不算逾期（钱已多还，不存在实质欠款逾期）——否则前端
+    会出现「已逾期 n 天」红标 + 负金额的自相矛盾。is_surplus 供前端展示转换。"""
+    client, db, user, _ = repaid_env
+    card = _make_card(db, user.id)
+    surplus = _make_statement(db, user.id, card.id, -5000.00)
+    owe = _make_statement(db, user.id, card.id, 2352.69)
+    db.expire_all()
+    # 富余账单的还款日已过：金额为负 → 不得计入逾期
+    from datetime import date, timedelta
+
+    from app.services.scheduler import _local_today
+
+    db.get(CreditCardStatement, surplus.id).due_date = _local_today() - timedelta(days=3)
+    db.get(CreditCardStatement, owe.id).due_date = _local_today() - timedelta(days=2)
+    # 两笔同月（都属 26年8月账单期）——逾期月份标签只能来自欠款期
+    db.get(CreditCardStatement, surplus.id).bill_period_end = date(2026, 8, 31)
+    db.get(CreditCardStatement, owe.id).bill_period_end = date(2026, 8, 31)
+    db.commit()
+
+    body = client.get("/api/credit-cards/outstanding/summary").json()
+    assert body["total"] == pytest.approx(-2647.31)
+    assert body["overdue_total"] == pytest.approx(2352.69)  # 只含正金额欠款
+    entry = body["per_card"][0]
+    assert entry["total_due"] == pytest.approx(-2647.31)
+    assert entry["is_surplus"] is True
+    assert entry["overdue_amount"] == pytest.approx(2352.69)
+    assert entry["max_overdue_days"] == 2  # 负金额账单不推高逾期天数
+    # 月份标签：欠款期在逾期列表；富余期同样有月份标签但不进逾期
+    assert entry["cycles"] == ["26年8月"]
+    assert entry["overdue_cycles"] == ["26年8月"]
+
+    # 纯富余卡：is_surplus 且无逾期
+    card2 = _make_card(db, user.id, last_four="9999", name="富余卡")
+    _make_statement(db, user.id, card2.id, -800.00)
+    body2 = client.get("/api/credit-cards/outstanding/summary").json()
+    entry2 = next(e for e in body2["per_card"] if e["card_id"] == card2.id)
+    assert entry2["is_surplus"] is True
+    assert entry2["max_overdue_days"] == 0
+
+
+def test_negative_statement_detail_not_overdue(repaid_env):
+    """明细行与汇总同口径：负金额（溢缴/多还）的账单即使还款日已过、
+    未标记，也不判逾期——否则卡片绿色「账上有富余」、点进详情同一笔
+    却红色「已逾期」，两个界面互相打架。"""
+    from datetime import timedelta
+
+    from app.services.scheduler import _local_today
+
+    client, db, user, _ = repaid_env
+    card = _make_card(db, user.id)
+    surplus = _make_statement(db, user.id, card.id, -800.00)
+    owe = _make_statement(db, user.id, card.id, 500.00)
+    db.expire_all()
+    db.get(CreditCardStatement, surplus.id).due_date = _local_today() - timedelta(days=1)
+    db.get(CreditCardStatement, owe.id).due_date = _local_today() - timedelta(days=1)
+    db.commit()
+
+    lst = client.get(f"/api/credit-cards/{card.id}/statements").json()
+    by_amount = {s["total_due"]: s for s in lst["statements"]}
+    assert by_amount[-800.0]["is_overdue"] is False   # 富余不算逾期
+    assert by_amount[500.0]["is_overdue"] is True     # 真实欠款照常逾期

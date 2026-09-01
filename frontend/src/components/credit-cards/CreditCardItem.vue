@@ -15,24 +15,36 @@
 
     <CreditCardCycleTrack :card="card" />
 
-    <!-- 待还信息行：用户最关注的金额与逾期状态；名义日/提醒/额度等细节在详情 -->
-    <div v-if="outstandingEntry" class="outstanding-line">
-      <span class="outstanding-label">{{ t('creditCards.outstandingOfCard') }}</span>
-      <span class="outstanding-amt mono-data" :class="{ 'is-overdue': outstandingEntry.max_overdue_days > 0 }">{{ formatLimit(outstandingEntry.total_due) }}</span>
-      <span v-if="outstandingEntry.max_overdue_days > 0" class="overdue-tag">{{ t('creditCards.overdueDays', { n: outstandingEntry.max_overdue_days }) }}</span>
+    <!-- 待还信息行：用户最关注的金额与逾期状态；名义日/提醒/额度等细节在详情。
+         负合计（溢缴款/多还）显示「账上有富余」而非负数；金额展示取绝对值。
+         净额富余但仍有正金额逾期欠款时，红标补欠款额——别让「富余」掩盖真欠款 -->
+    <div v-if="outstandingEntry" class="outstanding-line" :class="{ 'is-surplus': outstandingEntry.is_surplus }">
+      <span class="outstanding-label">{{ outstandingEntry.is_surplus ? t('creditCards.surplusOfCard') : t('creditCards.outstandingOfCard') }}</span>
+      <span class="outstanding-amt mono-data" :class="{ 'is-overdue': outstandingEntry.max_overdue_days > 0 }">{{ formatLimit(Math.abs(outstandingEntry.total_due)) }}</span>
+      <span v-if="outstandingEntry.is_surplus" class="surplus-tag">{{ t('creditCards.surplusTag') }}</span>
+      <span v-if="outstandingEntry.max_overdue_days > 0" class="overdue-tag">
+        {{ outstandingEntry.is_surplus
+          ? t('creditCards.overdueWithAmount', { n: outstandingEntry.max_overdue_days, amount: formatLimit(outstandingEntry.overdue_amount || 0) })
+          : t('creditCards.overdueDays', { n: outstandingEntry.max_overdue_days }) }}
+      </span>
     </div>
 
     <div class="card-actions">
+      <!-- 纯富余（净额为负且无逾期欠款）没有需要做的还款操作，不提供按钮——
+           富余留在净额里继续抵扣后续账单（与银行溢缴款滚存一致）；
+           净额富余但另有逾期欠款时保留（标记已结清一并清掉） -->
       <button
-        v-if="outstandingEntry"
+        v-if="outstandingEntry && (!outstandingEntry.is_surplus || outstandingEntry.overdue_amount > 0)"
         type="button"
         class="btn ghost sm repay-btn"
         :disabled="disabled"
-        :title="t('creditCards.markRepaidHint', { cycles: buildRepaidScopeText(outstandingEntry, t) })"
+        :title="outstandingEntry.is_surplus
+          ? t('creditCards.markRepaidSurplusHint', { cycles: buildRepaidScopeText(outstandingEntry, t) })
+          : t('creditCards.markRepaidHint', { cycles: buildRepaidScopeText(outstandingEntry, t) })"
         @click="$emit('mark-repaid', card)"
       >
-        <span aria-hidden="true">✓</span> {{ t('creditCards.markRepaid') }}
-        <span class="repay-amt mono-data">{{ formatLimit(outstandingEntry.total_due) }}</span>
+        <span aria-hidden="true">✓</span> {{ outstandingEntry.is_surplus ? t('creditCards.markRepaidSurplus') : t('creditCards.markRepaid') }}
+        <span class="repay-amt mono-data">{{ formatLimit(Math.abs(outstandingEntry.total_due)) }}</span>
       </button>
       <button type="button" class="btn ghost sm" :disabled="disabled" @click="$emit('view', card)">{{ t('creditCards.viewDetails') }}</button>
       <button type="button" class="btn ghost sm" :disabled="disabled" @click="$emit('edit', card)">{{ t('creditCards.edit') }}</button>
@@ -81,6 +93,10 @@ function formatLimit(value) {
 .status-tag.inactive-tag { background: var(--surface-2); color: var(--text-soft); }
 .outstanding-line { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px; padding: 9px 12px; border: 1px solid color-mix(in srgb, var(--warning) 32%, var(--border)); border-radius: 10px; background: color-mix(in srgb, var(--warning) 6%, var(--surface)); }
 .outstanding-line .is-overdue, .outstanding-line.is-overdue .outstanding-amt { color: var(--danger-text); }
+/* 富余（负合计）：绿色基调——不是欠款，是多还/溢缴款 */
+.outstanding-line.is-surplus { border-color: color-mix(in srgb, var(--success) 32%, var(--border)); background: color-mix(in srgb, var(--success) 6%, var(--surface)); }
+.outstanding-line.is-surplus .outstanding-amt { color: var(--success-text); }
+.surplus-tag { margin-left: auto; padding: 2px 8px; border-radius: 999px; background: color-mix(in srgb, var(--success) 13%, transparent); color: var(--success-text); font-size: 11px; font-weight: 750; }
 .outstanding-label { color: var(--text-soft); font-size: 12px; font-weight: 750; }
 .outstanding-amt { font-size: 18px; font-weight: 800; color: var(--warning-text); }
 .overdue-tag { margin-left: auto; padding: 2px 8px; border-radius: 999px; background: color-mix(in srgb, var(--danger) 13%, transparent); color: var(--danger-text); font-size: 11px; font-weight: 750; }

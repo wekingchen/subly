@@ -268,16 +268,28 @@ function requestDelete(card) {
 // 保证确认范围 = 实际标记范围。
 async function requestMarkRepaid(card) {
   const entry = outstandingPerCard.value.get(card.id)
-  const amount = entry ? formatAmount(entry.total_due) : ''
+  // 负合计（溢缴款/多还）不是「欠款合计」：金额展示绝对值，文案按富余语义。
+  // 混合情形（净富余但含正金额欠款）：必须披露欠款额也在本次标记范围内，
+  // 否则用户确认「结清富余」时真实欠款被悄悄清掉。
+  const amount = entry ? formatAmount(Math.abs(entry.total_due)) : ''
+  const overdueAmt = entry ? formatAmount(entry.overdue_amount || 0) : '0'
   const cyclesText = buildScopeText(entry)
+  const isSurplus = Boolean(entry?.is_surplus)
   confirm.open({
     title: t('creditCards.markRepaidTitle'),
-    message: t('creditCards.markRepaidMessage', { name: card.display_name, cycles: cyclesText, amount }),
-    confirmLabel: t('creditCards.markRepaid'),
+    message: isSurplus
+      ? (entry.overdue_amount > 0
+          ? t('creditCards.markRepaidMixedMessage', { name: card.display_name, cycles: cyclesText, amount, overdueAmt })
+          : t('creditCards.markRepaidSurplusMessage', { name: card.display_name, cycles: cyclesText, amount }))
+      : t('creditCards.markRepaidMessage', { name: card.display_name, cycles: cyclesText, amount }),
+    // 富余场景整条操作链用「结清」语义（按钮/弹窗/确认/toast），不与「还款」混排
+    confirmLabel: isSurplus ? t('creditCards.markRepaidSurplus') : t('creditCards.markRepaid'),
     onConfirm: async () => {
       try {
         await markCardRepaid(card)
-        toast(t('creditCards.markRepaidDone', { name: card.display_name, cycles: cyclesText }))
+        toast(isSurplus
+          ? t('creditCards.markRepaidSurplusDone', { name: card.display_name })
+          : t('creditCards.markRepaidDone', { name: card.display_name, cycles: cyclesText }))
       } catch {
         toast(t('creditCards.markRepaidFailed'))
       }

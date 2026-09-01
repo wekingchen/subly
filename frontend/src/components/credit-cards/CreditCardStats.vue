@@ -21,7 +21,7 @@
           </p>
         </template>
         <template v-else>
-          <strong class="stat-value mono-data" :class="{ 'is-overdue-amt': overdueTotal > 0 }">{{ outstandingLabel }}</strong>
+          <strong class="stat-value mono-data" :class="{ 'is-overdue-amt': overdueTotal > 0, 'is-surplus-amt': isSurplus && overdueTotal <= 0 }">{{ outstandingLabel }}</strong>
           <p class="stat-desc">{{ outstandingDesc }}</p>
         </template>
       </div>
@@ -98,15 +98,27 @@ const outstandingTotal = computed(() => {
 })
 const outstandingCount = computed(() => Number(props.outstanding?.unrepaid_count) || 0)
 const overdueTotal = computed(() => Number(props.outstanding?.overdue_total) || 0)
+// 合计为负 = 溢缴款/多还多过欠款：显示「账上有富余」而非负数。
+// 仅当确实没有逾期欠款时才算纯富余展示——跨卡净额不能掩盖另一张卡的欠款
+// （A 卡溢缴款不会自动还 B 卡的账），有逾期欠款时逾期金额优先展示。
+const isSurplus = computed(() => outstandingTotal.value < 0 && overdueTotal.value <= 0)
 const outstandingLabel = computed(() => {
-  const n = outstandingTotal.value
+  const n = Math.abs(outstandingTotal.value)
   return Number.isInteger(n) ? n.toLocaleString('zh-CN') : n.toFixed(2)
 })
 const outstandingDesc = computed(() => {
   // 按账单月份列出（「26年8月账单未标记还款」），不再用「n 期」计数；
   // 月份跨卡全局去重（Set）——多卡同月只显示一次；孤立账单与逾期单独提示
   if (!outstandingCount.value) return t('creditCards.outstandingEmpty')
+  // 纯富余（净额为负且无逾期欠款）：主金额是「多还的部分」，月份列表不再是「要还的账单」
+  if (isSurplus.value) return t('creditCards.outstandingSurplusDesc')
   const parts = []
+  // 净额为负但仍有逾期欠款：欠款说明优先于富余（净额只是抵扣后的余数）
+  if (outstandingTotal.value < 0) {
+    parts.push(t('creditCards.outstandingNetWithDebt', {
+      amount: Math.abs(outstandingTotal.value).toLocaleString('zh-CN')
+    }))
+  }
   const allCycles = [...new Set((props.outstanding?.per_card || [])
     .flatMap((e) => e.cycles || []))]
     .sort()
@@ -166,6 +178,7 @@ const best = computed(() => {
 .stat-label { display: block; color: var(--text-soft); font-size: 12px; font-weight: 750; letter-spacing: .06em; }
 .stat-value { display: block; margin: 3px 0 0; font-size: 24px; line-height: 1; }
 .stat-value.is-overdue-amt { color: var(--danger-text); }
+.stat-value.is-surplus-amt { color: var(--success-text); }
 .stat-desc { min-width: 0; margin: 5px 0 0; color: var(--text-soft); font-size: 12px; line-height: 1.45; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .is-due .stat-icon { border-color: color-mix(in srgb, var(--warning) 42%, var(--border)); background: color-mix(in srgb, var(--warning) 10%, var(--surface)); color: var(--warning-text); }
 .is-outstanding .stat-icon { border-color: color-mix(in srgb, var(--warning) 42%, var(--border)); background: color-mix(in srgb, var(--warning) 10%, var(--surface)); color: var(--warning-text); }

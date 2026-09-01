@@ -174,7 +174,8 @@ def delete_credit_card(
 # --------------------------------------------------------------------------- #
 
 def _statement_out(s: CreditCardStatement, today: date | None = None) -> dict:
-    # 账单逾期（派生值，不落库）：已出账单未标记还款且还款日已过。
+    # 账单逾期（派生值，不落库）：已出账单未标记还款且还款日已过且是真实欠款
+    # （金额为正——负金额是溢缴款/多还，不存在实质欠款逾期，与汇总口径一致）。
     # due_date 为 NULL 时不判逾期（无法确定还款日，宁不冤枉）。
     # overdue_days 一并在此算好（业务时区），前端不做本地时间重算——
     # 浏览器时区与服务端不同时会少算/隐藏徽标。
@@ -182,7 +183,10 @@ def _statement_out(s: CreditCardStatement, today: date | None = None) -> dict:
         today = scheduler._local_today()
     overdue_days = (
         (today - s.due_date).days
-        if not s.is_repaid and s.due_date is not None and s.due_date < today
+        if not s.is_repaid
+        and (s.total_due is None or s.total_due > 0)
+        and s.due_date is not None
+        and s.due_date < today
         else None
     )
     return {
@@ -491,6 +495,9 @@ def outstanding_summary(
     含已删卡的孤立账单（历史账单的钱仍是要还的，card_id=None 条目）。
     total_due 为 NULL 的账单按 0 计入金额但仍计数——期数口径与批量标记
     弹窗一致，金额未知不代表不用还。
+    负 total_due（溢缴款/多还/退款冲抵）是合法业务数据，汇总原样保留：
+    合计为负的卡 is_surplus=True（「账上有富余」），前端不做负数展示。
+    逾期只统计正金额账单——富余的期次不存在实质欠款逾期。
     per_card[].cycles 是各未还账单的月份标签（「26年8月」，降序），
     供前端文案（「26年8月账单未标记还款」）；overdue_cycles/max_overdue_days
     表达逾期（还款日已过未标记），overdue_total 是逾期金额合计。
@@ -511,13 +518,15 @@ def outstanding_summary(
     unknown_cycle_count = 0
     per_card: dict[int | None, dict] = {}
     for s in rows:
-        total += float(s.total_due or 0.0)
+        amount = float(s.total_due or 0.0)
+        total += amount
         unrepaid_count += 1
         entry = per_card.setdefault(s.card_id, {
             "total_due": 0.0, "count": 0, "cycle_keys": [],
             "overdue_keys": [], "max_overdue_days": 0, "unknown_cycle_count": 0,
+            "overdue_amount": 0.0,
         })
-        entry["total_due"] += float(s.total_due or 0.0)
+        entry["total_due"] += amount
         entry["count"] += 1
         # 月份用 (year, month) 键排序去重——格式化后的「26年9月/26年10月」
         # 字符串排序会把 9 排到 10 后面
@@ -529,8 +538,10 @@ def outstanding_summary(
         else:
             unknown_cycle_count += 1
             entry["unknown_cycle_count"] += 1
-        if s.due_date is not None and s.due_date < today:
-            overdue_total += float(s.total_due or 0.0)
+        # 逾期口径只看欠款（正金额）：富余期次多还的钱不存在「逾期」
+        if amount > 0 and s.due_date is not None and s.due_date < today:
+            overdue_total += amount
+            entry["overdue_amount"] += amount
             overdue_days = (today - s.due_date).days
             entry["max_overdue_days"] = max(entry["max_overdue_days"], overdue_days)
             if month_key is not None and month_key not in entry["overdue_keys"]:
@@ -541,6 +552,8 @@ def outstanding_summary(
         entry["cycles"] = [_cycle_label(y, m) for y, m in entry.pop("cycle_keys")]
         entry["overdue_cycles"] = [_cycle_label(y, m) for y, m in entry.pop("overdue_keys")]
         entry["total_due"] = round(entry["total_due"], 2)
+        entry["overdue_amount"] = round(entry["overdue_amount"], 2)
+        entry["is_surplus"] = entry["total_due"] < 0
     return {
         "total": round(total, 2),
         "unrepaid_count": unrepaid_count,
