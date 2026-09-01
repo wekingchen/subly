@@ -120,7 +120,7 @@ import CreditCardFormModal from '../components/credit-cards/CreditCardFormModal.
 import CreditCardItem from '../components/credit-cards/CreditCardItem.vue'
 import CreditCardStats from '../components/credit-cards/CreditCardStats.vue'
 import DataState from '../components/DataState.vue'
-import { buildRepaidScopeText } from '../utils/creditCardDates'
+import { buildRepaidScopeText, orderCards } from '../utils/creditCardDates'
 import { useConfirm } from '../composables/useConfirm'
 import { useCreditCards } from '../composables/useCreditCards'
 import { useToasts } from '../composables/useToasts'
@@ -144,7 +144,7 @@ const formError = ref('')
 const detailTarget = ref(null)
 const canShowCards = computed(() => !['loading', 'error'].includes(dataState.value))
 
-// 免息期排序：点击"最长免息期"统计卡切换。默认关闭（按录入顺序），
+// 免息期排序：点击"最长免息期"统计卡切换。默认按计划还款日由近到远，
 // 开启后列表按 interest_free_days 从长到短排序，并高亮当前最长的卡。
 const sortByInterestFree = ref(false)
 const bestInterestFree = computed(() => {
@@ -154,13 +154,9 @@ const bestInterestFree = computed(() => {
     : null
 })
 const visibleCards = computed(() => {
-  if (!sortByInterestFree.value) return cards.value
-  // 与 bestInterestFree 同口径：启用卡按免息天数降序在前，停用卡统一沉底。
-  const inactive = cards.value.filter((card) => !card.is_active)
-  const active = cards.value
-    .filter((card) => card.is_active)
-    .sort((a, b) => (Number(b.interest_free_days) || 0) - (Number(a.interest_free_days) || 0))
-  return [...active, ...inactive]
+  // 默认：启用卡按计划还款日由近到远（后端派生 days_until_due，业务时区口径；
+  // 标记已还款顺延后响应卡片原位替换，自动重排）。免息排序开启时按免息期降序。
+  return orderCards(cards.value, { byInterestFree: sortByInterestFree.value })
 })
 
 // card_id → { total_due, count }：卡片上「标记已还款」按钮的数据源

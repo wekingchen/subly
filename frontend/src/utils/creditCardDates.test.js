@@ -8,6 +8,8 @@ import {
   formatCreditCardDate,
   formatCycleMonth,
   nearestCreditCardDue,
+  orderCards,
+  sortCardsByDue,
   statementCycleLabel
 } from './creditCardDates'
 
@@ -71,6 +73,66 @@ describe('credit card due summaries', () => {
   it('formats date-only values as local Chinese dates', () => {
     expect(formatCreditCardDate('2026-08-30')).toContain('8月')
     expect(formatCreditCardDate('bad')).toBe('—')
+  })
+})
+
+describe('sortCardsByDue', () => {
+  // days_until_due 是后端按业务时区派生的（浏览器不自算「今天」，避免跨时区把当天到期的卡沉底）
+  const cards = [
+    { id: 1, is_active: true, days_until_due: 19 },
+    { id: 2, is_active: true, days_until_due: 4 },
+    { id: 3, is_active: false, days_until_due: 1 },  // 停用：沉底
+    { id: 4, is_active: true, days_until_due: -1 },  // 已过（派生值不该出现，防御性）
+    { id: 5, is_active: true, days_until_due: null } // 日期缺失：沉底
+  ]
+
+  it('启用卡按后端派生的距还款天数由近到远，停用/无效沉底且组内保持原顺序', () => {
+    expect(sortCardsByDue(cards).map((c) => c.id)).toEqual([2, 1, 4, 5, 3])
+  })
+
+  it('同日还款保持输入顺序（稳定排序，不因相等比较打乱）', () => {
+    const sameDay = [
+      { id: 7, is_active: true, days_until_due: 9 },
+      { id: 8, is_active: true, days_until_due: 9 }
+    ]
+    expect(sortCardsByDue(sameDay).map((c) => c.id)).toEqual([7, 8])
+  })
+
+  it('不改动输入数组（纯函数，computed 依赖才可控）', () => {
+    const input = [...cards]
+    sortCardsByDue(cards)
+    expect(cards).toEqual(input)
+  })
+
+  it('标记还款顺延后 days_until_due 变远，卡片即排到后面（重排语义）', () => {
+    const before = [
+      { id: 1, is_active: true, days_until_due: 4 },
+      { id: 2, is_active: true, days_until_due: 19 }
+    ]
+    expect(sortCardsByDue(before).map((c) => c.id)).toEqual([1, 2])
+    // 卡 1 标记已还款 → 顺延到下期，越过卡 2
+    const after = [
+      { id: 1, is_active: true, days_until_due: 32 },
+      { id: 2, is_active: true, days_until_due: 19 }
+    ]
+    expect(sortCardsByDue(after).map((c) => c.id)).toEqual([2, 1])
+  })
+})
+
+describe('orderCards（页面排序分支）', () => {
+  const cards = [
+    { id: 1, is_active: true, days_until_due: 19, interest_free_days: 31 },
+    { id: 2, is_active: true, days_until_due: 4, interest_free_days: 50 },
+    { id: 3, is_active: false, days_until_due: 1, interest_free_days: 99 },
+    { id: 4, is_active: true, days_until_due: 10, interest_free_days: null }
+  ]
+
+  it('默认按还款日由近到远（页面接线的回归防线：visibleCards 必须走这里）', () => {
+    expect(orderCards(cards).map((c) => c.id)).toEqual([2, 4, 1, 3])
+  })
+
+  it('byInterestFree 时按免息天数降序，停用/缺失沉底（沿用免息排序口径）', () => {
+    expect(orderCards(cards, { byInterestFree: true }).map((c) => c.id)).toEqual([2, 1, 4, 3])
   })
 })
 

@@ -70,6 +70,51 @@ export function nearestCreditCardDue(cards, today = new Date()) {
     .sort((a, b) => a.days - b.days)[0] || null
 }
 
+// 卡片默认排序：启用卡按计划还款日由近到远（标记还款后派生日期变化，
+// 调用方基于响应式数据调用即自动重排）；停用卡与日期缺失的沉底，组内保持原顺序。
+// 距离用后端派生的 days_until_due（业务时区口径），前端不再自算「今天」。
+export function sortCardsByDue(cards) {
+  return [...(cards || [])]
+    .map((card, index) => {
+      // null/'' 归为无效（Number(null)===0 会把缺日期的卡误判成「今天到期」）
+      const raw = card?.days_until_due
+      const days = raw == null || raw === '' ? NaN : Number(raw)
+      return { card, index, days }
+    })
+    .sort((a, b) => {
+      const activeDiff = Number(b.card?.is_active === true) - Number(a.card?.is_active === true)
+      if (activeDiff) return activeDiff
+      const aValid = a.card?.is_active && Number.isFinite(a.days) && a.days >= 0
+      const bValid = b.card?.is_active && Number.isFinite(b.days) && b.days >= 0
+      if (aValid !== bValid) return aValid ? -1 : 1
+      if (aValid && a.days !== b.days) return a.days - b.days
+      return a.index - b.index
+    })
+    .map((entry) => entry.card)
+}
+
+// 信用卡管理页的列表排序入口（分支选择可单测）：默认按计划还款日由近到远；
+// byInterestFree 开启时按免息天数降序（启用卡在前，停用卡沉底）。
+export function orderCards(cards, { byInterestFree = false } = {}) {
+  if (!byInterestFree) return sortCardsByDue(cards)
+  return [...(cards || [])]
+    .map((card, index) => ({ card, index }))
+    .sort((a, b) => {
+      const activeDiff = Number(b.card?.is_active === true) - Number(a.card?.is_active === true)
+      if (activeDiff) return activeDiff
+      // null/'' 归为无效（Number(null)===0 会把免息期缺失的卡当成 0 天参与比较）
+      const toDays = (v) => (v == null || v === '' ? NaN : Number(v))
+      const aDays = toDays(a.card?.interest_free_days)
+      const bDays = toDays(b.card?.interest_free_days)
+      const aValid = a.card?.is_active && Number.isFinite(aDays)
+      const bValid = b.card?.is_active && Number.isFinite(bDays)
+      if (aValid !== bValid) return aValid ? -1 : 1
+      if (aValid && aDays !== bDays) return bDays - aDays
+      return a.index - b.index
+    })
+    .map((entry) => entry.card)
+}
+
 // 账单月份 → 「26年8月」：出账月即用户口中的账单月份（账单邮件命名口径）
 export function formatCycleMonth(dateStr) {
   const date = parseLocalDate(dateStr)
