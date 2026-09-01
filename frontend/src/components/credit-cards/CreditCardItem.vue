@@ -47,7 +47,7 @@ import { useI18n } from 'vue-i18n'
 import CreditCardBrandBadge from './CreditCardBrandBadge.vue'
 import CreditCardCycleTrack from './CreditCardCycleTrack.vue'
 
-const props = defineProps({
+defineProps({
   card: { type: Object, required: true },
   disabled: { type: Boolean, default: false },
   highlight: { type: Boolean, default: false },

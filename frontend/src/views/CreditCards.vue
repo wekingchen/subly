@@ -113,7 +113,6 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import api from '../api'
 import AppModal from '../components/AppModal.vue'
 import AppToastRegion from '../components/AppToastRegion.vue'
 import CreditCardDetailModal from '../components/credit-cards/CreditCardDetailModal.vue'
