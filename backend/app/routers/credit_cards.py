@@ -139,23 +139,19 @@ def delete_credit_card(
             CreditCardNotificationOutbox.credit_card_id == card.id
         )
     )
-    # 账单与明细（SQLite 无级联，显式清理；items 先于 statement）
-    stmt_ids = db.scalars(
-        select(CreditCardStatement.id).where(CreditCardStatement.card_id == card.id)
-    ).all()
-    if stmt_ids:
-        db.execute(
-            delete(CreditCardStatementItem).where(
-                CreditCardStatementItem.statement_id.in_(stmt_ids)
-            )
-        )
-        db.execute(
-            delete(CreditCardStatement).where(CreditCardStatement.id.in_(stmt_ids))
-        )
+    # 历史账单保留（用户要求：删卡不丢历史）：解除关联而非删除——
+    # card_id 置空后账单仍在（card_last_four/bank_key 冗余字段可辨识），
+    # 通过用户级历史账单接口（/statements/all）查询。
+    # poll run 是运行态（非历史数据）：随卡删除，防 FK 悬空与新卡误继承。
     db.execute(
         delete(CreditCardStatementPollRun).where(
             CreditCardStatementPollRun.credit_card_id == card.id
         )
+    )
+    db.execute(
+        CreditCardStatement.__table__.update()
+        .where(CreditCardStatement.card_id == card.id)
+        .values(card_id=None, match_status="unmatched")
     )
     db.delete(card)
     _invalidate_scan_checkpoint(db)
@@ -257,6 +253,10 @@ def list_statement_items(
     )
     if stmt is None:
         raise HTTPException(404, "账单不存在")
+    return _statement_items_response(db, stmt)
+
+
+def _statement_items_response(db: Session, stmt: CreditCardStatement) -> dict:
     total = db.scalar(
         select(func.count()).select_from(CreditCardStatementItem)
         .where(CreditCardStatementItem.statement_id == stmt.id)
@@ -273,3 +273,52 @@ def list_statement_items(
         "total_count": total,
         "truncated": total > len(items),
     }
+
+
+# --------------------------------------------------------------------------- #
+# 用户级历史账单：含已删卡/已解除关联的账单（删卡删账户保留历史的查询入口）
+# --------------------------------------------------------------------------- #
+
+@router.get("/statements/all")
+def list_all_statements(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """本用户全部历史账单（含已删卡的孤立账单，按卡尾号+银行标识）。
+
+    路由放在 /{card_id} 之前注册以避免路径歧义。
+    """
+    stmts = db.scalars(
+        select(CreditCardStatement)
+        .where(
+            CreditCardStatement.user_id == user.id,
+            CreditCardStatement.verify_status.isnot(None),
+        )
+        .order_by(CreditCardStatement.statement_date.desc(), CreditCardStatement.id.desc())
+        .limit(500)
+    ).all()
+    out = []
+    for s in stmts:
+        d = _statement_out(s)
+        # 已删卡的孤立账单：card_name 无法从关联取，用银行+尾号标识
+        card = db.get(CreditCard, s.card_id) if s.card_id else None
+        d["card_name"] = card.display_name if card else None
+        out.append(d)
+    return {"statements": out}
+
+
+@router.get("/statements/all/{statement_id}/items")
+def list_all_statement_items(
+    statement_id: int,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    stmt = db.scalar(
+        select(CreditCardStatement).where(
+            CreditCardStatement.id == statement_id,
+            CreditCardStatement.user_id == user.id,
+        )
+    )
+    if stmt is None:
+        raise HTTPException(404, "账单不存在")
+    return _statement_items_response(db, stmt)

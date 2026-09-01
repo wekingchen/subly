@@ -9,14 +9,14 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
-from sqlalchemy import delete, select
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app import activity
 from app.database import get_db
 from app.deps import get_current_user
-from app.models import CreditCardStatement, CreditCardStatementItem, ImapAccount, User
+from app.models import CreditCardStatement, ImapAccount, User
 from app.bank_senders import BANK_SENDER_DOMAINS, normalize_bank_keys, sender_matches_banks
 from app.services import imap_client
 
@@ -204,30 +204,14 @@ def delete_account(
     db: Session = Depends(get_db),
 ):
     account = _account_for_user(user, account_id, db)
-    # 该账户解析出的账单与明细一并清理（来源已不存在，悬空引用会让
-    # 重新添加同邮箱后重复导入；需要保留历史可先导出备份）。
-    stmt_ids = db.scalars(
-        select(CreditCardStatement.id).where(
-            CreditCardStatement.source_account_id == account.id
-        )
-    ).all()
-    if stmt_ids:
-        db.execute(
-            delete(CreditCardStatementItem).where(
-                CreditCardStatementItem.statement_id.in_(stmt_ids)
-            )
-        )
-        # 账单被删的 poll run 置空关联（防悬空 ID；已 succeeded 的历史不动）
-        from app.models import CreditCardStatementPollRun
-
-        db.execute(
-            CreditCardStatementPollRun.__table__.update()
-            .where(CreditCardStatementPollRun.statement_id.in_(stmt_ids))
-            .values(statement_id=None)
-        )
-        db.execute(
-            delete(CreditCardStatement).where(CreditCardStatement.id.in_(stmt_ids))
-        )
+    # 历史账单保留（用户要求：删账户不丢历史）：解除来源关联而非删除。
+    # 重新添加同邮箱会获得新账户 ID，同邮件按 (新 source, message_id) 去重
+    # 会重新解析入库一次，账单明细幂等可接受。
+    db.execute(
+        CreditCardStatement.__table__.update()
+        .where(CreditCardStatement.source_account_id == account.id)
+        .values(source_account_id=None)
+    )
     db.delete(account)
     db.commit()
     activity.log("imap.account_deleted", "删除邮件账户", user=user)

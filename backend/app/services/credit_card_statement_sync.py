@@ -272,6 +272,20 @@ def sync_statements_core(
                     CreditCardStatement.card_last_four == st.card_last_four,
                 )
             )
+            if record is None:
+                # 认领孤立账单：删账户留下的 NULL 来源记录（同邮件同卡），
+                # 重新关联到当前账户而非重复插入（审核修复：防双份展示）
+                orphan = db.scalar(
+                    select(CreditCardStatement).where(
+                        CreditCardStatement.user_id == user.id,
+                        CreditCardStatement.source_account_id.is_(None),
+                        CreditCardStatement.message_id == parsed.message_id,
+                        CreditCardStatement.card_last_four == st.card_last_four,
+                    )
+                )
+                if orphan is not None:
+                    orphan.source_account_id = account.id
+                    record = orphan
             if record:
                 # 已存在：更新匹配结果并刷新账单字段（解析器修复后，重新解析
                 # 同一封邮件能让旧记录的 NULL 金额得到修复，审核 Medium 修复）

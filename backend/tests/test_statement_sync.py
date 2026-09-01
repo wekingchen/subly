@@ -169,7 +169,8 @@ def test_sync_statements_query_endpoints(sync_env, monkeypatch):
     assert client.get(f"/api/credit-cards/{card.id}/statements/9999/items").status_code == 404
 
 
-def test_delete_card_removes_statements(sync_env, monkeypatch):
+def test_delete_card_preserves_statements(sync_env, monkeypatch):
+    """删卡保留历史账单（用户需求）：解除关联而非删除。"""
     client, db, user, account = sync_env
     card = CreditCard(
         user_id=user.id, display_name="招行卡", bank_name="招商银行",
@@ -182,8 +183,12 @@ def test_delete_card_removes_statements(sync_env, monkeypatch):
     assert db.query(CreditCardStatement).count() == 1
 
     assert client.delete(f"/api/credit-cards/{card.id}").json()["ok"] is True
-    assert db.query(CreditCardStatement).count() == 0
-    assert db.query(CreditCardStatementItem).count() == 0
+    db.expire_all()
+    stmt = db.query(CreditCardStatement).one()
+    assert stmt.card_id is None  # 解除关联
+    assert stmt.match_status == "unmatched"
+    assert stmt.card_last_four == "6310"  # 冗余字段仍可辨识
+    assert db.query(CreditCardStatementItem).count() == 5  # 明细保留
 
 
 def test_sync_requires_ownership(sync_env, monkeypatch):
@@ -423,3 +428,88 @@ def test_resync_repairs_null_total_due(sync_env, monkeypatch):
     stmt = db.query(CreditCardStatement).one()
     assert stmt.total_due == 1410.94, "重新解析应修复旧记录的 NULL 金额"
     assert stmt.min_due == 389.07
+
+
+def test_delete_account_preserves_statements(sync_env, monkeypatch):
+    """删邮箱账户保留历史账单（解除来源关联而非删除）。"""
+    client, db, user, account = sync_env
+    card = CreditCard(
+        user_id=user.id, display_name="招行卡", bank_name="招商银行",
+        last_four="6310", statement_day=15, due_day=3,
+    )
+    db.add(card)
+    db.commit()
+    _mock_imap(monkeypatch, [load_cmb()])
+    client.post(f"/api/imap/accounts/{account.id}/sync-statements")
+    assert db.query(CreditCardStatement).count() == 1
+
+    assert client.delete(f"/api/imap/accounts/{account.id}").json()["ok"] is True
+    db.expire_all()
+    stmt = db.query(CreditCardStatement).one()
+    assert stmt.source_account_id is None  # 解除来源
+    assert stmt.card_id == card.id  # 卡片关联保留
+    assert db.query(CreditCardStatementItem).count() == 5  # 明细保留
+
+
+def test_resync_claims_orphan_statement(sync_env, monkeypatch):
+    """审核 M3 回归：删账户重加同邮箱再解析，认领孤立账单而非重复插入。"""
+    client, db, user, account = sync_env
+    card = CreditCard(
+        user_id=user.id, display_name="招行卡", bank_name="招商银行",
+        last_four="6310", statement_day=15, due_day=3,
+    )
+    db.add(card)
+    db.commit()
+    _mock_imap(monkeypatch, [load_cmb()])
+    client.post(f"/api/imap/accounts/{account.id}/sync-statements")
+
+    # 删账户 → 重新添加同邮箱 → 再解析
+    client.delete(f"/api/imap/accounts/{account.id}")
+    account2 = ImapAccount(user_id=user.id, email="a@qq.com", password="x", provider="qq")
+    db.add(account2)
+    db.commit()
+    _mock_imap(monkeypatch, [load_cmb()])
+    client.post(f"/api/imap/accounts/{account2.id}/sync-statements")
+    db.expire_all()
+
+    stmts = db.query(CreditCardStatement).all()
+    assert len(stmts) == 1, "同邮件应认领孤立账单而非重复插入"
+    assert stmts[0].source_account_id == account2.id
+    assert stmts[0].card_id == card.id
+    assert len(stmts[0].items) == 5  # 明细不重复追加
+
+    # 详情接口无双份
+    lst = client.get(f"/api/credit-cards/{card.id}/statements")
+    assert len(lst.json()["statements"]) == 1
+
+
+def test_all_statements_endpoint_includes_orphans(sync_env, monkeypatch):
+    """审核 H1 回归：删卡后历史账单通过用户级接口仍可查询。"""
+    client, db, user, account = sync_env
+    card = CreditCard(
+        user_id=user.id, display_name="招行卡", bank_name="招商银行",
+        last_four="6310", statement_day=15, due_day=3,
+    )
+    db.add(card)
+    db.commit()
+    _mock_imap(monkeypatch, [load_cmb()])
+    client.post(f"/api/imap/accounts/{account.id}/sync-statements")
+    client.delete(f"/api/credit-cards/{card.id}")
+
+    # 单卡接口 404（卡已删）
+    assert client.get(f"/api/credit-cards/{card.id}/statements").status_code == 404
+    # 用户级历史接口仍可查
+    all_stmts = client.get("/api/credit-cards/statements/all")
+    assert all_stmts.status_code == 200
+    stmts = all_stmts.json()["statements"]
+    assert len(stmts) == 1
+    assert stmts[0]["card_last_four"] == "6310"
+    assert stmts[0]["card_name"] is None  # 卡已删
+
+    # 明细仍可查
+    items = client.get(f"/api/credit-cards/statements/all/{stmts[0]['id']}/items")
+    assert items.status_code == 200
+    assert items.json()["count"] == 5
+
+    # 越权隔离
+    assert client.get("/api/credit-cards/statements/all/99999/items").status_code == 404
