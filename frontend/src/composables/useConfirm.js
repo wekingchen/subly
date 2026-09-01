@@ -19,6 +19,8 @@ export function useConfirm() {
       title: options.title || '',
       message: options.message || '',
       danger: options.danger === true,
+      // 确认按钮文案：默认沿用删除语义；非危险操作可传 confirmLabel
+      confirmLabel: options.confirmLabel || '',
       pending: false,
       error: '',
       onConfirm: typeof options.onConfirm === 'function' ? options.onConfirm : null

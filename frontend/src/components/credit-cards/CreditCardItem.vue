@@ -24,6 +24,17 @@
     </div>
 
     <div class="card-actions">
+      <button
+        v-if="outstandingEntry"
+        type="button"
+        class="btn ghost sm repay-btn"
+        :disabled="disabled"
+        :title="t('creditCards.markRepaidHint', { n: outstandingEntry.count })"
+        @click="$emit('mark-repaid', card)"
+      >
+        <span aria-hidden="true">✓</span> {{ t('creditCards.markRepaid') }}
+        <span class="repay-amt mono-data">{{ formatLimit(outstandingEntry.total_due) }}</span>
+      </button>
       <button type="button" class="btn ghost sm" :disabled="disabled" @click="$emit('view', card)">{{ t('creditCards.viewDetails') }}</button>
       <button type="button" class="btn ghost sm" :disabled="disabled" @click="$emit('edit', card)">{{ t('creditCards.edit') }}</button>
       <button type="button" class="btn danger sm" :disabled="disabled" @click="$emit('delete', card)">{{ t('creditCards.delete') }}</button>
@@ -36,13 +47,15 @@ import { useI18n } from 'vue-i18n'
 import CreditCardBrandBadge from './CreditCardBrandBadge.vue'
 import CreditCardCycleTrack from './CreditCardCycleTrack.vue'
 
-defineProps({
+const props = defineProps({
   card: { type: Object, required: true },
   disabled: { type: Boolean, default: false },
-  highlight: { type: Boolean, default: false }
+  highlight: { type: Boolean, default: false },
+  // 该卡未标记还款的账单合计 { total_due, count }；无未还账单为 null（按钮隐藏）
+  outstandingEntry: { type: Object, default: null }
 })
 
-defineEmits(['view', 'edit', 'delete'])
+defineEmits(['view', 'edit', 'delete', 'mark-repaid'])
 const { t } = useI18n()
 
 // 额度仅作展示记录：千分位整数（有小数保留两位），不带币种符号——币种跟随用户基准币。
@@ -72,6 +85,8 @@ function formatLimit(value) {
 .credit-card.is-best::before { background: linear-gradient(180deg, var(--signal-cyan), var(--primary)); box-shadow: 0 0 12px color-mix(in srgb, var(--signal-cyan) 55%, transparent); }
 .card-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: auto; padding-top: 2px; }
 .card-actions .btn { flex: 1 1 auto; }
+.repay-btn { color: var(--success-text); border-color: color-mix(in srgb, var(--success) 38%, var(--border)); }
+.repay-amt { margin-left: 4px; font-weight: 800; }
 @media (hover: hover) and (pointer: fine) {
   .credit-card { transition: transform .2s ease, box-shadow .2s ease, border-color .2s ease; }
   .credit-card:hover { transform: translateY(-2px); box-shadow: var(--shadow-lg); }

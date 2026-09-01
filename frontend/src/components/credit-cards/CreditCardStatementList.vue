@@ -14,7 +14,8 @@
       <li v-for="s in statements" :key="s.id" class="stmt-item">
         <button type="button" class="stmt-summary" @click="toggle(s.id)" :aria-expanded="expanded === s.id">
           <span class="stmt-period">{{ periodLabel(s) }}</span>
-          <MoneyText class="stmt-amount" :value="s.total_due" currency="CNY" position="prefix" />
+          <span v-if="s.is_repaid" class="stmt-repaid-tag">{{ t('creditCards.repaidTag') }}</span>
+          <MoneyText class="stmt-amount" :class="{ repaid: s.is_repaid }" :value="s.total_due" currency="CNY" position="prefix" />
           <span class="stmt-due muted">{{ s.due_date ? t('creditCards.dueOn', { d: s.due_date }) : '' }}</span>
           <span class="stmt-verify" :class="s.verify_status === 'ok' ? 'ok' : 'bad'">
             {{ s.verify_status === 'ok' ? '✓' : '⚠' }}
@@ -26,6 +27,17 @@
             <button type="button" class="btn ghost sm" @click="toggle(s.id)">{{ t('imap.retry') }}</button>
           </div>
           <template v-else-if="detail">
+            <div class="stmt-actions">
+              <button
+                type="button"
+                class="btn ghost sm"
+                :disabled="markPending"
+                @click="toggleRepaid(s)"
+              >
+                {{ s.is_repaid ? t('creditCards.unmarkRepaid') : t('creditCards.markRepaid') }}
+              </button>
+              <span v-if="markErrorId === s.id" class="stmt-err" role="alert">{{ t('creditCards.markRepaidFailed') }}</span>
+            </div>
             <div class="stmt-meta">
               <span v-if="s.min_due != null">{{ t('creditCards.minDue') }}: <MoneyText :value="s.min_due" currency="CNY" position="prefix" /></span>
               <span v-if="s.credit_limit != null">{{ t('creditCards.creditLimit') }}: {{ formatMoney(s.credit_limit) }}</span>
@@ -71,6 +83,9 @@ const props = defineProps({
   cardId: { type: Number, required: true }
 })
 
+// 还款标记变化时通知父级（携带更新后的卡片派生数据，null=孤立账单）
+const emit = defineEmits(['repaid-changed'])
+
 const { t } = useI18n()
 const statements = ref([])
 const loaded = ref(false)
@@ -81,6 +96,8 @@ const detail = ref(null)
 const detailLoading = ref(false)
 const detailError = ref(false)
 const truncated = ref(false)
+const markPending = ref(false)
+const markErrorId = ref(null) // 标记失败的账单 id：错误只显示在对应账单下，不串位
 let detailSeq = 0
 const isDesktop = useBreakpoint('(min-width: 721px)')
 
@@ -138,6 +155,27 @@ async function toggle(id) {
   }
 }
 
+// 单期账单标记/取消已还款（明细区操作）；成功后本地更新并通知父级
+async function toggleRepaid(s) {
+  if (markPending.value) return
+  markPending.value = true
+  markErrorId.value = null
+  try {
+    const { data } = await api.patch(
+      `/api/credit-cards/statements/${s.id}/repaid`,
+      { is_repaid: !s.is_repaid }
+    )
+    s.is_repaid = !s.is_repaid
+    // 界线推进改变了卡片派生字段（next_due_date 等）：带上最新卡片供父级替换
+    emit('repaid-changed', data?.card || null)
+  } catch {
+    // 失败要响亮：不能让用户以为标记成功；错误只挂在对应账单下
+    markErrorId.value = s.id
+  } finally {
+    markPending.value = false
+  }
+}
+
 watch(() => props.cardId, (id) => {
   if (id) load()
 }, { immediate: true })
@@ -155,6 +193,9 @@ watch(() => props.cardId, (id) => {
   border: 0; background: var(--surface-2); font: inherit; cursor: pointer; text-align: left; }
 .stmt-summary:hover { background: color-mix(in srgb, var(--primary) 6%, var(--surface-2)); }
 .stmt-period { font-weight: 750; font-size: 12px; }
+.stmt-repaid-tag { flex: 0 0 auto; padding: 2px 7px; border-radius: 999px; background: color-mix(in srgb, var(--success) 12%, transparent); color: var(--success-text); font-size: 11px; font-weight: 750; }
+.stmt-amount.repaid { opacity: .55; text-decoration: line-through; }
+.stmt-actions { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
 .stmt-amount { margin-left: auto; font-weight: 800; }
 .stmt-due { font-size: 11px; white-space: nowrap; }
 .stmt-verify { flex: 0 0 auto; width: 18px; height: 18px; display: inline-flex; align-items: center;

@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
@@ -8,6 +8,7 @@ from sqlalchemy.pool import StaticPool
 
 from app import main
 from app.credit_card_rules import next_due_date, statement_date_for_due
+from app.services.scheduler import _local_today
 from app.database import Base, get_db
 from app.deps import get_current_user
 from app.models import (
@@ -263,3 +264,171 @@ def test_delete_credit_card_clears_log_then_outbox_then_card(credit_card_api):
             CreditCardNotificationLog.credit_card_id == card.id
         )
     ).all() == []
+
+
+def _add_statement(db, card, user, *, due_date, total_due=100.0, verify="ok", repaid=False):
+    from app.models import CreditCardStatement
+
+    stmt = CreditCardStatement(
+        user_id=user.id, card_id=card.id, bank_key="cmb", card_last_four=card.last_four or "1234",
+        match_status="matched", due_date=due_date, total_due=total_due,
+        message_id=f"defer-{due_date}-{verify}-{total_due}", verify_status=verify,
+        is_repaid=repaid,
+    )
+    db.add(stmt)
+    db.commit()
+    return stmt
+
+
+def test_mark_repaid_defers_next_due_date_to_next_period(credit_card_api):
+    """标记已还款后：卡片 next_due_date/days_until_due 顺延到下期。"""
+    client, db, alice, _, _ = credit_card_api
+    created = client.post("/api/credit-cards", json=valid_payload(due_day=28, statement_day=10))
+    card_id = created.json()["id"]
+    today = _local_today()
+    current_due = next_due_date(today, 28)
+
+    before = client.get(f"/api/credit-cards/{card_id}").json()
+    assert before["next_due_date"] == current_due.isoformat()
+
+    _add_statement(db, db.get(CreditCard, card_id), alice, due_date=current_due)
+    resp = client.post(f"/api/credit-cards/{card_id}/mark-repaid")
+    assert resp.json()["marked"] == 1
+
+    after = client.get(f"/api/credit-cards/{card_id}").json()
+    next_period = next_due_date(current_due.fromordinal(current_due.toordinal() + 1), 28)
+    assert after["next_due_date"] == next_period.isoformat()
+    assert after["days_until_due"] == (next_period - today).days
+    assert after["next_statement_date"] == statement_date_for_due(next_period, 10, 28).isoformat()
+    assert after["repaid_through_due"] == current_due.isoformat()
+
+
+def test_cancel_statement_mark_does_not_rollback_period(credit_card_api):
+    """取消单期标记不回拨已还界线（用户确认语义）：只把金额加回待还总额。"""
+    client, db, alice, _, _ = credit_card_api
+    created = client.post("/api/credit-cards", json=valid_payload(due_day=28))
+    card_id = created.json()["id"]
+    stmt = _add_statement(db, db.get(CreditCard, card_id), alice, due_date=next_due_date(_local_today(), 28))
+
+    assert client.post(f"/api/credit-cards/{card_id}/mark-repaid").json()["marked"] == 1
+    after = client.get(f"/api/credit-cards/{card_id}").json()
+    deferred_due = after["next_due_date"]
+
+    # 取消标记
+    assert client.patch(
+        f"/api/credit-cards/statements/{stmt.id}/repaid", json={"is_repaid": False}
+    ).status_code == 200
+    unchanged = client.get(f"/api/credit-cards/{card_id}").json()
+    assert unchanged["next_due_date"] == deferred_due  # 周期不回拨
+    assert unchanged["repaid_through_due"] is not None
+
+
+def test_single_statement_mark_with_null_due_date_does_not_defer(credit_card_api):
+    """账单 due_date 为 NULL（解析器未提取到还款日）：单期标记不推进界线。"""
+    client, db, alice, _, _ = credit_card_api
+    created = client.post("/api/credit-cards", json=valid_payload(due_day=28))
+    card_id = created.json()["id"]
+    stmt = _add_statement(db, db.get(CreditCard, card_id), alice, due_date=None)
+
+    assert client.patch(
+        f"/api/credit-cards/statements/{stmt.id}/repaid", json={"is_repaid": True}
+    ).status_code == 200
+    body = client.get(f"/api/credit-cards/{card_id}").json()
+    assert body["repaid_through_due"] is None  # 保守：宁多提醒一期
+
+
+def test_mark_repaid_across_two_periods_takes_max_due_date(credit_card_api):
+    """跨两期未还：批量标记后界线取标记账单最大 due_date，展示跳到再下期。"""
+    client, db, alice, _, _ = credit_card_api
+    created = client.post("/api/credit-cards", json=valid_payload(due_day=5))
+    card_id = created.json()["id"]
+    today = _local_today()
+    current_due = next_due_date(today, 5)
+    # 构造上期与当期两笔（上期 due_date 手动给 5 日锚定值）
+    last_period_due = current_due - timedelta(days=30)
+    from app.models import CreditCardStatement
+    db.add(CreditCardStatement(
+        user_id=alice.id, card_id=card_id, bank_key="cmb", card_last_four="1234",
+        match_status="matched", due_date=last_period_due, total_due=50,
+        message_id="defer-old", verify_status="ok",
+    ))
+    db.add(CreditCardStatement(
+        user_id=alice.id, card_id=card_id, bank_key="cmb", card_last_four="1234",
+        match_status="matched", due_date=current_due, total_due=80,
+        message_id="defer-cur", verify_status="ok",
+    ))
+    db.commit()
+
+    resp = client.post(f"/api/credit-cards/{card_id}/mark-repaid")
+    assert resp.json()["marked"] == 2
+
+    after = client.get(f"/api/credit-cards/{card_id}").json()
+    assert after["repaid_through_due"] == current_due.isoformat()
+    assert after["next_due_date"] == next_due_date(current_due + timedelta(days=1), 5).isoformat()
+
+
+def test_mark_repaid_after_due_day_does_not_skip_next_period(credit_card_api, monkeypatch):
+    """还款日次日才标记：界线应停在「本月已还的那期」，不能自动跳到下期
+    （否则下期日历事件与提醒被错误抑制）。"""
+    from app.routers import credit_cards as cc_router
+    from app.services import scheduler as sched
+
+    client, db, alice, _, _ = credit_card_api
+    created = client.post("/api/credit-cards", json=valid_payload(due_day=5, statement_day=20))
+    card_id = created.json()["id"]
+    # 假设今天是 9/6：9/5 还款日刚过，用户还的是 9 月这期
+    fake_today = date(2026, 9, 6)
+    monkeypatch.setattr(sched, "_local_today", lambda: fake_today)
+    # credit_cards 模块通过 `scheduler._local_today()` 属性访问，patch 模块属性即可
+    monkeypatch.setattr(cc_router.scheduler, "_local_today", lambda: fake_today)
+
+    _add_statement(db, db.get(CreditCard, card_id), alice, due_date=date(2026, 9, 5))
+    resp = client.post(f"/api/credit-cards/{card_id}/mark-repaid")
+    assert resp.json()["marked"] == 1
+
+    db.expire_all()
+    card = db.get(CreditCard, card_id)
+    assert card.repaid_through_due == date(2026, 9, 5)
+
+    body = client.get(f"/api/credit-cards/{card_id}").json()
+    assert body["next_due_date"] == "2026-10-05"  # 只顺延一期：10/5
+    assert body["repaid_through_due"] == "2026-09-05"
+
+
+def test_mark_repaid_month_end_anchor_card_after_due_day(credit_card_api, monkeypatch):
+    """31 日卡（月末锚定）：3/1 标记已还的 2/28 期账单，界线=2/28、
+    下期=3/31——不能因为「本月锚点」是 3/31 就把 3 月期也标成已还。"""
+    from app.routers import credit_cards as cc_router
+    from app.services import scheduler as sched
+
+    client, db, alice, _, _ = credit_card_api
+    created = client.post("/api/credit-cards", json=valid_payload(due_day=31, statement_day=10))
+    card_id = created.json()["id"]
+    monkeypatch.setattr(sched, "_local_today", lambda: date(2026, 3, 1))
+    monkeypatch.setattr(cc_router.scheduler, "_local_today", lambda: date(2026, 3, 1))
+
+    _add_statement(db, db.get(CreditCard, card_id), alice, due_date=date(2026, 2, 28))
+    assert client.post(f"/api/credit-cards/{card_id}/mark-repaid").json()["marked"] == 1
+
+    body = client.get(f"/api/credit-cards/{card_id}").json()
+    assert body["repaid_through_due"] == "2026-02-28"
+    assert body["next_due_date"] == "2026-03-31"  # 3 月期保留，不被抑制
+
+
+def test_mark_repaid_idempotent_retry_still_returns_card(credit_card_api):
+    """幂等重试（marked=0，如首次响应丢失）：仍返回刷新后的卡片，
+    前端可凭它修复本地过期的派生字段。"""
+    client, db, alice, _, _ = credit_card_api
+    created = client.post("/api/credit-cards", json=valid_payload(due_day=28))
+    card_id = created.json()["id"]
+    _add_statement(db, db.get(CreditCard, card_id), alice, due_date=next_due_date(_local_today(), 28))
+
+    first = client.post(f"/api/credit-cards/{card_id}/mark-repaid").json()
+    assert first["marked"] == 1
+    assert first["card"]["repaid_through_due"] is not None
+
+    second = client.post(f"/api/credit-cards/{card_id}/mark-repaid").json()
+    assert second["marked"] == 0
+    assert second["card"] is not None
+    assert second["card"]["id"] == card_id
+    assert second["card"]["repaid_through_due"] == first["card"]["repaid_through_due"]

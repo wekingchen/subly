@@ -29,6 +29,29 @@ def next_due_date(as_of: date, due_day: int) -> date:
     return anchor_month_day(year, month, due_day)
 
 
+def next_due_date_after(
+    as_of: date, due_day: int, *, repaid_through: date | None = None
+) -> date:
+    """返回 as_of 当天或之后最近的、严格晚于 repaid_through 的计划还款日。
+
+    标记已还款的卡顺延到下个周期：repaid_through 是「已还到的名义还款日
+    （含）」，派生结果必须落在它之后。repaid_through 为 None 时等价于
+    next_due_date。界线按名义月直接定位（O(1)），不逐期循环。
+    契约前提：repaid_through 距 date.max 至少一个月（界线逼近 date.max
+    时下一名义月不可表示）；备份恢复端拒绝此类值，正常业务不可达。
+    """
+    due = next_due_date(as_of, due_day)
+    if repaid_through is None or due > repaid_through:
+        return due
+    # 界线同月的锚定日若已严格晚于界线，即为所求（如界线 9/3、due_day 5 → 9/5）；
+    # 否则取下一名义月的锚定日（界线恰为某期还款日的常规场景）。
+    anchored = anchor_month_day(repaid_through.year, repaid_through.month, due_day)
+    if anchored > repaid_through:
+        return anchored
+    year, month = _next_month(repaid_through.year, repaid_through.month)
+    return anchor_month_day(year, month, due_day)
+
+
 def statement_date_for_due(due_date: date, statement_day: int, due_day: int) -> date:
     """根据名义账单日和还款日返回指定还款期对应的账单日。"""
     if not 1 <= due_day <= 31:

@@ -56,6 +56,9 @@ _COLUMNS = [
     ("notification_log", "retry_cycle", "INTEGER"),
     ("credit_cards", "credit_limit", "FLOAT"),
     ("imap_accounts", "banks", "JSON"),
+    ("credit_card_statements", "is_repaid", "BOOLEAN NOT NULL DEFAULT 0"),
+    ("credit_card_statements", "repaid_at", "TIMESTAMP"),
+    ("credit_cards", "repaid_through_due", "DATE"),
 ]
 
 

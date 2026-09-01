@@ -7,7 +7,7 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
 from app import activity, database
-from app.credit_card_rules import next_due_date
+from app.credit_card_rules import next_due_date_after
 from app.models import (
     CreditCard,
     CreditCardNotificationLog,
@@ -111,7 +111,11 @@ def _prepare_delivery(db: Session, claim: dict) -> tuple[str, dict | None]:
         return "canceled", None
     if row.days_before not in (card.remind_days_before or []):
         return "canceled", None
-    if next_due_date(row.business_date, card.due_day) != row.due_date:
+    # 复核用与扫描/展示同源的顺延派生：标记已还款后（repaid_through_due
+    # 推进），已入队的当期 pending 在此自动取消，不再打扰
+    if next_due_date_after(
+        row.business_date, card.due_day, repaid_through=card.repaid_through_due
+    ) != row.due_date:
         return "canceled", None
 
     from app.services.scheduler import _local_today

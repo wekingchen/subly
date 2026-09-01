@@ -59,6 +59,12 @@ export function creditCardCalendarEvents(cards, start, end) {
       if (!card?.is_active || card.show_in_calendar === false) continue
       const occurrence = anchorMonthDay(year, month, card.due_day)
       if (occurrence < rangeStart || occurrence > rangeEnd) continue
+      // 已还款的期次不再出现在日历（与后端 iCal 过滤同口径；
+      // repaid_through_due 为名义还款日 ISO 字符串，含界线当天）
+      if (card.repaid_through_due) {
+        const repaidThrough = parseLocalDate(card.repaid_through_due)
+        if (repaidThrough && occurrence <= repaidThrough) continue
+      }
       const occurrenceDate = toISODate(occurrence)
       events.push({
         id: `credit-card:${card.id}:${occurrenceDate}`,

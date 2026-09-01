@@ -37,6 +37,19 @@ describe('creditCardCalendarEvents', () => {
     expect(grouped.get('2024-01-31')).toHaveLength(1)
   })
 
+  it('排除已还款界线覆盖的期次（含界线当天），之后期次保留', () => {
+    const events = creditCardCalendarEvents(
+      [{ ...card, repaid_through_due: '2024-02-29' }],
+      new Date(2024, 0, 1),
+      new Date(2024, 3, 30)
+    )
+    // 1/31 与 2/29（界线含当天）已还 → 不出现；3/31 起保留
+    expect(events.map((event) => event.occurrence_date)).toEqual([
+      '2024-03-31',
+      '2024-04-30'
+    ])
+  })
+
   it('详情 raw 携带所点击周期的日期，而非卡片当前下一期', () => {
     const cards = [{
       id: 12,

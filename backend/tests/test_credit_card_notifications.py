@@ -435,3 +435,69 @@ def test_external_outputs_never_render_credit_limit(tmp_path, monkeypatch):
     finally:
         db.close()
         engine.dispose()
+
+
+def test_repaid_card_produces_no_reminder_candidates(tmp_path, monkeypatch):
+    """标记已还款后：提醒扫描按顺延派生，不再产生当期候选。"""
+    Session, engine = make_db(tmp_path, monkeypatch)
+    db = Session()
+    try:
+        user, card = add_card(db)  # due_day=5, remind [7,3,1,0]
+        card.repaid_through_due = date(2026, 9, 5)  # 当期 9/5 已还
+        db.commit()
+
+        planned = credit_card_reminders.plan_reminder_candidates(db, date(2026, 8, 29))
+        # 未标记时该卡应产生 9/5 提前 7 天的候选；标记后顺延到 10/5，8/29 距离 37 天不在提醒窗口
+        assert planned["candidates"] == []
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_repaid_card_cancels_already_enqueued_pending_reminders(tmp_path, monkeypatch):
+    """已入队未投递的当期提醒：标记还款后在投递前复核中被自动取消。"""
+    Session, engine = make_db(tmp_path, monkeypatch)
+    db = Session()
+    try:
+        _, card = add_card(db)
+        as_of = date(2026, 8, 29)
+        credit_card_reminders.run_reminder_scan(as_of)
+        assert db.scalar(select(CreditCardNotificationOutbox)).status == "pending"
+
+        # 用户标记该期已还款 → 界线推进到 9/5
+        card.repaid_through_due = date(2026, 9, 5)
+        db.commit()
+
+        result = credit_card_notification_outbox.dispatch_due()
+        assert result["canceled"] == 1
+        assert result["sent"] == 0
+        db.expire_all()
+        row = db.scalar(select(CreditCardNotificationOutbox))
+        assert row.status == "canceled"
+        assert row.canceled_at is not None
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_ical_feed_excludes_repaid_period(tmp_path, monkeypatch):
+    """iCal feed：已还界线覆盖的期次不再生成还款事件，之后期次保留。"""
+    Session, engine = make_db(tmp_path, monkeypatch)
+    db = Session()
+    try:
+        user, card = add_card(db)  # due_day=5
+        card.repaid_through_due = date(2026, 9, 5)
+        db.commit()
+
+        data = calendar_feed.build_calendar(db, user, today=date(2026, 8, 29))
+        dates = [
+            c.decoded("dtstart")
+            for c in Calendar.from_ical(data).walk("VEVENT")
+            if "计划还款" in str(c["summary"])
+        ]
+        # 窗口含过去 31 天：8/5 与 9/5 两期已还 → 不出现；最早是 10/5
+        assert all(d > date(2026, 9, 5) for d in dates)
+        assert min(dates) == date(2026, 10, 5)
+    finally:
+        db.close()
+        engine.dispose()

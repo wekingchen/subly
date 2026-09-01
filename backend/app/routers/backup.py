@@ -5,7 +5,7 @@
 普通用户只能导出/导入自己的数据；管理员还可整站备份/恢复全部成员的数据。
 """
 import math
-from datetime import date
+from datetime import date, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -112,6 +112,8 @@ def _credit_card_dict(card: CreditCard) -> dict:
         "credit_limit": card.credit_limit,
         "is_active": card.is_active,
         "show_in_calendar": card.show_in_calendar,
+        # 已还界线（名义还款日）：跨备份保留顺延/提醒静默状态
+        "repaid_through_due": card.repaid_through_due,
     }
 
 
@@ -133,6 +135,9 @@ def _statement_dict(s: CreditCardStatement, card_index: dict[int, int]) -> dict:
         "message_id": s.message_id,
         "subject": s.subject,
         "verify_status": s.verify_status,
+        # 还款标记：用户手动标记，跨备份保留（待还总额据此剔除）
+        "is_repaid": s.is_repaid,
+        "repaid_at": s.repaid_at,
         # 备份内来源局部 key：源邮箱地址（不含凭据）；恢复端映射到同邮箱账户
         "source_email": s.source_account.email if s.source_account else None,
         "items": [
@@ -168,6 +173,15 @@ def _validated_statements(data: dict) -> list[dict] | None:
         items = s.get("items")
         if items is not None and not isinstance(items, list):
             raise ValueError(f"备份 credit_card_statements 第 {index} 项 items 不是数组")
+        # 还款标记字段（新版备份才有）：畸形值要响亮拒绝，不能静默翻转业务状态
+        # （bool("false") is True——字符串 "false" 会被恢复成已还款，掩盖真实欠款）
+        if "is_repaid" in s and not isinstance(s["is_repaid"], bool):
+            raise ValueError(f"备份 credit_card_statements 第 {index} 项 is_repaid 必须是布尔值")
+        # repaid_at 允许 datetime（进程内导出直传）或 ISO 字符串（JSON 备份文件），其余拒绝
+        repaid_at = s.get("repaid_at")
+        if repaid_at is not None and not isinstance(repaid_at, datetime):
+            if not isinstance(repaid_at, str) or _parse_datetime(repaid_at) is None:
+                raise ValueError(f"备份 credit_card_statements 第 {index} 项 repaid_at 非法")
         for j, item in enumerate(items or [], start=1):
             if not isinstance(item, dict):
                 raise ValueError(f"备份 credit_card_statements 第 {index} 项 items 第 {j} 条必须是对象")
@@ -272,6 +286,14 @@ def _parse_date(v):
         return None
 
 
+def _parse_datetime(v):
+    """备份里的时间戳（ISO 字符串）→ naive datetime；非法值静默为 None。"""
+    try:
+        return datetime.fromisoformat(v) if v else None
+    except (TypeError, ValueError):
+        return None
+
+
 def _restore_currency_rate(
     db: Session, currency: Currency, payload: dict, user_base_currency: str
 ) -> None:
@@ -341,8 +363,23 @@ def _validated_credit_cards(data: dict) -> list[dict] | None:
     for index, card in enumerate(cards, start=1):
         if not isinstance(card, dict):
             raise ValueError(f"备份 credit_cards 第 {index} 项必须是对象")
+        # 已还界线不在 CreditCardIn（表单 schema）：单独校验，旧备份缺省 None。
+        # 允许 date 或 ISO 字符串（JSON 反序列化形态），其余响亮拒绝。
+        # 拒绝 date.max：派生（next_due_date_after）需计算其后继日期，
+        # date.max 会在读取卡片时溢出成 500；这里在写入前把关。
+        repaid_through = card.get("repaid_through_due")
+        if repaid_through is not None and not isinstance(repaid_through, date):
+            if not isinstance(repaid_through, str) or _parse_date(repaid_through) is None:
+                raise ValueError(f"备份 credit_cards 第 {index} 项 repaid_through_due 非法")
+        if isinstance(repaid_through, date) and repaid_through >= date.max - timedelta(days=31):
+            raise ValueError(f"备份 credit_cards 第 {index} 项 repaid_through_due 超出可用日期范围")
         try:
-            validated.append(CreditCardIn.model_validate(card).model_dump())
+            # CreditCardIn 是 extra=forbid：剔除单独校验过的 repaid_through_due 再验
+            validated.append(
+                CreditCardIn.model_validate(
+                    {k: v for k, v in card.items() if k != "repaid_through_due"}
+                ).model_dump()
+            )
         except ValueError as exc:
             raise ValueError(f"备份 credit_cards 第 {index} 项非法：{exc}") from exc
     return validated
@@ -717,6 +754,9 @@ def _restore_entities(
         # 尾号不唯一不可作关联键；账单的 card_key 指向导出时的卡片数组序。
         card_key_map: dict[int, int] = {}
         for idx, card in enumerate(cards_in):
+            # repaid_through_due 已在 _validated_credit_cards 校验；
+            # 原始 dict 取值（model_dump 后的 cards_in 不含该字段）
+            raw_repaid_through = (data.get("credit_cards") or [])[idx].get("repaid_through_due")
             new_card = CreditCard(
                 user_id=user.id,
                 display_name=card["display_name"].strip(),
@@ -728,6 +768,11 @@ def _restore_entities(
                 credit_limit=card.get("credit_limit"),
                 is_active=card["is_active"],
                 show_in_calendar=card["show_in_calendar"],
+                repaid_through_due=(
+                    raw_repaid_through
+                    if isinstance(raw_repaid_through, date)
+                    else _parse_date(raw_repaid_through)
+                ),
             )
             db.add(new_card)
             db.flush()
@@ -800,6 +845,13 @@ def _restore_entities(
                     message_id=s["message_id"],
                     subject=s.get("subject"),
                     verify_status=s.get("verify_status") or "ok",
+                    # is_repaid/repaid_at：旧版备份无此字段，缺省为未还。
+                    # repaid_at 已在 _validated_statements 校验（datetime 或 ISO 字符串）
+                    is_repaid=bool(s.get("is_repaid") or False),
+                    repaid_at=(
+                        s["repaid_at"] if isinstance(s.get("repaid_at"), datetime)
+                        else _parse_datetime(s.get("repaid_at"))
+                    ),
                 )
                 db.add(record)
                 db.flush()

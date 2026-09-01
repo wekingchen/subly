@@ -4,7 +4,12 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
-from app.credit_card_rules import interest_free_period, next_due_date, statement_date_for_due
+from app.credit_card_rules import (
+    anchor_month_day,
+    interest_free_period,
+    next_due_date_after,
+    statement_date_for_due,
+)
 from app.database import get_db
 from app.deps import get_current_user
 from app.models import (
@@ -16,8 +21,9 @@ from app.models import (
     CreditCardStatementPollRun,
     User,
 )
-from app.schemas import CreditCardIn, CreditCardOut, CreditCardUpdate
+from app.schemas import CreditCardIn, CreditCardOut, CreditCardUpdate, StatementRepaidIn
 from app.services import credit_card_notification_outbox, scheduler
+from app.services.scheduler import utcnow
 
 router = APIRouter(prefix="/api/credit-cards", tags=["credit-cards"])
 
@@ -40,7 +46,10 @@ def _owned_card(db: Session, card_id: int, user_id: int) -> CreditCard:
 
 def _to_out(card: CreditCard, as_of: date | None = None) -> CreditCardOut:
     business_date = as_of or scheduler._local_today()
-    due_date = next_due_date(business_date, card.due_day)
+    # 已还款顺延：标记过的期次（repaid_through_due 含）之后的第一个还款日
+    due_date = next_due_date_after(
+        business_date, card.due_day, repaid_through=card.repaid_through_due
+    )
     statement_date = statement_date_for_due(
         due_date,
         card.statement_day,
@@ -59,6 +68,7 @@ def _to_out(card: CreditCard, as_of: date | None = None) -> CreditCardOut:
         credit_limit=card.credit_limit,
         is_active=card.is_active,
         show_in_calendar=card.show_in_calendar,
+        repaid_through_due=card.repaid_through_due,
         created_at=card.created_at,
         updated_at=card.updated_at,
         next_statement_date=statement_date,
@@ -178,6 +188,8 @@ def _statement_out(s: CreditCardStatement) -> dict:
         "credit_limit": s.credit_limit,
         "subject": s.subject,
         "verify_status": s.verify_status,
+        "is_repaid": s.is_repaid,
+        "repaid_at": s.repaid_at,
         "parsed_at": s.parsed_at,
         "item_count": len(s.items),
     }
@@ -322,3 +334,165 @@ def list_all_statement_items(
     if stmt is None:
         raise HTTPException(404, "账单不存在")
     return _statement_items_response(db, stmt)
+
+
+# --------------------------------------------------------------------------- #
+# 还款标记与待还汇总：用户在卡片上手动标记已还款，待还总额实时剔除
+# --------------------------------------------------------------------------- #
+
+def _owned_statement(db: Session, statement_id: int, user_id: int) -> CreditCardStatement:
+    stmt = db.scalar(
+        select(CreditCardStatement).where(
+            CreditCardStatement.id == statement_id,
+            CreditCardStatement.user_id == user_id,
+        )
+    )
+    if stmt is None:
+        raise HTTPException(404, "账单不存在")
+    return stmt
+
+
+def _advance_repaid_through(card: CreditCard, due_date: date | None) -> bool:
+    """把卡的已还界线单调推进到 due_date 所在名义期；返回是否变化。
+
+    取 max 保证取消再标记、旧期单标等操作不会回拨或倒退。due_date 为
+    NULL（解析器未提取到还款日）时保守不推进——宁多提醒一期，不错静默。
+    """
+    if due_date is None:
+        return False
+    if card.repaid_through_due is not None and card.repaid_through_due >= due_date:
+        return False
+    card.repaid_through_due = due_date
+    return True
+
+
+@router.patch("/statements/{statement_id}/repaid")
+def set_statement_repaid(
+    statement_id: int,
+    payload: StatementRepaidIn,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """标记/取消某期账单已还款（含已删卡的孤立账单）。
+
+    路由在 /{card_id} 之前注册以避免路径歧义；重复解析同一封邮件刷新
+    账单字段时保留该标记（见 sync 的 record 已存在分支）。
+    标记时推进卡的已还界线（顺延展示/静默当期提醒）；取消标记只复位
+    金额标记，不回拨周期（用户确认的语义）。
+    """
+    stmt = _owned_statement(db, statement_id, user.id)
+    stmt.is_repaid = payload.is_repaid
+    stmt.repaid_at = utcnow() if payload.is_repaid else None
+    card = None
+    if payload.is_repaid and stmt.card_id is not None:
+        card = db.get(CreditCard, stmt.card_id)
+        if card is not None and _advance_repaid_through(card, stmt.due_date):
+            _invalidate_scan_checkpoint(db)
+    db.commit()
+    db.refresh(card) if card is not None else None
+    return {
+        "ok": True,
+        "id": stmt.id,
+        "is_repaid": stmt.is_repaid,
+        # 标记推进了已还界线 → 派生字段（next_due_date 等）可能变化，
+        # 返回更新后的卡片供前端原位替换（card 为 NULL = 孤立账单）
+        "card": _to_out(card) if card is not None else None,
+    }
+
+
+@router.post("/{card_id}/mark-repaid")
+def mark_card_repaid(
+    card_id: int,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """卡片上的「标记已还款」：一次标记该卡全部未标记的勾稽通过账单。
+
+    与待还汇总同口径（verify_status='ok'）——确认弹窗展示的范围就是
+    实际标记的范围；mismatch 账单不混入，避免「没展示的账单被悄悄
+    标记、勾稽修复后欠款被隐藏」。已标记的账单不动（不重置 repaid_at）。
+    标记后把卡的已还界线推进到 max(当期名义还款日, 标记账单最大 due_date)：
+    展示顺延到下期，当期各提前提醒静默（已入队的在投递前复核取消）。
+    返回本次标记的账单数。
+    """
+    card = _owned_card(db, card_id, user.id)
+    marked_max_due = db.scalar(
+        select(func.max(CreditCardStatement.due_date)).where(
+            CreditCardStatement.card_id == card.id,
+            CreditCardStatement.is_repaid.is_(False),
+            CreditCardStatement.verify_status == "ok",
+        )
+    )
+    result = db.execute(
+        CreditCardStatement.__table__.update()
+        .where(
+            CreditCardStatement.card_id == card.id,
+            CreditCardStatement.is_repaid.is_(False),
+            CreditCardStatement.verify_status == "ok",
+        )
+        .values(is_repaid=True, repaid_at=utcnow())
+    )
+    marked_count = result.rowcount or 0
+    if marked_count:
+        # 界线 = 本次标记账单的最大 due_date（最准确——账单上的还款日就是
+        # 用户还的那期，月末锚定卡跨月标记也不会多跳一期）。
+        # 全部为 NULL（解析器未提取到还款日）时退回本月名义锚定日，
+        # 保证「标记了就顺延」；next_due_date_after 会把界线规范化到名义期。
+        if marked_max_due is not None:
+            boundary = marked_max_due
+        else:
+            today = scheduler._local_today()
+            boundary = anchor_month_day(today.year, today.month, card.due_day)
+        _advance_repaid_through(card, boundary)
+        _invalidate_scan_checkpoint(db)
+    db.commit()
+    db.refresh(card)
+    return {
+        "ok": True,
+        "marked": marked_count,
+        # 界线推进改变了派生字段（next_due_date 等）：返回更新后的卡片，
+        # 前端原位替换，无需整页重拉。marked=0（幂等重试/并发标记）时
+        # 也返回——上一次请求的响应可能丢失，靠它修复本地过期状态
+        "card": _to_out(card),
+    }
+
+
+@router.get("/outstanding/summary")
+def outstanding_summary(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """待还款总额：所有已出账单未标记还款的合计（勾稽异常 mismatch 不计入）。
+
+    含已删卡的孤立账单（历史账单的钱仍是要还的，card_id=None 条目）。
+    total_due 为 NULL 的账单按 0 计入金额但仍计数——期数口径与批量标记
+    弹窗一致，金额未知不代表不用还。
+    """
+    rows = db.execute(
+        select(
+            CreditCardStatement.total_due,
+            CreditCardStatement.card_id,
+            func.count(),
+        )
+        .where(
+            CreditCardStatement.user_id == user.id,
+            CreditCardStatement.is_repaid.is_(False),
+            CreditCardStatement.verify_status == "ok",
+        )
+        .group_by(CreditCardStatement.total_due, CreditCardStatement.card_id)
+    ).all()
+    total = sum(float(r[0] or 0.0) for r in rows)
+    unrepaid_count = sum(int(r[2]) for r in rows)
+    per_card: dict[int | None, dict] = {}
+    for total_due, card_id, cnt in rows:
+        entry = per_card.setdefault(card_id, {"total_due": 0.0, "count": 0})
+        entry["total_due"] += float(total_due or 0.0)
+        entry["count"] += cnt
+    return {
+        "total": round(total, 2),
+        "unrepaid_count": unrepaid_count,
+        "per_card": [
+            {"card_id": cid, "total_due": round(v["total_due"], 2), "count": v["count"]}
+            for cid, v in per_card.items()
+        ],
+    }

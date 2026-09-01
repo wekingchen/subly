@@ -263,6 +263,9 @@ class CreditCard(Base):
     credit_limit: Mapped[float | None] = mapped_column(Float, nullable=True)  # 授信上限，仅作记录，不外发
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     show_in_calendar: Mapped[bool] = mapped_column(Boolean, default=True)
+    # 已还款到的名义还款日（含）：≤ 此期的展示/提醒视为已处理——卡片顺延到
+    # 下期、当期提前提醒取消。标记已还款时单调推进，取消标记不回拨。
+    repaid_through_due: Mapped[date | None] = mapped_column(Date, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), onupdate=func.now()
@@ -310,6 +313,9 @@ class CreditCardStatement(Base):
     message_id: Mapped[str] = mapped_column(String(998))             # 邮件 Message-ID（去重）
     subject: Mapped[str | None] = mapped_column(String(255), nullable=True)   # 人识别用
     verify_status: Mapped[str] = mapped_column(String(16), default="ok")      # ok|mismatch（勾稽失败）
+    # 用户手动标记已还款（卡片上操作）；待还总额剔除已标记的账单
+    is_repaid: Mapped[bool] = mapped_column(Boolean, default=False)
+    repaid_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     parsed_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 

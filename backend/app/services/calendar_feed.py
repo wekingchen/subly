@@ -275,6 +275,9 @@ def build_calendar(
 
     for card in credit_cards:
         for occurrence in due_dates_in_range(window_start, window_end, card.due_day):
+            # 已还款的期次不再出现在日历（标记顺延语义，与卡片展示一致）
+            if card.repaid_through_due is not None and occurrence <= card.repaid_through_due:
+                continue
             event_count += 1
             if event_count > MAX_EVENTS:
                 raise CalendarFeedTooLarge("Feed 事件数量超过限制")

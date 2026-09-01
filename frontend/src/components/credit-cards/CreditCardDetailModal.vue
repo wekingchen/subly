@@ -23,7 +23,7 @@
 
     <CreditCardCycleTrack :card="card" />
 
-    <CreditCardStatementList :card-id="card.id" />
+    <CreditCardStatementList :card-id="card.id" @repaid-changed="(updated) => $emit('statements-changed', updated)" />
 
     <dl class="detail-grid">
       <div><dt>{{ t('creditCards.statementDay') }}</dt><dd>{{ t('creditCards.monthDayValue', { n: card.statement_day }) }}</dd></div>
@@ -53,7 +53,7 @@ import CreditCardCycleTrack from './CreditCardCycleTrack.vue'
 import CreditCardStatementList from './CreditCardStatementList.vue'
 
 defineProps({ card: { type: Object, required: true } })
-const emit = defineEmits(['close', 'edit'])
+const emit = defineEmits(['close', 'edit', 'statements-changed'])
 const { t } = useI18n()
 function formatLimit(value) {
   return new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 2 }).format(Number(value))

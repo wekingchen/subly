@@ -7,7 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app import database
-from app.credit_card_rules import next_due_date
+from app.credit_card_rules import next_due_date_after
 from app.models import CreditCard, User
 from app.services import credit_card_notification_outbox, notification_transport
 
@@ -101,7 +101,10 @@ def plan_reminder_candidates(
         user = db.get(User, card.user_id)
         if not user or not user.is_active or not card.is_active:
             continue
-        due_date = next_due_date(as_of, card.due_day)
+        # 已还款顺延：标记过的期次不再产生提醒候选（当期静默）
+        due_date = next_due_date_after(
+            as_of, card.due_day, repaid_through=card.repaid_through_due
+        )
         days_left = (due_date - as_of).days
         reminder_days = card.remind_days_before or []
         if days_left not in reminder_days:

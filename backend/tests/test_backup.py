@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime
 
 import pytest
 from sqlalchemy import create_engine, select
@@ -11,6 +11,7 @@ from app.models import (
     CreditCard,
     CreditCardNotificationLog,
     CreditCardNotificationOutbox,
+    CreditCardStatement,
     Currency,
     ExchangeRate,
     NotificationLog,
@@ -1042,6 +1043,7 @@ def test_backup_v3_exports_only_credit_card_configuration_for_current_user():
             "credit_limit": None,
             "is_active": True,
             "show_in_calendar": False,
+            "repaid_through_due": None,
         }]
         rendered = repr(exported)
         assert "他人卡" not in rendered
@@ -1226,6 +1228,103 @@ def test_legacy_v3_card_without_credit_limit_key_imports_as_none():
         restored = db.scalar(select(CreditCard).where(CreditCard.user_id == user.id))
         assert restored.display_name == "旧格式卡"
         assert restored.credit_limit is None
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def _make_statement(db, user, **overrides):
+    fields = dict(
+        user_id=user.id, card_id=None, bank_key="cmb", card_last_four="6310",
+        match_status="unmatched", total_due=100.0, message_id="bk-msg-1",
+        verify_status="ok", is_repaid=False,
+    )
+    fields.update(overrides)
+    stmt = CreditCardStatement(**fields)
+    db.add(stmt)
+    db.commit()
+    return stmt
+
+
+def test_backup_roundtrips_statement_repaid_flag():
+    """还款标记随备份导出并正确恢复；旧版备份（无 is_repaid）默认未还。"""
+    db, engine = make_db()
+    try:
+        user = add_user(db)
+        _make_statement(
+            db, user, is_repaid=True,
+            repaid_at=datetime(2026, 9, 1, 12, 0, 0),
+            message_id="bk-repaid",
+        )
+
+        exported = backup._collect_entities(db, user)
+        assert exported["credit_card_statements"][0]["is_repaid"] is True
+        assert exported["credit_card_statements"][0]["repaid_at"] is not None
+
+        other = add_user(db, "bob")
+        backup._restore_entities(db, other, exported, replace=False)
+        db.commit()
+        restored = db.scalar(
+            select(CreditCardStatement).where(CreditCardStatement.user_id == other.id)
+        )
+        assert restored.is_repaid is True
+        assert restored.repaid_at is not None
+
+        # 旧版备份：字段缺失 → 默认未还（账单恢复块要求 credit_cards 同时存在，
+        # 与真实 v4 导出一致——卡片与账单总是成对导出）
+        legacy = {
+            "credit_cards": [],
+            "subscriptions": [],
+            "credit_card_statements": [{
+                "bank_key": "cmb", "card_last_four": "6310", "message_id": "bk-legacy",
+                "total_due": 50.0,
+            }],
+        }
+        backup._restore_entities(db, other, legacy, replace=False)
+        db.commit()
+        legacy_stmt = db.scalar(
+            select(CreditCardStatement).where(
+                CreditCardStatement.user_id == other.id,
+                CreditCardStatement.message_id == "bk-legacy",
+            )
+        )
+        assert legacy_stmt.is_repaid is False
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_backup_rejects_non_boolean_statement_is_repaid():
+    """畸形 is_repaid（字符串 "false"）必须响亮拒绝——bool("false") is True
+    会把账单恢复成已还款，掩盖真实欠款。"""
+    db, engine = make_db()
+    try:
+        user = add_user(db)
+        with pytest.raises(ValueError):
+            backup._restore_entities(db, user, {
+                "credit_card_statements": [{
+                    "bank_key": "cmb", "card_last_four": "6310",
+                    "message_id": "bk-bad", "is_repaid": "false",
+                }]
+            }, replace=False)
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_backup_rejects_invalid_statement_repaid_at():
+    """repaid_at 非时间戳字符串应在写入前拒绝，而非静默变 None。"""
+    db, engine = make_db()
+    try:
+        user = add_user(db)
+        with pytest.raises(ValueError):
+            backup._restore_entities(db, user, {
+                "credit_card_statements": [{
+                    "bank_key": "cmb", "card_last_four": "6310",
+                    "message_id": "bk-bad-ts", "is_repaid": True,
+                    "repaid_at": "not-a-timestamp",
+                }]
+            }, replace=False)
     finally:
         db.close()
         engine.dispose()

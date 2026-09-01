@@ -1,12 +1,29 @@
 <template>
   <section class="stats" :aria-label="t('creditCards.statsLabel')">
-    <!-- 桌面三列数字卡；移动端（≤620px）三行紧凑条 -->
+    <!-- 桌面四列数字卡；移动端（≤620px）逐行紧凑条 -->
     <article class="stat-tile card">
       <div class="stat-icon" aria-hidden="true">▣</div>
       <div class="stat-body">
         <span class="stat-label">{{ t('creditCards.activeCards') }}</span>
         <strong class="stat-value mono-data">{{ activeCount }}</strong>
         <p class="stat-desc">{{ t('creditCards.activeCardsHint', { total: totalCount }) }}</p>
+      </div>
+    </article>
+    <article class="stat-tile card is-outstanding">
+      <div class="stat-icon" aria-hidden="true">¥</div>
+      <div class="stat-body">
+        <span class="stat-label">{{ t('creditCards.outstandingTitle') }}</span>
+        <template v-if="outstandingError">
+          <strong class="stat-value mono-data">—</strong>
+          <p class="stat-desc stat-err">
+            {{ t('creditCards.outstandingLoadFailed') }}
+            <button type="button" class="retry-link" @click="$emit('retry-outstanding')">{{ t('imap.retry') }}</button>
+          </p>
+        </template>
+        <template v-else>
+          <strong class="stat-value mono-data">{{ outstandingLabel }}</strong>
+          <p class="stat-desc">{{ outstandingDesc }}</p>
+        </template>
       </div>
     </article>
     <article class="stat-tile card is-due">
@@ -60,15 +77,42 @@ import { matchBankBrand } from '../../utils/creditCardBanks'
 const props = defineProps({
   cards: { type: Array, default: () => [] },
   today: { type: [String, Date], default: () => new Date() },
-  sortByInterestFree: { type: Boolean, default: false }
+  sortByInterestFree: { type: Boolean, default: false },
+  // 待还款汇总 { total, unrepaid_count, per_card }（后端 /outstanding/summary）
+  outstanding: { type: Object, default: () => ({ total: 0, unrepaid_count: 0, per_card: [] }) },
+  // 汇总加载失败：显示明确错误与重试入口，不把未知状态伪装成 0 待还
+  outstandingError: { type: Boolean, default: false }
 })
 
-defineEmits(['toggle-interest-sort'])
+defineEmits(['toggle-interest-sort', 'retry-outstanding'])
 
 const { t } = useI18n()
 const activeCount = computed(() => props.cards.filter((card) => card.is_active).length)
 const totalCount = computed(() => props.cards.length)
 const nearest = computed(() => nearestCreditCardDue(props.cards, props.today))
+
+// 待还款总额：服务端已按「未标记还款 + 勾稽通过」口径过滤，这里只做展示格式化
+const outstandingTotal = computed(() => {
+  const n = Number(props.outstanding?.total)
+  return Number.isFinite(n) ? n : 0
+})
+const outstandingCount = computed(() => Number(props.outstanding?.unrepaid_count) || 0)
+const outstandingLabel = computed(() => {
+  const n = outstandingTotal.value
+  return Number.isInteger(n) ? n.toLocaleString('zh-CN') : n.toFixed(2)
+})
+const outstandingDesc = computed(() => {
+  // 孤立账单（card_id=null，已删卡的历史账单）计入总额但卡片上没有标记入口，
+  // 单独提示数量，避免用户看到一笔「无法操作的」待还金额
+  const orphan = (props.outstanding?.per_card || []).find((e) => e.card_id == null)
+  const orphanCount = orphan?.count || 0
+  if (!outstandingCount.value) return t('creditCards.outstandingEmpty')
+  if (orphanCount) {
+    return t('creditCards.outstandingHint', { n: outstandingCount.value })
+      + ' · ' + t('creditCards.outstandingOrphan', { n: orphanCount })
+  }
+  return t('creditCards.outstandingHint', { n: outstandingCount.value })
+})
 
 // 移动端第二行：7 天内有计划还款的启用卡，按银行去重（同银行多卡只显一个 logo）。
 // 未收录银行不能丢弃——否则移动端可能错显"暂无还款"；以品牌 key 优先去重，
@@ -96,7 +140,7 @@ const best = computed(() => {
 </script>
 
 <style scoped>
-.stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; margin-bottom: 18px; }
+.stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; margin-bottom: 18px; }
 .stat-tile { display: grid; grid-template-columns: 40px minmax(0, 1fr); gap: 12px; align-items: center; min-width: 0; padding: 14px 16px; }
 .stat-icon { display: flex; width: 40px; height: 40px; align-items: center; justify-content: center; border: 1px solid color-mix(in srgb, var(--signal-cyan) 38%, var(--border)); border-radius: 12px; background: color-mix(in srgb, var(--signal-cyan) 10%, var(--surface)); color: var(--primary); font-size: 18px; font-weight: 800; }
 .stat-body { min-width: 0; }
@@ -104,6 +148,9 @@ const best = computed(() => {
 .stat-value { display: block; margin: 3px 0 0; font-size: 24px; line-height: 1; }
 .stat-desc { min-width: 0; margin: 5px 0 0; color: var(--text-soft); font-size: 12px; line-height: 1.45; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .is-due .stat-icon { border-color: color-mix(in srgb, var(--warning) 42%, var(--border)); background: color-mix(in srgb, var(--warning) 10%, var(--surface)); color: var(--warning-text); }
+.is-outstanding .stat-icon { border-color: color-mix(in srgb, var(--warning) 42%, var(--border)); background: color-mix(in srgb, var(--warning) 10%, var(--surface)); color: var(--warning-text); }
+.stat-err { color: var(--danger-text); }
+.retry-link { margin-left: 4px; padding: 0; border: 0; background: none; color: var(--primary); font: inherit; font-weight: 750; cursor: pointer; text-decoration: underline; }
 .is-interest .stat-icon { border-color: color-mix(in srgb, var(--signal-cyan) 42%, var(--border)); background: color-mix(in srgb, var(--signal-cyan) 10%, var(--surface)); color: var(--signal-cyan); }
 .stat-clickable { cursor: pointer; text-align: left; width: 100%; font: inherit; color: inherit; transition: border-color .15s ease, box-shadow .15s ease; }
 .stat-clickable:hover { border-color: color-mix(in srgb, var(--signal-cyan) 68%, var(--border)); box-shadow: 0 6px 18px color-mix(in srgb, var(--signal-cyan) 14%, transparent); }
@@ -117,6 +164,9 @@ const best = computed(() => {
 .interest-line { display: inline-flex; align-items: center; gap: 8px; margin-top: 3px; }
 .interest-line .stat-value { margin: 0; }
 
+@media (max-width: 1100px) and (min-width: 621px) {
+  .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
 @media (max-width: 620px) {
   .stats { grid-template-columns: 1fr; gap: 0; padding: 2px 14px; }
   .stat-tile { border: 0; border-radius: 0; box-shadow: none; padding: 10px 2px; }

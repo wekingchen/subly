@@ -38,9 +38,51 @@ export function useCreditCards() {
   const cards = request.data
   const dataState = computed(() => request.state())
   const activeCards = computed(() => cards.value.filter((card) => card.is_active))
+  // 待还款汇总：所有已出账单未标记还款的合计（mismatch 不计入，见后端契约）。
+  // 标记/取消还款后 refreshOutstanding() 实时刷新。
+  // outstandingError：汇总失败必须响亮——把未知状态伪装成「0 待还」会掩盖真实欠款。
+  const outstanding = ref({ total: 0, unrepaid_count: 0, per_card: [] })
+  const outstandingError = ref(false)
+  let outstandingSeq = 0
 
   async function load() {
     return request.run(async () => (await api.get('/api/credit-cards')).data || [])
+  }
+
+  async function refreshOutstanding() {
+    // 请求序号防竞态：连续两次标记切换时，慢的旧响应不能覆盖新状态
+    const seq = ++outstandingSeq
+    try {
+      const data = (await api.get('/api/credit-cards/outstanding/summary')).data
+      if (seq !== outstandingSeq) return
+      outstanding.value = data
+      outstandingError.value = false
+    } catch (error) {
+      if (seq !== outstandingSeq) return // 已有更新的请求接管状态
+      // 首次加载失败没有可用数据，置错误态（页面显示明确失败而非 0）；
+      // 标记后的刷新失败保留旧值但同样置错，调用方 toast 提示重试
+      outstandingError.value = true
+      throw error
+    }
+  }
+
+  // 卡片上「标记已还款」：一次标记该卡全部未标记账单（含历史各期）。
+  // 界线推进改变了派生字段（next_due_date 等）：用响应里的更新卡片
+  // 原位替换本地状态，再刷新待还汇总（「实时刷新」要求）。
+  async function markCardRepaid(card) {
+    if (mutationPending.value || !card?.id) return false
+    mutationPending.value = true
+    try {
+      const { data } = await api.post(`/api/credit-cards/${card.id}/mark-repaid`)
+      if (data?.card) {
+        const index = cards.value.findIndex((item) => item.id === data.card.id)
+        if (index >= 0) cards.value.splice(index, 1, data.card)
+      }
+      await refreshOutstanding()
+      return true
+    } finally {
+      mutationPending.value = false
+    }
   }
 
   async function save(card, source) {
@@ -106,6 +148,7 @@ export function useCreditCards() {
     }
   }
 
+
   return {
     cards,
     activeCards,
@@ -115,7 +158,11 @@ export function useCreditCards() {
     stale: request.stale,
     error: request.error,
     mutationPending,
+    outstanding,
+    outstandingError,
     load,
+    refreshOutstanding,
+    markCardRepaid,
     save,
     remove
   }

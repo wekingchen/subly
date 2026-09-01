@@ -100,6 +100,7 @@
       :card="creditCardDetailTarget"
       @close="creditCardDetailTarget = null"
       @edit="goToCreditCard"
+      @statements-changed="onCardStatementsChanged"
     />
 
     <!-- 订阅详情弹窗：详情/续费/编辑/删除一律基于原始订阅（点击的是周期展开后的 occurrence） -->
@@ -439,6 +440,17 @@ function closeDetail() {
 function goToCreditCard() {
   creditCardDetailTarget.value = null
   router.push('/credit-cards')
+}
+
+// 日历弹窗内单期标记还款：后端返回更新卡片（界线推进 → 派生变化）。
+// 原位替换本地卡片数据即可触发日历重算（creditCardCalendarEvents 依赖 creditCards），
+// 过滤已还期次；孤立账单（null）无卡片派生可换，只刷新详情自身数据。
+function onCardStatementsChanged(updated) {
+  if (updated?.id) {
+    const index = creditCards.value.findIndex((item) => item.id === updated.id)
+    if (index >= 0) creditCards.value.splice(index, 1, updated)
+    if (creditCardDetailTarget.value?.id === updated.id) creditCardDetailTarget.value = updated
+  }
 }
 const detailTarget = computed(() => {
   if (detailId.value === null) return null

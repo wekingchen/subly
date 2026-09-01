@@ -568,6 +568,13 @@ class CreditCardUpdate(BaseModel):
         return self
 
 
+class StatementRepaidIn(BaseModel):
+    """账单还款标记请求体。"""
+    model_config = ConfigDict(extra="forbid")
+
+    is_repaid: bool
+
+
 class CreditCardOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -581,6 +588,8 @@ class CreditCardOut(BaseModel):
     credit_limit: float | None
     is_active: bool
     show_in_calendar: bool
+    # 已还款到的名义还款日（含）；日历/派生据此顺延到下期，None=未标记
+    repaid_through_due: date | None
     created_at: datetime
     updated_at: datetime
     next_statement_date: date

@@ -16,7 +16,10 @@
       v-if="canShowCards"
       :cards="cards"
       :sort-by-interest-free="sortByInterestFree"
+      :outstanding="outstanding"
+      :outstanding-error="outstandingError"
       @toggle-interest-sort="sortByInterestFree = !sortByInterestFree"
+      @retry-outstanding="refreshOutstanding().catch(() => {})"
     />
 
     <DataState
@@ -45,9 +48,11 @@
         :card="card"
         :highlight="sortByInterestFree && bestInterestFree?.id === card.id"
         :disabled="mutationPending"
+        :outstanding-entry="outstandingPerCard.get(card.id) || null"
         @view="openDetail"
         @edit="openEdit"
         @delete="requestDelete"
+        @mark-repaid="requestMarkRepaid"
       />
     </section>
 
@@ -73,6 +78,7 @@
       :card="detailTarget"
       @close="detailTarget = null"
       @edit="editFromDetail"
+      @statements-changed="(updated) => { applyCardUpdate(updated); refreshOutstanding().catch(() => {}) }"
     />
 
     <AppModal
@@ -88,8 +94,14 @@
       <p v-if="confirm.state.value?.error" class="delete-error" role="alert">{{ confirm.state.value.error }}</p>
       <template #footer>
         <button type="button" class="btn ghost" :disabled="confirm.state.value?.pending" @click="confirm.close">{{ t('creditCards.cancel') }}</button>
-        <button type="button" class="btn danger" :disabled="confirm.state.value?.pending" @click="confirm.confirm">
-          {{ confirm.state.value?.pending ? t('common.processing') : t('creditCards.confirmDelete') }}
+        <button
+          type="button"
+          class="btn"
+          :class="confirm.state.value?.danger ? 'danger' : ''"
+          :disabled="confirm.state.value?.pending"
+          @click="confirm.confirm"
+        >
+          {{ confirm.state.value?.pending ? t('common.processing') : (confirm.state.value?.confirmLabel || t('creditCards.confirmDelete')) }}
         </button>
       </template>
     </AppModal>
@@ -101,6 +113,7 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
+import api from '../api'
 import AppModal from '../components/AppModal.vue'
 import AppToastRegion from '../components/AppToastRegion.vue'
 import CreditCardDetailModal from '../components/credit-cards/CreditCardDetailModal.vue'
@@ -115,7 +128,16 @@ import { useToasts } from '../composables/useToasts'
 const { t } = useI18n()
 const confirm = useConfirm()
 const { toasts, add: toast } = useToasts()
-const { cards, dataState, mutationPending, load, save, remove } = useCreditCards()
+const { cards, dataState, mutationPending, outstanding, outstandingError, load, refreshOutstanding, markCardRepaid, save, remove } = useCreditCards()
+
+// 单期标记后后端返回更新卡片（界线推进 → next_due_date 等派生变化）：
+// 原位替换列表数据并同步已打开的详情弹窗，UI 立即顺延无需重载
+function applyCardUpdate(updated) {
+  if (!updated?.id) return
+  const index = cards.value.findIndex((item) => item.id === updated.id)
+  if (index >= 0) cards.value.splice(index, 1, updated)
+  if (detailTarget.value?.id === updated.id) detailTarget.value = updated
+}
 const formOpen = ref(false)
 const formTarget = ref(null)
 const formError = ref('')
@@ -140,6 +162,20 @@ const visibleCards = computed(() => {
     .sort((a, b) => (Number(b.interest_free_days) || 0) - (Number(a.interest_free_days) || 0))
   return [...active, ...inactive]
 })
+
+// card_id → { total_due, count }：卡片上「标记已还款」按钮的数据源
+const outstandingPerCard = computed(() => {
+  const map = new Map()
+  for (const entry of outstanding.value?.per_card || []) {
+    if (entry.card_id != null) map.set(entry.card_id, entry)
+  }
+  return map
+})
+
+function formatAmount(value) {
+  const n = Number(value)
+  return Number.isInteger(n) ? n.toLocaleString('zh-CN') : n.toFixed(2)
+}
 
 const confirmOpen = computed({
   get: () => Boolean(confirm.state.value?.open),
@@ -218,12 +254,39 @@ function requestDelete(card) {
     onConfirm: async () => {
       await remove(card)
       if (detailTarget.value?.id === card.id) detailTarget.value = null
+      // 删卡后账单转孤立但仍在待还口径内；刷新汇总保持一致
+      await refreshOutstanding().catch(() => {})
       toast(t('creditCards.deleted'))
     }
   })
 }
 
-onMounted(load)
+// 卡片上「标记已还款」：把该卡全部未标记的勾稽通过账单（含历史各期）一次标记。
+// 需确认——这决定待还总额是否剔除，误触会掩盖真实欠款。
+async function requestMarkRepaid(card) {
+  const entry = outstandingPerCard.value.get(card.id)
+  const amount = entry ? formatAmount(entry.total_due) : ''
+  const count = entry?.count || 0
+  confirm.open({
+    title: t('creditCards.markRepaidTitle'),
+    message: t('creditCards.markRepaidMessage', { name: card.display_name, n: count, amount }),
+    confirmLabel: t('creditCards.markRepaid'),
+    onConfirm: async () => {
+      try {
+        await markCardRepaid(card)
+        toast(t('creditCards.markRepaidDone', { name: card.display_name }))
+      } catch {
+        toast(t('creditCards.markRepaidFailed'))
+      }
+    }
+  })
+}
+
+onMounted(() => {
+  load()
+  // 汇总失败要响亮：置 outstandingError 展示重试入口，不伪装成 0 待还
+  refreshOutstanding().catch(() => {})
+})
 </script>
 
 <style scoped>

@@ -8,6 +8,7 @@ from app.credit_card_rules import (
     due_dates_in_range,
     interest_free_period,
     next_due_date,
+    next_due_date_after,
     statement_date_for_due,
 )
 
@@ -104,3 +105,38 @@ def test_interest_free_period_round_trip_invariant():
                 else:
                     nxt = anchor_month_day(*_next_month(as_of.year, as_of.month), sd)
                     assert statement_date_for_due(due, sd, dd) == nxt, (as_of, sd, dd, due)
+
+
+def test_next_due_date_after_without_boundary_equals_next_due_date():
+    assert next_due_date_after(date(2026, 9, 1), 5) == next_due_date(date(2026, 9, 1), 5)
+    assert next_due_date_after(date(2026, 9, 1), 5, repaid_through=None) == date(2026, 9, 5)
+
+
+def test_next_due_date_after_skips_repaid_period_inclusive():
+    """界线含当天：已还界线 = 当期还款日 → 顺延到下期。"""
+    assert next_due_date_after(date(2026, 9, 1), 5, repaid_through=date(2026, 9, 5)) == date(2026, 10, 5)
+    # 界线为过去期：只跳过那一期
+    assert next_due_date_after(date(2026, 9, 1), 5, repaid_through=date(2026, 8, 5)) == date(2026, 9, 5)
+    # 界线在未来期（如预标记）：跳到更下期
+    assert next_due_date_after(date(2026, 9, 1), 5, repaid_through=date(2026, 11, 5)) == date(2026, 12, 5)
+
+
+def test_next_due_date_after_month_end_anchor_across_february():
+    """月末锚定卡（31 日）已还 2 月期 → 顺延到 3/31。"""
+    assert next_due_date_after(date(2026, 2, 20), 31, repaid_through=date(2026, 2, 28)) == date(2026, 3, 31)
+
+
+def test_next_due_date_after_dirty_far_future_boundary_still_honors_contract():
+    """脏数据（界线远超未来，如备份恢复任意 ISO 日期）：返回值仍必须
+    严格晚于界线——直接按名义月定位，不逐期跳、不截断违反契约。"""
+    result = next_due_date_after(date(2026, 9, 1), 5, repaid_through=date(2027, 12, 5))
+    assert result == date(2028, 1, 5)
+    assert result > date(2027, 12, 5)
+
+
+def test_next_due_date_after_boundary_mid_month_uses_same_month_anchor():
+    """界线在月内但不是名义还款日（如 9/3、due_day=5）：同月锚定日 9/5
+    已严格晚于界线 → 直接返回 9/5（不空跳一期）。"""
+    assert next_due_date_after(date(2026, 9, 1), 5, repaid_through=date(2026, 9, 3)) == date(2026, 9, 5)
+    # 月末锚定边界：31 日卡，界线 2/28（锚定后 2 月末）→ 同月锚定 2/29 不晚于界线 → 3/31
+    assert next_due_date_after(date(2026, 2, 20), 31, repaid_through=date(2026, 2, 28)) == date(2026, 3, 31)
