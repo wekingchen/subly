@@ -1,11 +1,14 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  buildRepaidScopeText,
   calendarDayDiff,
   countUpcomingCreditCardDues,
   creditCardCycle,
   formatCreditCardDate,
-  nearestCreditCardDue
+  formatCycleMonth,
+  nearestCreditCardDue,
+  statementCycleLabel
 } from './creditCardDates'
 
 describe('calendarDayDiff', () => {
@@ -68,5 +71,51 @@ describe('credit card due summaries', () => {
   it('formats date-only values as local Chinese dates', () => {
     expect(formatCreditCardDate('2026-08-30')).toContain('8月')
     expect(formatCreditCardDate('bad')).toBe('—')
+  })
+})
+
+describe('statementCycleLabel', () => {
+  it('按账单月份命名（用户口径：26年8月账单）', () => {
+    expect(statementCycleLabel({ bill_period_end: '2026-08-31', statement_date: '2026-08-31' })).toBe('26年8月')
+    // 仅出账日的银行（招行/中信/平安/民生）：statement_date 兜底
+    expect(statementCycleLabel({ bill_period_end: null, statement_date: '2027-01-15' })).toBe('27年1月')
+    expect(statementCycleLabel({ statement_date: '2026-12-01' })).toBe('26年12月')
+  })
+
+  it('无日期回退 null，由调用方决定未知期展示', () => {
+    expect(statementCycleLabel({ bill_period_end: null, statement_date: null })).toBeNull()
+    expect(statementCycleLabel(null)).toBeNull()
+  })
+
+  it('formatCycleMonth 跨世纪取两位年份', () => {
+    expect(formatCycleMonth('2099-06-30')).toBe('99年6月')
+    expect(formatCycleMonth('bad')).toBeNull()
+  })
+})
+
+describe('buildRepaidScopeText', () => {
+  const t = (key, params = {}) => {
+    const table = {
+      'creditCards.statementCycleNames': `${params.cycles}账单`,
+      'creditCards.unknownCycleCount': `${params.n} 笔未知月份账单`,
+      'creditCards.outstandingCountOnly': `${params.n} 笔账单`,
+      'creditCards.scopeJoin': '及'
+    }
+    return table[key]
+  }
+
+  it('有月份时按月份列出', () => {
+    expect(buildRepaidScopeText({ cycles: ['26年8月', '26年7月'], unknown_cycle_count: 0, count: 2 }, t))
+      .toBe('26年8月、26年7月账单')
+  })
+
+  it('混合未知月份时补笔数，确认范围=实际标记范围', () => {
+    expect(buildRepaidScopeText({ cycles: ['26年8月'], unknown_cycle_count: 1, count: 2 }, t))
+      .toBe('26年8月账单及1 笔未知月份账单')
+  })
+
+  it('全部未知月份回退笔数', () => {
+    expect(buildRepaidScopeText({ cycles: [], unknown_cycle_count: 2, count: 2 }, t))
+      .toBe('2 笔未知月份账单')
   })
 })

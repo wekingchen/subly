@@ -69,3 +69,30 @@ export function nearestCreditCardDue(cards, today = new Date()) {
     .filter((entry) => entry.days != null && entry.days >= 0)
     .sort((a, b) => a.days - b.days)[0] || null
 }
+
+// 账单月份 → 「26年8月」：出账月即用户口中的账单月份（账单邮件命名口径）
+export function formatCycleMonth(dateStr) {
+  const date = parseLocalDate(dateStr)
+  if (!date) return null
+  return `${date.getFullYear() % 100}年${date.getMonth() + 1}月`
+}
+
+// 账单期显示名：「26年8月账单」。月份取 bill_period_end（有账单周期的银行）
+// 或 statement_date（仅出账日的银行）；两者都缺回退 null，由调用方决定展示
+export function statementCycleLabel(statement) {
+  if (!statement) return null
+  return formatCycleMonth(statement.bill_period_end || statement.statement_date)
+}
+
+// 批量标记范围的完整文案：「26年8月、26年7月账单及 1 笔未知月份账单」。
+// 确认弹窗与按钮提示共用，保证展示范围 = 批量接口实际标记范围
+// （该卡全部未还勾稽通过账单，含月份缺失的）。i18n 由调用方传入拼接词。
+export function buildRepaidScopeText(entry, t) {
+  const cycles = entry?.cycles || []
+  const unknown = Number(entry?.unknown_cycle_count) || 0
+  const parts = []
+  if (cycles.length) parts.push(t('creditCards.statementCycleNames', { cycles: cycles.join('、') }))
+  if (unknown) parts.push(t('creditCards.unknownCycleCount', { n: unknown }))
+  if (!parts.length) parts.push(t('creditCards.outstandingCountOnly', { n: entry?.count || 0 }))
+  return parts.join(t('creditCards.scopeJoin'))
+}

@@ -15,12 +15,11 @@
 
     <CreditCardCycleTrack :card="card" />
 
-    <div class="card-meta">
-      <span>{{ t('creditCards.statementDayValue', { n: card.statement_day }) }}</span>
-      <span>{{ t('creditCards.dueDayValue', { n: card.due_day }) }}</span>
-      <span>{{ t('creditCards.remindValue', { n: card.remind_days_before }) }}</span>
-      <span v-if="card.interest_free_days != null" class="if-days">{{ t('creditCards.interestFreeChip', { n: card.interest_free_days }) }}</span>
-      <span v-if="card.credit_limit != null">{{ t('creditCards.creditLimitValue', { n: formatLimit(card.credit_limit) }) }}</span>
+    <!-- 待还信息行：用户最关注的金额与逾期状态；名义日/提醒/额度等细节在详情 -->
+    <div v-if="outstandingEntry" class="outstanding-line">
+      <span class="outstanding-label">{{ t('creditCards.outstandingOfCard') }}</span>
+      <span class="outstanding-amt mono-data" :class="{ 'is-overdue': outstandingEntry.max_overdue_days > 0 }">{{ formatLimit(outstandingEntry.total_due) }}</span>
+      <span v-if="outstandingEntry.max_overdue_days > 0" class="overdue-tag">{{ t('creditCards.overdueDays', { n: outstandingEntry.max_overdue_days }) }}</span>
     </div>
 
     <div class="card-actions">
@@ -29,7 +28,7 @@
         type="button"
         class="btn ghost sm repay-btn"
         :disabled="disabled"
-        :title="t('creditCards.markRepaidHint', { n: outstandingEntry.count })"
+        :title="t('creditCards.markRepaidHint', { cycles: buildRepaidScopeText(outstandingEntry, t) })"
         @click="$emit('mark-repaid', card)"
       >
         <span aria-hidden="true">✓</span> {{ t('creditCards.markRepaid') }}
@@ -46,12 +45,14 @@
 import { useI18n } from 'vue-i18n'
 import CreditCardBrandBadge from './CreditCardBrandBadge.vue'
 import CreditCardCycleTrack from './CreditCardCycleTrack.vue'
+import { buildRepaidScopeText } from '../../utils/creditCardDates'
 
 defineProps({
   card: { type: Object, required: true },
   disabled: { type: Boolean, default: false },
   highlight: { type: Boolean, default: false },
-  // 该卡未标记还款的账单合计 { total_due, count }；无未还账单为 null（按钮隐藏）
+  // 该卡未标记还款的汇总 { total_due, count, cycles, overdue_cycles, max_overdue_days }；
+  // 无未还账单为 null（待还行与按钮隐藏）
   outstandingEntry: { type: Object, default: null }
 })
 
@@ -78,9 +79,11 @@ function formatLimit(value) {
 .status-tag { flex: 0 0 auto; padding: 4px 9px; border-radius: 999px; font-size: 11px; font-weight: 750; }
 .status-tag.active { background: color-mix(in srgb, var(--success) 11%, var(--surface)); color: var(--success-text); }
 .status-tag.inactive-tag { background: var(--surface-2); color: var(--text-soft); }
-.card-meta { display: flex; flex-wrap: wrap; gap: 6px; }
-.card-meta span { padding: 4px 8px; border: 1px solid var(--border); border-radius: 999px; background: color-mix(in srgb, var(--surface-2) 76%, transparent); color: var(--text-soft); font-size: 11px; }
-.card-meta span.if-days { color: var(--primary); border-color: color-mix(in srgb, var(--signal-cyan) 42%, var(--border)); }
+.outstanding-line { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px; padding: 9px 12px; border: 1px solid color-mix(in srgb, var(--warning) 32%, var(--border)); border-radius: 10px; background: color-mix(in srgb, var(--warning) 6%, var(--surface)); }
+.outstanding-line .is-overdue, .outstanding-line.is-overdue .outstanding-amt { color: var(--danger-text); }
+.outstanding-label { color: var(--text-soft); font-size: 12px; font-weight: 750; }
+.outstanding-amt { font-size: 18px; font-weight: 800; color: var(--warning-text); }
+.overdue-tag { margin-left: auto; padding: 2px 8px; border-radius: 999px; background: color-mix(in srgb, var(--danger) 13%, transparent); color: var(--danger-text); font-size: 11px; font-weight: 750; }
 .credit-card.is-best { border-color: color-mix(in srgb, var(--signal-cyan) 55%, var(--border)); box-shadow: 0 0 0 1px color-mix(in srgb, var(--signal-cyan) 30%, transparent), 0 8px 22px color-mix(in srgb, var(--signal-cyan) 14%, transparent); }
 .credit-card.is-best::before { background: linear-gradient(180deg, var(--signal-cyan), var(--primary)); box-shadow: 0 0 12px color-mix(in srgb, var(--signal-cyan) 55%, transparent); }
 .card-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: auto; padding-top: 2px; }

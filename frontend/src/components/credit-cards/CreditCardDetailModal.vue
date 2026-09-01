@@ -30,6 +30,7 @@
       <div><dt>{{ t('creditCards.dueDay') }}</dt><dd>{{ t('creditCards.monthDayValue', { n: card.due_day }) }}</dd></div>
       <div><dt>{{ t('creditCards.remindDaysBefore') }}</dt><dd>{{ t('creditCards.remindValue', { n: card.remind_days_before }) }}</dd></div>
       <div><dt>{{ t('creditCards.repaymentWindow') }}</dt><dd>{{ card.statement_to_due_days != null ? t('creditCards.windowDays', { n: card.statement_to_due_days }) : '—' }}</dd></div>
+      <div><dt>{{ t('creditCards.interestFreeTitle') }}</dt><dd>{{ card.interest_free_days != null ? t('creditCards.interestFreeDays', { n: card.interest_free_days }) : '—' }}</dd></div>
       <div><dt>{{ t('creditCards.creditLimit') }}</dt><dd>{{ card.credit_limit != null ? formatLimit(card.credit_limit) : '—' }}</dd></div>
     </dl>
 

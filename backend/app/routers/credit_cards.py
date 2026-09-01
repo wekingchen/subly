@@ -173,7 +173,18 @@ def delete_credit_card(
 # 账单明细（解析落库产物；仅展示与备份，不进通知/iCal）
 # --------------------------------------------------------------------------- #
 
-def _statement_out(s: CreditCardStatement) -> dict:
+def _statement_out(s: CreditCardStatement, today: date | None = None) -> dict:
+    # 账单逾期（派生值，不落库）：已出账单未标记还款且还款日已过。
+    # due_date 为 NULL 时不判逾期（无法确定还款日，宁不冤枉）。
+    # overdue_days 一并在此算好（业务时区），前端不做本地时间重算——
+    # 浏览器时区与服务端不同时会少算/隐藏徽标。
+    if today is None:
+        today = scheduler._local_today()
+    overdue_days = (
+        (today - s.due_date).days
+        if not s.is_repaid and s.due_date is not None and s.due_date < today
+        else None
+    )
     return {
         "id": s.id,
         "bank_key": s.bank_key,
@@ -189,6 +200,8 @@ def _statement_out(s: CreditCardStatement) -> dict:
         "subject": s.subject,
         "verify_status": s.verify_status,
         "is_repaid": s.is_repaid,
+        "is_overdue": overdue_days is not None,
+        "overdue_days": overdue_days,
         "repaid_at": s.repaid_at,
         "parsed_at": s.parsed_at,
         "item_count": len(s.items),
@@ -216,6 +229,7 @@ def list_card_statements(
     db: Session = Depends(get_db),
 ):
     card = _owned_card(db, card_id, user.id)
+    today = scheduler._local_today()  # 一次请求一个 today，行间口径一致
     stmts = db.scalars(
         select(CreditCardStatement)
         .where(
@@ -236,7 +250,7 @@ def list_card_statements(
         )
     ) or 0
     return {
-        "statements": [_statement_out(s) for s in stmts],
+        "statements": [_statement_out(s, today) for s in stmts],
         "unmatched_count": unmatched_count,
     }
 
@@ -300,6 +314,7 @@ def list_all_statements(
 
     路由放在 /{card_id} 之前注册以避免路径歧义。
     """
+    today = scheduler._local_today()  # 一次请求一个 today
     stmts = db.scalars(
         select(CreditCardStatement)
         .where(
@@ -311,7 +326,7 @@ def list_all_statements(
     ).all()
     out = []
     for s in stmts:
-        d = _statement_out(s)
+        d = _statement_out(s, today)
         # 已删卡的孤立账单：card_name 无法从关联取，用银行+尾号标识
         card = db.get(CreditCard, s.card_id) if s.card_id else None
         d["card_name"] = card.display_name if card else None
@@ -389,6 +404,7 @@ def set_statement_repaid(
         if card is not None and _advance_repaid_through(card, stmt.due_date):
             _invalidate_scan_checkpoint(db)
     db.commit()
+    db.refresh(stmt)
     db.refresh(card) if card is not None else None
     return {
         "ok": True,
@@ -397,6 +413,9 @@ def set_statement_repaid(
         # 标记推进了已还界线 → 派生字段（next_due_date 等）可能变化，
         # 返回更新后的卡片供前端原位替换（card 为 NULL = 孤立账单）
         "card": _to_out(card) if card is not None else None,
+        # 重新派生的账单（is_overdue/overdue_days 随 is_repaid 变化）：
+        # 前端原位更新明细行，避免「已还」与「已逾期」同时显示
+        "statement": _statement_out(stmt),
     }
 
 
@@ -457,6 +476,11 @@ def mark_card_repaid(
     }
 
 
+def _cycle_label(year: int, month: int) -> str:
+    """账单月份展示名（「26年8月」）。仅用于展示，排序/去重用 (year, month) 键。"""
+    return f"{year % 100}年{month}月"
+
+
 @router.get("/outstanding/summary")
 def outstanding_summary(
     user: User = Depends(get_current_user),
@@ -467,32 +491,64 @@ def outstanding_summary(
     含已删卡的孤立账单（历史账单的钱仍是要还的，card_id=None 条目）。
     total_due 为 NULL 的账单按 0 计入金额但仍计数——期数口径与批量标记
     弹窗一致，金额未知不代表不用还。
+    per_card[].cycles 是各未还账单的月份标签（「26年8月」，降序），
+    供前端文案（「26年8月账单未标记还款」）；overdue_cycles/max_overdue_days
+    表达逾期（还款日已过未标记），overdue_total 是逾期金额合计。
     """
-    rows = db.execute(
-        select(
-            CreditCardStatement.total_due,
-            CreditCardStatement.card_id,
-            func.count(),
-        )
+    today = scheduler._local_today()
+    rows = db.scalars(
+        select(CreditCardStatement)
         .where(
             CreditCardStatement.user_id == user.id,
             CreditCardStatement.is_repaid.is_(False),
             CreditCardStatement.verify_status == "ok",
         )
-        .group_by(CreditCardStatement.total_due, CreditCardStatement.card_id)
+        .order_by(CreditCardStatement.id)
     ).all()
-    total = sum(float(r[0] or 0.0) for r in rows)
-    unrepaid_count = sum(int(r[2]) for r in rows)
+    total = 0.0
+    unrepaid_count = 0
+    overdue_total = 0.0
+    unknown_cycle_count = 0
     per_card: dict[int | None, dict] = {}
-    for total_due, card_id, cnt in rows:
-        entry = per_card.setdefault(card_id, {"total_due": 0.0, "count": 0})
-        entry["total_due"] += float(total_due or 0.0)
-        entry["count"] += cnt
+    for s in rows:
+        total += float(s.total_due or 0.0)
+        unrepaid_count += 1
+        entry = per_card.setdefault(s.card_id, {
+            "total_due": 0.0, "count": 0, "cycle_keys": [],
+            "overdue_keys": [], "max_overdue_days": 0, "unknown_cycle_count": 0,
+        })
+        entry["total_due"] += float(s.total_due or 0.0)
+        entry["count"] += 1
+        # 月份用 (year, month) 键排序去重——格式化后的「26年9月/26年10月」
+        # 字符串排序会把 9 排到 10 后面
+        cycle_month = s.bill_period_end or s.statement_date
+        month_key = (cycle_month.year, cycle_month.month) if cycle_month else None
+        if month_key is not None:
+            if month_key not in entry["cycle_keys"]:
+                entry["cycle_keys"].append(month_key)
+        else:
+            unknown_cycle_count += 1
+            entry["unknown_cycle_count"] += 1
+        if s.due_date is not None and s.due_date < today:
+            overdue_total += float(s.total_due or 0.0)
+            overdue_days = (today - s.due_date).days
+            entry["max_overdue_days"] = max(entry["max_overdue_days"], overdue_days)
+            if month_key is not None and month_key not in entry["overdue_keys"]:
+                entry["overdue_keys"].append(month_key)
+    for entry in per_card.values():
+        entry["cycle_keys"].sort(reverse=True)
+        entry["overdue_keys"].sort(reverse=True)
+        entry["cycles"] = [_cycle_label(y, m) for y, m in entry.pop("cycle_keys")]
+        entry["overdue_cycles"] = [_cycle_label(y, m) for y, m in entry.pop("overdue_keys")]
+        entry["total_due"] = round(entry["total_due"], 2)
     return {
         "total": round(total, 2),
         "unrepaid_count": unrepaid_count,
+        "overdue_total": round(overdue_total, 2),
+        # 日期缺失的未还账单数：确认弹窗用它补全实际标记范围
+        "unknown_cycle_count": unknown_cycle_count,
         "per_card": [
-            {"card_id": cid, "total_due": round(v["total_due"], 2), "count": v["count"]}
+            {"card_id": cid, **v}
             for cid, v in per_card.items()
         ],
     }

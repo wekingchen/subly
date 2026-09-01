@@ -120,6 +120,7 @@ import CreditCardFormModal from '../components/credit-cards/CreditCardFormModal.
 import CreditCardItem from '../components/credit-cards/CreditCardItem.vue'
 import CreditCardStats from '../components/credit-cards/CreditCardStats.vue'
 import DataState from '../components/DataState.vue'
+import { buildRepaidScopeText } from '../utils/creditCardDates'
 import { useConfirm } from '../composables/useConfirm'
 import { useCreditCards } from '../composables/useCreditCards'
 import { useToasts } from '../composables/useToasts'
@@ -174,6 +175,11 @@ const outstandingPerCard = computed(() => {
 function formatAmount(value) {
   const n = Number(value)
   return Number.isInteger(n) ? n.toLocaleString('zh-CN') : n.toFixed(2)
+}
+
+// 标记范围文案与按钮提示共用同一实现（见 creditCardDates.buildRepaidScopeText）
+function buildScopeText(entry) {
+  return buildRepaidScopeText(entry, t)
 }
 
 const confirmOpen = computed({
@@ -262,18 +268,20 @@ function requestDelete(card) {
 
 // 卡片上「标记已还款」：把该卡全部未标记的勾稽通过账单（含历史各期）一次标记。
 // 需确认——这决定待还总额是否剔除，误触会掩盖真实欠款。
+// 文案按账单月份列出（「26年8月账单」）；有月份缺失的账单时明确补上笔数，
+// 保证确认范围 = 实际标记范围。
 async function requestMarkRepaid(card) {
   const entry = outstandingPerCard.value.get(card.id)
   const amount = entry ? formatAmount(entry.total_due) : ''
-  const count = entry?.count || 0
+  const cyclesText = buildScopeText(entry)
   confirm.open({
     title: t('creditCards.markRepaidTitle'),
-    message: t('creditCards.markRepaidMessage', { name: card.display_name, n: count, amount }),
+    message: t('creditCards.markRepaidMessage', { name: card.display_name, cycles: cyclesText, amount }),
     confirmLabel: t('creditCards.markRepaid'),
     onConfirm: async () => {
       try {
         await markCardRepaid(card)
-        toast(t('creditCards.markRepaidDone', { name: card.display_name }))
+        toast(t('creditCards.markRepaidDone', { name: card.display_name, cycles: cyclesText }))
       } catch {
         toast(t('creditCards.markRepaidFailed'))
       }

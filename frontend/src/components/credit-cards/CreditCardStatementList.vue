@@ -13,9 +13,10 @@
     <ul v-if="statements.length" class="stmt-list">
       <li v-for="s in statements" :key="s.id" class="stmt-item">
         <button type="button" class="stmt-summary" @click="toggle(s.id)" :aria-expanded="expanded === s.id">
-          <span class="stmt-period">{{ periodLabel(s) }}</span>
+          <span class="stmt-period">{{ cycleName(s) }}</span>
+          <span v-if="overdueDays(s) != null" class="stmt-overdue-tag">{{ t('creditCards.overdueDays', { n: overdueDays(s) }) }}</span>
           <span v-if="s.is_repaid" class="stmt-repaid-tag">{{ t('creditCards.repaidTag') }}</span>
-          <MoneyText class="stmt-amount" :class="{ repaid: s.is_repaid }" :value="s.total_due" currency="CNY" position="prefix" />
+          <MoneyText class="stmt-amount" :class="{ repaid: s.is_repaid, overdue: s.is_overdue }" :value="s.total_due" currency="CNY" position="prefix" />
           <span class="stmt-due muted">{{ s.due_date ? t('creditCards.dueOn', { d: s.due_date }) : '' }}</span>
           <span class="stmt-verify" :class="s.verify_status === 'ok' ? 'ok' : 'bad'">
             {{ s.verify_status === 'ok' ? '✓' : '⚠' }}
@@ -27,6 +28,7 @@
             <button type="button" class="btn ghost sm" @click="toggle(s.id)">{{ t('imap.retry') }}</button>
           </div>
           <template v-else-if="detail">
+            <div class="stmt-period-detail muted">{{ s.bill_period_start && s.bill_period_end ? `${s.bill_period_start} ~ ${s.bill_period_end}` : '' }}</div>
             <div class="stmt-actions">
               <button
                 type="button"
@@ -76,6 +78,7 @@ import { useI18n } from 'vue-i18n'
 import api from '../../api'
 import MoneyText from '../MoneyText.vue'
 import { useBreakpoint } from '../../composables/useBreakpoint'
+import { statementCycleLabel } from '../../utils/creditCardDates'
 import { formatMoney } from '../../utils/money'
 
 // 账单明细：打开卡片详情时懒加载；金额一律 MoneyText（与订阅卡同源）。
@@ -109,12 +112,14 @@ const TYPE_KEYS = {
 }
 const typeLabel = (type) => t(`creditCards.txType_${TYPE_KEYS[type] || 'unknown'}`)
 
-function periodLabel(s) {
-  if (s.bill_period_start && s.bill_period_end) {
-    return `${s.bill_period_start} ~ ${s.bill_period_end}`
-  }
-  return s.statement_date || t('creditCards.periodUnknown')
+// 账单行主标签：按账单月份命名（「26年8月账单」，用户口径），原始周期在展开区显示
+const cycleName = (s) => {
+  const month = statementCycleLabel(s)
+  return month ? t('creditCards.statementCycleName', { month }) : t('creditCards.periodUnknown')
 }
+// 逾期天数由后端按业务时区算好返回（overdue_days），前端不重算——浏览器
+// 时区与服务端不同时会少算/隐藏徽标
+const overdueDays = (s) => (s.is_overdue ? s.overdue_days : null)
 
 async function load() {
   error.value = false
@@ -165,7 +170,10 @@ async function toggleRepaid(s) {
       `/api/credit-cards/statements/${s.id}/repaid`,
       { is_repaid: !s.is_repaid }
     )
-    s.is_repaid = !s.is_repaid
+    // 用服务端重新派生的账单原位更新（is_overdue/overdue_days 随标记变化，
+    // 避免「已还」与「已逾期」同时显示或逾期徽标漏掉）
+    if (data?.statement) Object.assign(s, data.statement)
+    else s.is_repaid = !s.is_repaid
     // 界线推进改变了卡片派生字段（next_due_date 等）：带上最新卡片供父级替换
     emit('repaid-changed', data?.card || null)
   } catch {
@@ -194,7 +202,10 @@ watch(() => props.cardId, (id) => {
 .stmt-summary:hover { background: color-mix(in srgb, var(--primary) 6%, var(--surface-2)); }
 .stmt-period { font-weight: 750; font-size: 12px; }
 .stmt-repaid-tag { flex: 0 0 auto; padding: 2px 7px; border-radius: 999px; background: color-mix(in srgb, var(--success) 12%, transparent); color: var(--success-text); font-size: 11px; font-weight: 750; }
+.stmt-overdue-tag { flex: 0 0 auto; padding: 2px 7px; border-radius: 999px; background: color-mix(in srgb, var(--danger) 13%, transparent); color: var(--danger-text); font-size: 11px; font-weight: 750; white-space: nowrap; }
 .stmt-amount.repaid { opacity: .55; text-decoration: line-through; }
+.stmt-amount.overdue { color: var(--danger-text); }
+.stmt-period-detail { min-height: 1em; font-size: 11px; }
 .stmt-actions { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
 .stmt-amount { margin-left: auto; font-weight: 800; }
 .stmt-due { font-size: 11px; white-space: nowrap; }

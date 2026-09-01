@@ -21,7 +21,7 @@
           </p>
         </template>
         <template v-else>
-          <strong class="stat-value mono-data">{{ outstandingLabel }}</strong>
+          <strong class="stat-value mono-data" :class="{ 'is-overdue-amt': overdueTotal > 0 }">{{ outstandingLabel }}</strong>
           <p class="stat-desc">{{ outstandingDesc }}</p>
         </template>
       </div>
@@ -97,21 +97,40 @@ const outstandingTotal = computed(() => {
   return Number.isFinite(n) ? n : 0
 })
 const outstandingCount = computed(() => Number(props.outstanding?.unrepaid_count) || 0)
+const overdueTotal = computed(() => Number(props.outstanding?.overdue_total) || 0)
 const outstandingLabel = computed(() => {
   const n = outstandingTotal.value
   return Number.isInteger(n) ? n.toLocaleString('zh-CN') : n.toFixed(2)
 })
 const outstandingDesc = computed(() => {
-  // 孤立账单（card_id=null，已删卡的历史账单）计入总额但卡片上没有标记入口，
-  // 单独提示数量，避免用户看到一笔「无法操作的」待还金额
-  const orphan = (props.outstanding?.per_card || []).find((e) => e.card_id == null)
-  const orphanCount = orphan?.count || 0
+  // 按账单月份列出（「26年8月账单未标记还款」），不再用「n 期」计数；
+  // 月份跨卡全局去重（Set）——多卡同月只显示一次；孤立账单与逾期单独提示
   if (!outstandingCount.value) return t('creditCards.outstandingEmpty')
-  if (orphanCount) {
-    return t('creditCards.outstandingHint', { n: outstandingCount.value })
-      + ' · ' + t('creditCards.outstandingOrphan', { n: orphanCount })
+  const parts = []
+  const allCycles = [...new Set((props.outstanding?.per_card || [])
+    .flatMap((e) => e.cycles || []))]
+    .sort()
+    .reverse()
+  if (allCycles.length) {
+    parts.push(t('creditCards.outstandingHint', { cycles: allCycles.join('、') }))
+  } else {
+    parts.push(t('creditCards.outstandingCountOnly', { n: outstandingCount.value }))
   }
-  return t('creditCards.outstandingHint', { n: outstandingCount.value })
+  const overdueCycles = [...new Set((props.outstanding?.per_card || [])
+    .flatMap((e) => e.overdue_cycles || []))]
+    .sort()
+    .reverse()
+  if (overdueCycles.length) {
+    parts.push(t('creditCards.outstandingOverdue', {
+      cycles: overdueCycles.join('、'),
+      amount: overdueTotal.value.toLocaleString('zh-CN')
+    }))
+  }
+  const orphan = (props.outstanding?.per_card || []).find((e) => e.card_id == null)
+  if (orphan?.count) {
+    parts.push(t('creditCards.outstandingOrphan', { n: orphan.count }))
+  }
+  return parts.join(' · ')
 })
 
 // 移动端第二行：7 天内有计划还款的启用卡，按银行去重（同银行多卡只显一个 logo）。
@@ -146,6 +165,7 @@ const best = computed(() => {
 .stat-body { min-width: 0; }
 .stat-label { display: block; color: var(--text-soft); font-size: 12px; font-weight: 750; letter-spacing: .06em; }
 .stat-value { display: block; margin: 3px 0 0; font-size: 24px; line-height: 1; }
+.stat-value.is-overdue-amt { color: var(--danger-text); }
 .stat-desc { min-width: 0; margin: 5px 0 0; color: var(--text-soft); font-size: 12px; line-height: 1.45; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .is-due .stat-icon { border-color: color-mix(in srgb, var(--warning) 42%, var(--border)); background: color-mix(in srgb, var(--warning) 10%, var(--surface)); color: var(--warning-text); }
 .is-outstanding .stat-icon { border-color: color-mix(in srgb, var(--warning) 42%, var(--border)); background: color-mix(in srgb, var(--warning) 10%, var(--surface)); color: var(--warning-text); }

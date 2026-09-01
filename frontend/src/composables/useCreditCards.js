@@ -41,7 +41,9 @@ export function useCreditCards() {
   // 待还款汇总：所有已出账单未标记还款的合计（mismatch 不计入，见后端契约）。
   // 标记/取消还款后 refreshOutstanding() 实时刷新。
   // outstandingError：汇总失败必须响亮——把未知状态伪装成「0 待还」会掩盖真实欠款。
-  const outstanding = ref({ total: 0, unrepaid_count: 0, per_card: [] })
+  const outstanding = ref({
+    total: 0, unrepaid_count: 0, overdue_total: 0, per_card: []
+  })
   const outstandingError = ref(false)
   let outstandingSeq = 0
 

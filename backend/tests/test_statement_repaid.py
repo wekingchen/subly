@@ -122,11 +122,16 @@ def test_summary_excludes_mismatch_and_repaid(repaid_env):
 
     body = client.get("/api/credit-cards/outstanding/summary").json()
     assert body["total"] == pytest.approx(300.50)
-    # mismatch 整条排除（金额与计数同口径）——提示文案「n 期未标记还款」描述的就是计入总额的账单
+    # mismatch 整条排除（金额与计数同口径）——提示文案描述的就是计入总额的账单
     assert body["unrepaid_count"] == 2
-    assert body["per_card"] == [
-        {"card_id": card.id, "total_due": pytest.approx(300.50), "count": 2}
-    ]
+    assert body["overdue_total"] == 0
+    entry = body["per_card"][0]
+    assert entry["card_id"] == card.id
+    assert entry["total_due"] == pytest.approx(300.50)
+    assert entry["count"] == 2
+    assert entry["cycles"] == []  # 账单未给日期 → 无月份标签
+    assert entry["overdue_cycles"] == []
+    assert entry["max_overdue_days"] == 0
 
 
 def test_summary_null_total_due_counts_as_zero(repaid_env):
@@ -332,3 +337,96 @@ def test_single_mark_advances_repaid_through_to_statement_due(repaid_env):
     db.expire_all()
     card = db.get(CreditCard, card.id)
     assert card.repaid_through_due == date(2026, 9, 3)  # 不回拨
+
+
+def test_overdue_detection_and_cycles(repaid_env):
+    """逾期口径：未标记 + due_date 已过 → is_overdue；标记后自动消除。
+    cycles 按账单月份（bill_period_end 优先，statement_date 兜底）生成「26年8月」。"""
+    from datetime import date, timedelta
+
+    from app.services.scheduler import _local_today
+
+    client, db, user, _ = repaid_env
+    card = _make_card(db, user.id)
+    today = _local_today()
+
+    overdue_stmt = _make_statement(db, user.id, card.id, 500.00)
+    ok_stmt = _make_statement(db, user.id, card.id, 88.00)
+    future_stmt = _make_statement(db, user.id, card.id, 66.00)
+    null_due_stmt = _make_statement(db, user.id, card.id, 10.00)
+    db.expire_all()
+    db.get(CreditCardStatement, overdue_stmt.id).due_date = today - timedelta(days=5)
+    db.get(CreditCardStatement, ok_stmt.id).due_date = today
+    db.get(CreditCardStatement, future_stmt.id).due_date = today + timedelta(days=10)
+    s = db.get(CreditCardStatement, overdue_stmt.id)
+    s.bill_period_end = date(today.year - 2000 - 24, 8, 31)  # 占位，下面直接改
+    db.commit()
+    # 直接设置有意义的账单月份（如 26年1月）
+    db.get(CreditCardStatement, overdue_stmt.id).bill_period_end = date(2026, 1, 31)
+    db.get(CreditCardStatement, ok_stmt.id).statement_date = date(2026, 2, 15)
+    db.commit()
+
+    # 未标记：overdue 的那笔 is_overdue=True；还款日当天/未来/NULL 均 False
+    lst = client.get(f"/api/credit-cards/{card.id}/statements").json()
+    by_id = {s["id"]: s for s in lst["statements"]}
+    assert by_id[overdue_stmt.id]["is_overdue"] is True
+    assert by_id[ok_stmt.id]["is_overdue"] is False
+    assert by_id[future_stmt.id]["is_overdue"] is False
+    assert by_id[null_due_stmt.id]["is_overdue"] is False
+
+    # 汇总：overdue_total 只含逾期金额；cycles/overdue_cycles 有月份标签（降序）
+    body = client.get("/api/credit-cards/outstanding/summary").json()
+    assert body["overdue_total"] == pytest.approx(500.00)
+    entry = body["per_card"][0]
+    assert entry["cycles"] == ["26年2月", "26年1月"]
+    assert entry["overdue_cycles"] == ["26年1月"]
+    assert entry["max_overdue_days"] == 5
+
+    # 标记逾期账单 → is_overdue 自动消除、汇总剔除
+    client.patch(
+        f"/api/credit-cards/statements/{overdue_stmt.id}/repaid", json={"is_repaid": True}
+    )
+    lst = client.get(f"/api/credit-cards/{card.id}/statements").json()
+    by_id = {s["id"]: s for s in lst["statements"]}
+    assert by_id[overdue_stmt.id]["is_overdue"] is False
+    body = client.get("/api/credit-cards/outstanding/summary").json()
+    assert body["overdue_total"] == 0
+    assert body["per_card"][0]["overdue_cycles"] == []
+
+
+def test_cycles_sort_by_date_not_label_and_cross_card_dedup(repaid_env):
+    """月份用 (year, month) 键排序：26年10月 必须排在 26年9月 前
+    （字符串排序会把「26年9月」排到「26年10月」后面）。"""
+    from datetime import date
+
+    from app.services.scheduler import _local_today
+
+    client, db, user, _ = repaid_env
+    card = _make_card(db, user.id)
+    today = _local_today()
+    # 逾期笔：due = 昨天（保证 is_overdue），月份用上月与上上月表达 9/10 排序
+    # 直接用今年 9/10 月做 statement_date，逾期用固定昨天的 due_date
+    for month, due in ((9, 500.0), (10, 300.0)):
+        stmt = _make_statement(db, user.id, card.id, due)
+        db.expire_all()
+        s = db.get(CreditCardStatement, stmt.id)
+        s.statement_date = date(2026, month, 15)
+        if month == 9:
+            s.due_date = today - __import__("datetime").timedelta(days=1)
+        db.commit()
+
+    body = client.get("/api/credit-cards/outstanding/summary").json()
+    entry = body["per_card"][0]
+    assert entry["cycles"] == ["26年10月", "26年9月"]
+    assert entry["overdue_cycles"] == ["26年9月"]
+
+
+def test_summary_unknown_cycle_count(repaid_env):
+    """日期缺失的账单计入 unknown_cycle_count，供确认文案补全实际标记范围。"""
+    client, db, user, _ = repaid_env
+    card = _make_card(db, user.id)
+    _make_statement(db, user.id, card.id, 100.00)  # 无日期
+    body = client.get("/api/credit-cards/outstanding/summary").json()
+    assert body["unknown_cycle_count"] == 1
+    assert body["per_card"][0]["cycles"] == []
+    assert body["per_card"][0]["count"] == 1
