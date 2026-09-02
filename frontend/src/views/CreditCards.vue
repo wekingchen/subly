@@ -78,6 +78,7 @@
       :card="detailTarget"
       @close="detailTarget = null"
       @edit="editFromDetail"
+      @delete="requestDelete"
       @statements-changed="(updated) => { applyCardUpdate(updated); refreshOutstanding().catch(() => {}) }"
     />
 

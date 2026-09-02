@@ -77,6 +77,8 @@
 
     <template #footer>
       <button type="button" class="btn ghost" @click="$emit('close')">{{ t('common.close') }}</button>
+      <!-- 删除收进详情与卡片「⋯」：危险操作不在卡片主区直接暴露 -->
+      <button type="button" class="btn ghost detail-delete" @click="$emit('delete', card)">{{ t('creditCards.delete') }}</button>
       <button type="button" class="btn" @click="$emit('edit', card)">{{ t('creditCards.edit') }}</button>
     </template>
   </AppModal>
@@ -93,7 +95,7 @@ import CreditCardCycleTrack from './CreditCardCycleTrack.vue'
 import CreditCardStatementList from './CreditCardStatementList.vue'
 
 const props = defineProps({ card: { type: Object, required: true } })
-const emit = defineEmits(['close', 'edit', 'statements-changed'])
+const emit = defineEmits(['close', 'edit', 'delete', 'statements-changed'])
 const { t } = useI18n()
 function formatLimit(value) {
   return new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 2 }).format(Number(value))
@@ -175,6 +177,7 @@ function onModalChange(value) {
 .fee-charged { margin: 8px 0 0; color: var(--danger-text); font-size: 12px; font-weight: 650; }
 .fee-missing { margin: 8px 0 0; color: var(--warning-text); font-size: 12px; }
 .fee-retry { margin-left: 6px; padding: 0; border: 0; background: none; color: var(--primary); font: inherit; font-weight: 750; cursor: pointer; text-decoration: underline; }
+.detail-delete { color: var(--danger-text); border-color: color-mix(in srgb, var(--danger) 38%, var(--border)); }
 .detail-grid dd { margin: 5px 0 0; font-size: 14px; font-weight: 750; overflow-wrap: anywhere; }
 .disclaimer { margin-top: 16px; padding: 13px 14px; border: 1px solid color-mix(in srgb, var(--warning) 38%, var(--border)); border-radius: 12px; background: color-mix(in srgb, var(--warning) 7%, var(--surface)); }
 .disclaimer strong { color: var(--warning-text); font-size: 12px; }
