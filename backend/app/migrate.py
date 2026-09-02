@@ -59,6 +59,9 @@ _COLUMNS = [
     ("credit_card_statements", "is_repaid", "BOOLEAN NOT NULL DEFAULT 0"),
     ("credit_card_statements", "repaid_at", "TIMESTAMP"),
     ("credit_cards", "repaid_through_due", "DATE"),
+    ("credit_cards", "fee_waiver_anchor_date", "DATE"),
+    ("credit_cards", "fee_waiver_target_count", "INTEGER"),
+    ("credit_cards", "fee_waiver_target_amount", "FLOAT"),
 ]
 
 

@@ -25,6 +25,42 @@
 
     <CreditCardStatementList :card-id="card.id" @repaid-changed="(updated) => $emit('statements-changed', updated)" />
 
+    <!-- 免年费进度（派生状态，详情懒加载现算；未配置不渲染）。
+         加载失败必须响亮：区块消失会被误读成「未配置」——给错误态与重试 -->
+    <section v-if="feeWaiver || feeWaiverError" class="fee-waiver" aria-label="免年费进度">
+      <template v-if="feeWaiverError">
+        <p class="fee-missing" role="alert">{{ t('creditCards.annualFeeLoadFailed') }}
+          <button type="button" class="fee-retry" :disabled="feeWaiverLoading" @click="loadFeeWaiver">{{ t('imap.retry') }}</button>
+        </p>
+      </template>
+      <template v-else-if="feeWaiver">
+        <header class="fee-head">
+          <strong>{{ t('creditCards.annualFeeTitle') }}</strong>
+          <span v-if="feeWaiver.met" class="fee-met-tag">{{ t('creditCards.annualFeeMet') }}</span>
+        </header>
+        <p class="fee-window muted">{{ feeWaiver.window_start }} ~ {{ feeWaiver.window_end }}</p>
+        <div class="fee-bar" role="img" :aria-label="feeBarLabel">
+          <div class="fee-bar-fill" :class="{ met: feeWaiver.met }" :style="{ width: feeBarPct + '%' }"></div>
+        </div>
+        <p class="fee-progress">
+          <template v-if="feeWaiver.target_count != null">{{ t('creditCards.annualFeeCountProgress', { n: feeWaiver.qualified_count, total: feeWaiver.target_count }) }}</template>
+          <template v-if="feeWaiver.target_count != null && feeWaiver.target_amount != null"> · </template>
+          <template v-if="feeWaiver.target_amount != null">
+            <MoneyText :value="feeWaiver.qualified_amount" currency="CNY" position="prefix" /> / {{ formatLimit(feeWaiver.target_amount) }}
+          </template>
+        </p>
+        <p v-if="feeWaiver.annual_fee_charged" class="fee-charged" role="alert">
+          {{ t('creditCards.annualFeeCharged', {
+            amount: formatLimit(feeWaiver.annual_fee_charged.amount),
+            cycle: feeWaiver.annual_fee_charged.cycle || ''
+          }) }}
+        </p>
+        <p v-if="feeWaiver.missing_cycles.length" class="fee-missing">
+          {{ t('creditCards.annualFeeMissing', { n: feeWaiver.missing_cycles.length, cycles: feeWaiver.missing_cycles.join('、') }) }}
+        </p>
+      </template>
+    </section>
+
     <dl class="detail-grid">
       <div><dt>{{ t('creditCards.statementDay') }}</dt><dd>{{ t('creditCards.monthDayValue', { n: card.statement_day }) }}</dd></div>
       <div><dt>{{ t('creditCards.dueDay') }}</dt><dd>{{ t('creditCards.monthDayValue', { n: card.due_day }) }}</dd></div>
@@ -47,18 +83,66 @@
 </template>
 
 <script setup>
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import api from '../../api'
 import AppModal from '../AppModal.vue'
+import MoneyText from '../MoneyText.vue'
 import CreditCardBrandBadge from './CreditCardBrandBadge.vue'
 import CreditCardCycleTrack from './CreditCardCycleTrack.vue'
 import CreditCardStatementList from './CreditCardStatementList.vue'
 
-defineProps({ card: { type: Object, required: true } })
+const props = defineProps({ card: { type: Object, required: true } })
 const emit = defineEmits(['close', 'edit', 'statements-changed'])
 const { t } = useI18n()
 function formatLimit(value) {
   return new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 2 }).format(Number(value))
 }
+
+// 免年费进度：配置了核卡日+目标的卡才请求；派生值随最新账单现算。
+// watch immediate 即完成首次加载（onMounted 会重复请求一次，不加）；
+// 加载失败置错误态展示重试——区块消失会被误读成「未配置」。
+const feeWaiver = ref(null)
+const feeWaiverError = ref(false)
+const feeWaiverLoading = ref(false)
+let feeSeq = 0
+async function loadFeeWaiver() {
+  if (!props.card?.fee_waiver_anchor_date) {
+    feeWaiver.value = null
+    feeWaiverError.value = false
+    return
+  }
+  const seq = ++feeSeq
+  feeWaiverLoading.value = true
+  try {
+    const { data } = await api.get(`/api/credit-cards/${props.card.id}/annual-fee`)
+    if (seq !== feeSeq) return
+    feeWaiver.value = data?.enabled ? data : null
+    feeWaiverError.value = false
+  } catch {
+    if (seq !== feeSeq) return
+    feeWaiverError.value = true // 响亮：明确错误+重试，不伪装成未配置
+  } finally {
+    if (seq === feeSeq) feeWaiverLoading.value = false
+  }
+}
+watch(() => [props.card?.id, props.card?.fee_waiver_anchor_date], loadFeeWaiver, { immediate: true })
+onBeforeUnmount(() => { feeSeq += 1 })
+
+const feeBarPct = computed(() => {
+  const f = feeWaiver.value
+  if (!f) return 0
+  const pcts = []
+  // 退款可把金额打成负数：比例钳在 [0, 100]，负值按 0 处理
+  if (f.target_count != null && f.target_count > 0) pcts.push(Math.min(100, Math.max(0, (f.qualified_count / f.target_count) * 100)))
+  if (f.target_amount != null && f.target_amount > 0) pcts.push(Math.min(100, Math.max(0, (f.qualified_amount / f.target_amount) * 100)))
+  return pcts.length ? Math.round(Math.max(...pcts)) : 0
+})
+const feeBarLabel = computed(() => {
+  const f = feeWaiver.value
+  if (!f) return ''
+  return f.met ? t('creditCards.annualFeeMet') : t('creditCards.annualFeeBarLabel', { pct: feeBarPct.value })
+})
 
 function onModalChange(value) {
   if (!value) emit('close')
@@ -78,6 +162,19 @@ function onModalChange(value) {
 .detail-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin: 16px 0 0; }
 .detail-grid div { min-width: 0; padding: 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-2); }
 .detail-grid dt { color: var(--text-soft); font-size: 11px; }
+
+/* 免年费进度区块：进度条 + 达标徽标；配色与页面信号色一致 */
+.fee-waiver { margin-top: 16px; padding: 13px 14px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-2); }
+.fee-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.fee-met-tag { padding: 2px 9px; border-radius: 999px; background: color-mix(in srgb, var(--success) 13%, transparent); color: var(--success-text); font-size: 11px; font-weight: 750; }
+.fee-window { margin: 4px 0 8px; font-size: 12px; }
+.fee-bar { height: 8px; border-radius: 999px; background: color-mix(in srgb, var(--border) 70%, transparent); overflow: hidden; }
+.fee-bar-fill { height: 100%; border-radius: 999px; background: linear-gradient(90deg, var(--primary), var(--primary-2)); transition: width .3s ease; }
+.fee-bar-fill.met { background: linear-gradient(90deg, var(--success), color-mix(in srgb, var(--success) 70%, var(--primary))); }
+.fee-progress { margin: 8px 0 0; font-size: 13px; font-weight: 650; }
+.fee-charged { margin: 8px 0 0; color: var(--danger-text); font-size: 12px; font-weight: 650; }
+.fee-missing { margin: 8px 0 0; color: var(--warning-text); font-size: 12px; }
+.fee-retry { margin-left: 6px; padding: 0; border: 0; background: none; color: var(--primary); font: inherit; font-weight: 750; cursor: pointer; text-decoration: underline; }
 .detail-grid dd { margin: 5px 0 0; font-size: 14px; font-weight: 750; overflow-wrap: anywhere; }
 .disclaimer { margin-top: 16px; padding: 13px 14px; border: 1px solid color-mix(in srgb, var(--warning) 38%, var(--border)); border-radius: 12px; background: color-mix(in srgb, var(--warning) 7%, var(--surface)); }
 .disclaimer strong { color: var(--warning-text); font-size: 12px; }

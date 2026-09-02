@@ -140,3 +140,23 @@ def test_next_due_date_after_boundary_mid_month_uses_same_month_anchor():
     assert next_due_date_after(date(2026, 9, 1), 5, repaid_through=date(2026, 9, 3)) == date(2026, 9, 5)
     # 月末锚定边界：31 日卡，界线 2/28（锚定后 2 月末）→ 同月锚定 2/29 不晚于界线 → 3/31
     assert next_due_date_after(date(2026, 2, 20), 31, repaid_through=date(2026, 2, 28)) == date(2026, 3, 31)
+
+
+def test_annual_fee_window_rolls_years():
+    """年费周期从核卡日逐年滚动：含 as_of 的 [start, end) 段。"""
+    from datetime import date
+
+    from app.credit_card_rules import annual_fee_window
+
+    anchor = date(2025, 3, 15)
+    # 首个周期
+    assert annual_fee_window(date(2025, 5, 1), anchor) == (date(2025, 3, 15), date(2026, 3, 15))
+    # 第二周期（跨年滚动）
+    assert annual_fee_window(date(2026, 3, 14), anchor) == (date(2025, 3, 15), date(2026, 3, 15))
+    assert annual_fee_window(date(2026, 3, 15), anchor) == (date(2026, 3, 15), date(2027, 3, 15))
+    # as_of 早于 anchor：返回首个（未开始的）窗口，由上层处理
+    assert annual_fee_window(date(2025, 1, 1), anchor) == (date(2025, 3, 15), date(2026, 3, 15))
+    # 2/29 核卡日：滚动锚点逐年平滑（2025 起锚 2/28），周期无缝衔接
+    leap_anchor = date(2024, 2, 29)
+    assert annual_fee_window(date(2025, 2, 27), leap_anchor) == (date(2024, 2, 29), date(2025, 2, 28))
+    assert annual_fee_window(date(2025, 3, 1), leap_anchor) == (date(2025, 2, 28), date(2026, 2, 28))

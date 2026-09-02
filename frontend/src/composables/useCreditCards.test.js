@@ -41,9 +41,19 @@ describe('buildCreditCardPayload', () => {
       due_day: 26,
       remind_days_before: [3, 7],
       credit_limit: 50000,
+      fee_waiver_anchor_date: null,
+      fee_waiver_target_count: null,
+      fee_waiver_target_amount: null,
       is_active: false,
       show_in_calendar: true
     })
+  })
+
+  it('normalizes fee waiver fields: empty to null, values passed through', () => {
+    expect(buildCreditCardPayload({ fee_waiver_anchor_date: '', fee_waiver_target_count: '', fee_waiver_target_amount: '' }))
+      .toMatchObject({ fee_waiver_anchor_date: null, fee_waiver_target_count: null, fee_waiver_target_amount: null })
+    expect(buildCreditCardPayload({ fee_waiver_anchor_date: '2025-03-15T00:00:00', fee_waiver_target_count: 6, fee_waiver_target_amount: 30000 }))
+      .toMatchObject({ fee_waiver_anchor_date: '2025-03-15', fee_waiver_target_count: 6, fee_waiver_target_amount: 30000 })
   })
 
   it('parses a comma-separated reminder text into an integer array', () => {

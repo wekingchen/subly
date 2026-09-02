@@ -1044,6 +1044,9 @@ def test_backup_v3_exports_only_credit_card_configuration_for_current_user():
             "is_active": True,
             "show_in_calendar": False,
             "repaid_through_due": None,
+            "fee_waiver_anchor_date": None,
+            "fee_waiver_target_count": None,
+            "fee_waiver_target_amount": None,
         }]
         rendered = repr(exported)
         assert "他人卡" not in rendered

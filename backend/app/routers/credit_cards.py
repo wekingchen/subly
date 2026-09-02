@@ -5,7 +5,9 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from app.credit_card_rules import (
+    _next_month,
     anchor_month_day,
+    annual_fee_window,
     interest_free_period,
     next_due_date_after,
     statement_date_for_due,
@@ -69,6 +71,9 @@ def _to_out(card: CreditCard, as_of: date | None = None) -> CreditCardOut:
         is_active=card.is_active,
         show_in_calendar=card.show_in_calendar,
         repaid_through_due=card.repaid_through_due,
+        fee_waiver_anchor_date=card.fee_waiver_anchor_date,
+        fee_waiver_target_count=card.fee_waiver_target_count,
+        fee_waiver_target_amount=card.fee_waiver_target_amount,
         created_at=card.created_at,
         updated_at=card.updated_at,
         next_statement_date=statement_date,
@@ -265,6 +270,134 @@ def _bank_keys_for(bank_name: str) -> list[str]:
     from app.bank_senders import BANK_SENDER_DOMAINS
 
     return [k for k in BANK_SENDER_DOMAINS if bank_matches_card(bank_name, k)]
+
+
+@router.get("/{card_id}/annual-fee")
+def annual_fee_progress(
+    card_id: int,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """免年费进度（派生值，不落库——每次现算，新账单落库后自动反映）。
+
+    口径（用户确认）：
+    - 合格消费 = tx_type 为 purchase/installment 且金额为正（分期入账计入）
+    - 金额 = 合格消费合计 + refund 负金额合计（退款抵扣）；笔数不因退款减少
+    - 达标 = 笔数 / 金额满足其一副目标（都配了任一满足即可）
+    - 年费入账检测：fee 类且描述含「年费」——检测不是预测，银行真收了就暴露
+    - 覆盖警示：窗口内名义账单期与库中实际账单期比对，缺期响亮返回
+      （统计偏低不伪装可信）。期次比对按 statement_date/bill_period_end
+      的 (year, month)，与账单月份命名口径一致。
+    """
+    card = _owned_card(db, card_id, user.id)
+    anchor = card.fee_waiver_anchor_date
+    target_count = card.fee_waiver_target_count
+    target_amount = card.fee_waiver_target_amount
+    if anchor is None or (target_count is None and target_amount is None):
+        return {"enabled": False}
+
+    today = scheduler._local_today()
+    window_start, window_end = annual_fee_window(today, anchor)
+
+    # 账单期覆盖独立查询：零交易账单（无 items）也是已覆盖的期次，
+    # 不能从交易行顺带收集——会把零交易月误报成「缺账单数据」。
+    # 只认勾稽通过（ok）的账单：mismatch 的明细不可信，不进入统计也不算覆盖。
+    covered_rows = db.execute(
+        select(CreditCardStatement.statement_date, CreditCardStatement.bill_period_end).where(
+            CreditCardStatement.card_id == card.id,
+            CreditCardStatement.verify_status == "ok",
+            CreditCardStatement.statement_date.isnot(None),
+        )
+    ).all()
+    covered_cycles = {
+        ((s.bill_period_end or s.statement_date).year, (s.bill_period_end or s.statement_date).month)
+        for s in covered_rows
+    }
+
+    # 交易聚合：按有效归属日期限定在本年费窗口内（上一窗口的交易不计入）。
+    # 归属日期 = trans_date，缺交易日期回退账单出账月（bill_period_end || statement_date）。
+    # 金额按「分」整数累计（float 直接比较会让 0.1+0.7 < 0.8 误判未达标）。
+    rows = db.execute(
+        select(
+            CreditCardStatementItem.tx_type,
+            CreditCardStatementItem.amount,
+            CreditCardStatementItem.description,
+            CreditCardStatementItem.trans_date,
+            CreditCardStatement.statement_date,
+            CreditCardStatement.bill_period_end,
+        )
+        .join(
+            CreditCardStatement,
+            CreditCardStatementItem.statement_id == CreditCardStatement.id,
+        )
+        .where(
+            CreditCardStatement.card_id == card.id,
+            CreditCardStatement.verify_status == "ok",
+            CreditCardStatement.statement_date.isnot(None),
+        )
+    ).all()
+
+    qualified_count = 0
+    qualified_amount_cents = 0
+    annual_fee_charged: dict | None = None
+    for tx_type, amount, description, trans_date, statement_date, bill_period_end in rows:
+        cycle_month = bill_period_end or statement_date
+        effective = trans_date or cycle_month
+        if effective is None or not (window_start <= effective < window_end):
+            continue
+        amount = float(amount or 0.0)
+        if tx_type in ("purchase", "installment") and amount > 0:
+            qualified_count += 1
+            qualified_amount_cents += round(amount * 100)
+        elif tx_type == "refund":
+            qualified_amount_cents += round(amount * 100)  # 负金额抵扣
+        if (
+            tx_type == "fee"
+            and annual_fee_charged is None
+            and "年费" in (description or "")
+            and amount > 0
+        ):
+            annual_fee_charged = {
+                "amount": round(amount, 2),
+                "cycle": _cycle_label(cycle_month.year, cycle_month.month) if cycle_month else None,
+            }
+
+    # 覆盖比对：名义账单日（statement_day 锚定）落在本窗口内的月份集合。
+    # 不能按「窗口起点月」枚举到「终点月」——终点月的账单日可能已在窗口外
+    # （如窗口到 2027-03-15，2027-03 的账单日 3-15 不早于终点）。
+    expected: set[tuple[int, int]] = set()
+    cursor = window_start
+    while cursor < window_end:
+        occurrence = anchor_month_day(cursor.year, cursor.month, card.statement_day)
+        if window_start <= occurrence < window_end:
+            expected.add((cursor.year, cursor.month))
+        year, month = _next_month(cursor.year, cursor.month)
+        cursor = date(year, month, 1)
+    # covered_cycles 含窗口外历史期：响应与 missing 都只看窗口内交集
+    covered_in_window = covered_cycles & expected
+    missing = sorted(expected - covered_cycles)
+
+    qualified_amount = qualified_amount_cents / 100.0
+    target_amount_cents = round(target_amount * 100) if target_amount is not None else None
+    met = bool(
+        (target_count is not None and qualified_count >= target_count)
+        or (target_amount_cents is not None and qualified_amount_cents >= target_amount_cents)
+    )
+    return {
+        "enabled": True,
+        "window_start": window_start.isoformat(),
+        "window_end": window_end.isoformat(),
+        "qualified_count": qualified_count,
+        "qualified_amount": round(qualified_amount, 2),
+        "target_count": target_count,
+        "target_amount": target_amount,
+        "met": met,
+        "annual_fee_charged": annual_fee_charged,
+        "covered_cycles": len(covered_in_window),
+        "total_cycles": len(expected),
+        # 「26年4月」格式，与待还汇总 cycles 一致
+        "missing_cycles": [_cycle_label(y, m) for y, m in missing],
+    }
 
 
 @router.get("/{card_id}/statements/{statement_id}/items")

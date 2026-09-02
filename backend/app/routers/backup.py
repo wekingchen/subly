@@ -114,6 +114,10 @@ def _credit_card_dict(card: CreditCard) -> dict:
         "show_in_calendar": card.show_in_calendar,
         # 已还界线（名义还款日）：跨备份保留顺延/提醒静默状态
         "repaid_through_due": card.repaid_through_due,
+        # 免年费配置（可空）：核卡日锚定 + 刷 N 笔 / 满 M 元目标
+        "fee_waiver_anchor_date": card.fee_waiver_anchor_date,
+        "fee_waiver_target_count": card.fee_waiver_target_count,
+        "fee_waiver_target_amount": card.fee_waiver_target_amount,
     }
 
 
@@ -374,7 +378,10 @@ def _validated_credit_cards(data: dict) -> list[dict] | None:
         if isinstance(repaid_through, date) and repaid_through >= date.max - timedelta(days=31):
             raise ValueError(f"备份 credit_cards 第 {index} 项 repaid_through_due 超出可用日期范围")
         try:
-            # CreditCardIn 是 extra=forbid：剔除单独校验过的 repaid_through_due 再验
+            # CreditCardIn 是 extra=forbid：剔除单独校验过的 repaid_through_due 再验。
+            # fee_waiver_anchor_date 的类型/范围/未来日期校验都在 CreditCardIn 的
+            # validator 里（JSON 字符串在此归一为 date 后统一把关，绕过进程内
+            # 直接传 date 类型检查的漏洞）。
             validated.append(
                 CreditCardIn.model_validate(
                     {k: v for k, v in card.items() if k != "repaid_through_due"}
@@ -773,6 +780,10 @@ def _restore_entities(
                     if isinstance(raw_repaid_through, date)
                     else _parse_date(raw_repaid_through)
                 ),
+                # 免年费三字段经 CreditCardIn 校验（model_dump 含，含默认 None）
+                fee_waiver_anchor_date=card.get("fee_waiver_anchor_date"),
+                fee_waiver_target_count=card.get("fee_waiver_target_count"),
+                fee_waiver_target_amount=card.get("fee_waiver_target_amount"),
             )
             db.add(new_card)
             db.flush()

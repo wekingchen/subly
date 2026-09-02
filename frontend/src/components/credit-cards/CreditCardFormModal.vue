@@ -44,6 +44,20 @@
           <input id="credit-card-credit-limit" v-model.number="form.credit_limit" type="number" min="0" step="0.01" inputmode="decimal" autocomplete="off" :placeholder="t('creditCards.creditLimitPlaceholder')" :aria-invalid="!!error" />
           <span class="field-hint">{{ t('creditCards.creditLimitHint') }}</span>
         </div>
+        <div class="field">
+          <label for="credit-card-fee-anchor">{{ t('creditCards.feeWaiverAnchor') }}</label>
+          <input id="credit-card-fee-anchor" v-model="form.fee_waiver_anchor_date" type="date" autocomplete="off" />
+          <span class="field-hint">{{ t('creditCards.feeWaiverAnchorHint') }}</span>
+        </div>
+        <div class="field">
+          <label for="credit-card-fee-count">{{ t('creditCards.feeWaiverCount') }}</label>
+          <input id="credit-card-fee-count" v-model.number="form.fee_waiver_target_count" type="number" min="1" max="99" step="1" inputmode="numeric" autocomplete="off" :placeholder="t('creditCards.feeWaiverCountPlaceholder')" :aria-invalid="!!error" />
+        </div>
+        <div class="field field-wide">
+          <label for="credit-card-fee-amount">{{ t('creditCards.feeWaiverAmount') }}</label>
+          <input id="credit-card-fee-amount" v-model.number="form.fee_waiver_target_amount" type="number" min="0" step="0.01" inputmode="decimal" autocomplete="off" :placeholder="t('creditCards.feeWaiverAmountPlaceholder')" :aria-invalid="!!error" />
+          <span class="field-hint">{{ t('creditCards.feeWaiverHint') }}</span>
+        </div>
       </div>
 
       <div class="switches">
@@ -95,6 +109,9 @@ function blankForm() {
     due_day: 20,
     remind_days_before: '',
     credit_limit: null,
+    fee_waiver_anchor_date: '',
+    fee_waiver_target_count: null,
+    fee_waiver_target_amount: null,
     is_active: true,
     show_in_calendar: true
   }
