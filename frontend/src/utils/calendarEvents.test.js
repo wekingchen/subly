@@ -136,4 +136,55 @@ describe('creditCardCalendarEvents', () => {
     expect(detail.next_statement_date).toBe('2024-03-31')
     expect(detail.statement_to_due_days).toBe(30)
   })
+
+  it('同一银行同还款日的多卡合并为一条「XX银行信用卡」', () => {
+    const events = creditCardCalendarEvents([
+      { ...card, id: 21, display_name: '山姆联名卡', bank_name: '民生银行' },
+      { ...card, id: 22, display_name: 'VISA标准白金卡', bank_name: '民生银行' },
+      { ...card, id: 23, display_name: '他行卡', bank_name: '招商银行' }
+    ], new Date(2024, 0, 1), new Date(2024, 0, 31))
+    // 民生两张同日 → 合并一条；他行单独一条
+    expect(events).toHaveLength(2)
+    const merged = events.find((event) => event.cards_count === 2)
+    expect(merged.name).toBe('民生银行信用卡')
+    expect(merged.key).toBe('credit-card:brand:cmbc|2024-01-31')
+    // 单卡保持卡名
+    const single = events.find((event) => event.cards_count === 1)
+    expect(single.name).toBe('他行卡')
+    // 点击打开该组第一张卡的详情
+    expect(merged.raw.display_name).toBe('山姆联名卡')
+  })
+
+  it('未收录银行的 raw 分组归一大小写（HSBC 与 hsbc 同组）', () => {
+    const events = creditCardCalendarEvents([
+      { ...card, id: 51, display_name: '汇丰A', bank_name: 'HSBC' },
+      { ...card, id: 52, display_name: '汇丰B', bank_name: 'hsbc' }
+    ], new Date(2024, 0, 1), new Date(2024, 0, 31))
+    expect(events).toHaveLength(1)
+    expect(events[0].cards_count).toBe(2)
+  })
+
+  it('银行名称别名（「民生」「中国民生银行」）与「民生银行」合并为同组', () => {
+    const events = creditCardCalendarEvents([
+      { ...card, id: 41, display_name: '山姆联名卡', bank_name: '民生' },
+      { ...card, id: 42, display_name: 'VISA标准白金卡', bank_name: '中国民生银行' },
+      { ...card, id: 43, display_name: '标准卡', bank_name: '民生银行' }
+    ], new Date(2024, 0, 1), new Date(2024, 0, 31))
+    expect(events).toHaveLength(1)
+    expect(events[0].cards_count).toBe(3)
+    // 分组标题用规范银行名（brand.name），不沿用用户手填变体
+    expect(events[0].name).toBe('民生银行信用卡')
+  })
+
+  it('同银行但已还款界线不同的卡不合并（各自独立展示）', () => {
+    // 民生卡 A 已还至 1 月底（1 月期次消失），卡 B 未标记仍显示——
+    // 若无条件按银行合并会把 B 的还款日也吞掉
+    const events = creditCardCalendarEvents([
+      { ...card, id: 31, display_name: '民生A', bank_name: '民生银行', repaid_through_due: '2024-01-31' },
+      { ...card, id: 32, display_name: '民生B', bank_name: '民生银行' }
+    ], new Date(2024, 0, 31), new Date(2024, 0, 31))
+    expect(events).toHaveLength(1)
+    expect(events[0].cards_count).toBe(1)
+    expect(events[0].name).toBe('民生B')
+  })
 })
