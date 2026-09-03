@@ -187,23 +187,32 @@ def sync_statements_core(
     user,
     days: int = 31,
     since_date=None,
+    before=None,
+    update_card_profile: bool = True,
+    predicate_override=None,
 ) -> StatementSyncResult:
     """同步核心：拉取→解析→匹配→勾稽→落库→回写候选；**不 commit**。
 
     调用方（手动路由 / 自动轮询）负责事务边界。since_date 指定拉取
     窗口起点（自动轮询传业务日期，保持时区事实源一致）。
+    before 传入日期时搜索区间收窄为 [since−days, before)——历史账单
+    补拉按月分段用（IMAP SINCE+BEFORE 双界）。
+    update_card_profile=False（历史补拉模式）：账单只落库，不回写卡片
+    资料——旧账单的账单日/还款日/额度不得覆盖卡片当前值。
+    predicate_override 覆盖账户白名单（历史补拉强制目标银行域名过滤，
+    即使账户配置「全部银行」也不下载无关邮件保护预算）。
     返回结果含 matched_statements（成功落库/已存在的卡账单元数据），
     供自动轮询判定某卡本期是否已抓到。
     """
     result = StatementSyncResult()
     result.matched_statements = []
     writeback_candidates: dict[int, dict] = {}  # card_id → {card, best(parsed, st)}
-    predicate = None
-    if account.banks:
+    predicate = predicate_override
+    if predicate is None and account.banks:
         predicate = lambda addr: sender_matches_banks(addr, account.banks)  # noqa: E731
     mails = imap_client.fetch_full_mime(
         account.email, account.password, account.provider, days,
-        predicate=predicate, today=since_date,
+        predicate=predicate, today=since_date, before=before,
     )
     for mail in mails:
         uid = mail["uid"]
@@ -346,8 +355,10 @@ def sync_statements_core(
             mail_saved += 1
         result.saved += mail_saved
         result.skipped += mail_skipped
-    # 统一回写：每卡取最新账单（全部邮件处理完后执行，旧邮件不会覆盖新邮件）
-    _apply_writebacks(db, writeback_candidates, result)
+    # 统一回写：每卡取最新账单（全部邮件处理完后执行，旧邮件不会覆盖新邮件）。
+    # 历史补拉模式（update_card_profile=False）跳过——旧账单的资料不得覆盖卡片当前值。
+    if update_card_profile:
+        _apply_writebacks(db, writeback_candidates, result)
     # matched 元数据：供自动轮询判定某卡本期是否已抓到（card_id+账单 id+状态）
     for entry in writeback_candidates.values():
         card = entry["card"]

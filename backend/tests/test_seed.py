@@ -17,6 +17,7 @@ def official_rates():
     rates["USD"] = 1.0
     rates["CNY"] = 7.0
     rates["BOB"] = 6.91
+    rates["MOP"] = 8.05
     return rates
 
 
@@ -56,6 +57,37 @@ def test_seed_all_backfills_bob_into_existing_currency_table(db, monkeypatch):
     assert bob_rate.rate == 6.91
     cny_rate = db.scalar(select(ExchangeRate).where(ExchangeRate.quote == "CNY"))
     assert cny_rate.rate == 7
+
+
+def test_seed_all_backfills_mop_into_existing_currency_table(db, monkeypatch):
+    """MOP 与 BOB 同为后补货币（LATE_CURRENCIES）：已有库升级时拉官方汇率幂等安装。"""
+    monkeypatch.setattr("app.seed.exchange.fetch_rates", lambda _base: official_rates())
+    db.add(Currency(code="USD", name="美元 US Dollar", symbol="$", is_custom=False))
+    db.commit()
+
+    seed_all(db)
+
+    mop = db.get(Currency, "MOP")
+    assert mop is not None
+    assert mop.name == "澳门元 Macanese Pataca"
+    assert mop.symbol == "MOP$"
+    assert mop.is_custom is False
+    assert mop.user_id is None
+    mop_rate = db.scalar(select(ExchangeRate).where(ExchangeRate.quote == "MOP"))
+    assert mop_rate.rate == 8.05
+
+
+def test_seed_all_defers_mop_backfill_when_official_rate_is_missing(db, monkeypatch):
+    rates = official_rates()
+    rates.pop("MOP")
+    monkeypatch.setattr("app.seed.exchange.fetch_rates", lambda _base: rates)
+    db.add(Currency(code="USD", name="美元 US Dollar", symbol="$", is_custom=False))
+    db.commit()
+
+    seed_all(db)
+
+    assert db.get(Currency, "MOP") is None
+    assert db.scalar(select(ExchangeRate).where(ExchangeRate.quote == "MOP")) is None
 
 
 def test_seed_all_defers_bob_backfill_when_official_rate_is_missing(db, monkeypatch):

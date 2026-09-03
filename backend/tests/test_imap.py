@@ -849,3 +849,82 @@ def test_list_folders_failure_falls_back_to_inbox(imap_env, monkeypatch):
             raise ic.imaplib.IMAP4.error("LIST denied")
 
     assert ic._list_scan_folders(BrokenClient()) == ["INBOX"]
+
+
+def test_fetch_full_mime_before_bounds_search(imap_env, monkeypatch):
+    """before 参数 → SEARCH 条件含 BEFORE 上界（历史账单补拉的月度分段）。"""
+    from datetime import date
+
+    from app.services import imap_client as ic
+
+    client, _, _ = imap_env
+    client.post("/api/imap/accounts", json={
+        "email": "a@qq.com", "password": "x", "provider": "qq",
+    })
+
+    bill = (b"From: bill <creditcard@service.pingan.com>\r\n"
+            b"Subject: s\r\nMessage-ID: <m-before>\r\n\r\nbody")
+    search_clauses = []
+
+    class FakeClient:
+        def __init__(self, *a, **k): pass
+        def login(self, *a): pass
+        def xatom(self, *a): pass
+        def list(self):
+            return "OK", [b'(\\HasNoChildren) "/" "INBOX"']
+        def select(self, folder, readonly=False):
+            return "OK", [b"1"]
+        def uid(self, cmd, *a):
+            if cmd == "search":
+                search_clauses.append(a[1])
+                return "OK", [b"1"]
+            if cmd == "fetch" and "BODY.PEEK[]" in a[1]:
+                return "OK", [(b"1 (UID 1 BODY[])", bill), b")"]
+            header = bill.split(b"\r\n\r\n")[0]
+            return "OK", [(f"1 (UID 1 RFC822.SIZE 500 BODY[HEADER] {len(header)})".encode(), header), b")"]
+        def logout(self): pass
+        def shutdown(self): pass
+
+    monkeypatch.setattr(ic.imaplib, "IMAP4_SSL", FakeClient)
+    mails = ic.fetch_full_mime(
+        "a@qq.com", "x", "qq", 15,
+        today=date(2026, 8, 20), before=date(2026, 8, 5),
+    )
+    assert len(mails) == 1
+    # 区间：SINCE = today−days = 2026-08-05；BEFORE = 2026-08-05（排他）
+    clause = search_clauses[0]
+    assert "SINCE" in clause and "BEFORE" in clause
+    assert clause.count("05-Aug-2026") == 2  # SINCE 下界与 BEFORE 上界同日（排他区间）
+
+
+def test_fetch_full_mime_without_before_keeps_legacy_clause(imap_env, monkeypatch):
+    """不传 before：SEARCH 条件与既有行为一致（只有 SINCE，现有调用零改动）。"""
+    from datetime import date
+
+    from app.services import imap_client as ic
+
+    client, _, _ = imap_env
+    client.post("/api/imap/accounts", json={
+        "email": "a@qq.com", "password": "x", "provider": "qq",
+    })
+    search_clauses = []
+
+    class FakeClient:
+        def __init__(self, *a, **k): pass
+        def login(self, *a): pass
+        def xatom(self, *a): pass
+        def list(self):
+            return "OK", [b'(\\HasNoChildren) "/" "INBOX"']
+        def select(self, folder, readonly=False):
+            return "OK", [b"1"]
+        def uid(self, cmd, *a):
+            if cmd == "search":
+                search_clauses.append(a[1])
+                return "OK", [b"5"]
+            return "OK", [None]
+        def logout(self): pass
+        def shutdown(self): pass
+
+    monkeypatch.setattr(ic.imaplib, "IMAP4_SSL", FakeClient)
+    ic.fetch_full_mime("a@qq.com", "x", "qq", 31, today=date(2026, 9, 3))
+    assert search_clauses == ['(SINCE "03-Aug-2026")']

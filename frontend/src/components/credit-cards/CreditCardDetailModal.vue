@@ -23,7 +23,7 @@
 
     <CreditCardCycleTrack :card="card" />
 
-    <CreditCardStatementList :card-id="card.id" @repaid-changed="(updated) => $emit('statements-changed', updated)" />
+    <CreditCardStatementList :card-id="card.id" :refresh-key="stmtRefreshKey" @repaid-changed="(updated) => $emit('statements-changed', updated)" />
 
     <!-- 免年费进度（派生状态，详情懒加载现算；未配置不渲染）。
          加载失败必须响亮：区块消失会被误读成「未配置」——给错误态与重试 -->
@@ -58,6 +58,29 @@
         <p v-if="feeWaiver.missing_cycles.length" class="fee-missing">
           {{ t('creditCards.annualFeeMissing', { n: feeWaiver.missing_cycles.length, cycles: feeWaiver.missing_cycles.join('、') }) }}
         </p>
+        <!-- 历史账单补拉：逐期请求后端（进度实时可见），完成后刷新进度与账单列表 -->
+        <div v-if="feeWaiver.missing_cycles.length && !backfillRunning" class="fee-backfill-row">
+          <button type="button" class="btn ghost sm fee-backfill-btn" :disabled="feeWaiverLoading" @click="startBackfill">
+            <span aria-hidden="true">⇩</span> {{ t('creditCards.annualFeeBackfill') }}
+          </button>
+        </div>
+        <div v-if="backfillRunning || backfillResults.length" class="fee-backfill-progress" role="status">
+          <p class="fee-backfill-status">
+            {{ backfillRunning
+              ? t('creditCards.annualFeeBackfillRunning', { done: backfillResults.length, total: backfillTotal })
+              : backfillAborted
+                ? t('creditCards.annualFeeBackfillAborted', { done: backfillResults.length, total: backfillTotal })
+                : t('creditCards.annualFeeBackfillDone', {
+                  ok: backfillResults.filter((r) => r.filled).length,
+                  total: backfillResults.length
+                }) }}
+          </p>
+          <ul class="fee-backfill-list">
+            <li v-for="r in backfillResults" :key="r.period.year + '-' + r.period.month" :class="r.filled ? 'ok' : 'bad'">
+              {{ r.period.year % 100 }}年{{ r.period.month }}月 · {{ r.filled ? t('creditCards.annualFeeBackfillFilled') : (r.reason || t('creditCards.annualFeeBackfillNotFound')) }}
+            </li>
+          </ul>
+        </div>
       </template>
     </section>
 
@@ -129,7 +152,7 @@ async function loadFeeWaiver() {
   }
 }
 watch(() => [props.card?.id, props.card?.fee_waiver_anchor_date], loadFeeWaiver, { immediate: true })
-onBeforeUnmount(() => { feeSeq += 1 })
+onBeforeUnmount(() => { feeSeq += 1; backfillSeq += 1 })
 
 const feeBarPct = computed(() => {
   const f = feeWaiver.value
@@ -145,6 +168,64 @@ const feeBarLabel = computed(() => {
   if (!f) return ''
   return f.met ? t('creditCards.annualFeeMet') : t('creditCards.annualFeeBarLabel', { pct: feeBarPct.value })
 })
+
+// 历史账单补拉：前端驱动逐期请求（每期独立后端事务，幂等），实时展示进度。
+// 组件卸载置取消标志终止循环——已完成的期次不受影响（后端幂等，重开可续）。
+const backfillRunning = ref(false)
+const backfillResults = ref([])
+const backfillTotal = ref(0)
+const backfillAborted = ref(false)
+const stmtRefreshKey = ref(0)  // 补拉落库后递增 → 账单列表重载
+let backfillSeq = 0
+
+async function startBackfill() {
+  const periods = feeWaiver.value?.missing_periods || []
+  if (!periods.length || backfillRunning.value) return
+  const seq = ++backfillSeq
+  backfillResults.value = []
+  backfillTotal.value = periods.length
+  backfillAborted.value = false
+  backfillRunning.value = true
+  for (const period of periods) {
+    if (seq !== backfillSeq) return // 弹窗已关闭：终止循环
+    try {
+      const { data } = await api.post(`/api/credit-cards/${props.card.id}/statements/backfill`, {
+        year: period.year, month: period.month
+      })
+      if (seq !== backfillSeq) return
+      backfillResults.value.push({
+        period,
+        filled: Boolean(data?.filled),
+        reason: data?.filled ? null : (data?.reasons || []).join('；') || null
+      })
+    } catch (error) {
+      if (seq !== backfillSeq) return
+      const status = error.response?.status
+      // 4xx/401 是本次循环内不可能恢复的错误（无邮箱/银行不支持/停用卡/
+      // 会话失效且刷新仍失败）：记录后中止——对剩余每一期重复必然失败的
+      // 请求毫无意义；503/网络瞬断可重试，继续下一期
+      if ((status >= 400 && status < 500) || status === 401) {
+        backfillResults.value.push({
+          period,
+          filled: false,
+          reason: status === 401 ? t('creditCards.annualFeeBackfillAuth') : (error.response?.data?.detail || t('common.networkError'))
+        })
+        backfillAborted.value = true
+        break
+      }
+      backfillResults.value.push({
+        period,
+        filled: false,
+        reason: status === 503 ? t('creditCards.annualFeeBackfillBusy') : t('common.networkError')
+      })
+    }
+  }
+  if (seq !== backfillSeq) return
+  backfillRunning.value = false
+  // 结束（含中止）：刷新进度与账单列表——新补齐的期次改变统计与明细
+  loadFeeWaiver()
+  stmtRefreshKey.value += 1
+}
 
 function onModalChange(value) {
   if (!value) emit('close')
@@ -178,6 +259,15 @@ function onModalChange(value) {
 .fee-missing { margin: 8px 0 0; color: var(--warning-text); font-size: 12px; }
 .fee-retry { margin-left: 6px; padding: 0; border: 0; background: none; color: var(--primary); font: inherit; font-weight: 750; cursor: pointer; text-decoration: underline; }
 .detail-delete { color: var(--danger-text); border-color: color-mix(in srgb, var(--danger) 38%, var(--border)); }
+/* 历史账单补拉：按钮行 + 逐期进度列表 */
+.fee-backfill-row { margin-top: 10px; }
+.fee-backfill-btn { width: 100%; justify-content: center; color: var(--primary); border-color: color-mix(in srgb, var(--primary) 38%, var(--border)); }
+.fee-backfill-progress { margin-top: 10px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-2); }
+.fee-backfill-status { margin: 0; font-size: 12px; font-weight: 750; }
+.fee-backfill-list { margin: 6px 0 0; padding: 0; list-style: none; max-height: 140px; overflow-y: auto; }
+.fee-backfill-list li { padding: 2px 0; font-size: 12px; }
+.fee-backfill-list li.ok { color: var(--success-text); }
+.fee-backfill-list li.bad { color: var(--warning-text); }
 .detail-grid dd { margin: 5px 0 0; font-size: 14px; font-weight: 750; overflow-wrap: anywhere; }
 .disclaimer { margin-top: 16px; padding: 13px 14px; border: 1px solid color-mix(in srgb, var(--warning) 38%, var(--border)); border-radius: 12px; background: color-mix(in srgb, var(--warning) 7%, var(--surface)); }
 .disclaimer strong { color: var(--warning-text); font-size: 12px; }

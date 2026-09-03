@@ -32,6 +32,7 @@ CURRENCIES = [
     ("INR", "印度卢比 Indian Rupee", "₹"),
     ("BRL", "巴西雷亚尔 Brazilian Real", "R$"),
     ("BOB", "玻利维亚诺 Bolivian Boliviano", "Bs"),
+    ("MOP", "澳门元 Macanese Pataca", "MOP$"),
     ("THB", "泰铢 Thai Baht", "฿"),
     ("MYR", "马来西亚林吉特 Malaysian Ringgit", "RM"),
     ("PHP", "菲律宾比索 Philippine Peso", "₱"),
@@ -139,13 +140,18 @@ def _install_system_currency(
     return True
 
 
+# 后加入常用列表的货币：已有库升级时不能只补空行（无汇率不可用），
+# 需拉官方汇率幂等安装；官方报价缺失则本次跳过，下次启动重试。
+LATE_CURRENCIES = {"BOB", "MOP"}
+
+
 def seed_all(db: Session) -> None:
     existing_currencies = {currency.code: currency for currency in db.scalars(select(Currency)).all()}
     fresh_currency_table = not existing_currencies
     for code, name, symbol in CURRENCIES:
         currency = existing_currencies.get(code)
         if currency is None:
-            if code == "BOB" and not fresh_currency_table:
+            if code in LATE_CURRENCIES and not fresh_currency_table:
                 _install_system_currency(db, None, code, name, symbol)
             else:
                 db.add(Currency(code=code, name=name, symbol=symbol, is_custom=False))

@@ -32,6 +32,7 @@ from app.models import (
     User,
 )
 from app.services import scheduler
+from app.services.credit_card_statement_parser import StatementParseError
 
 
 @pytest.fixture
@@ -331,3 +332,244 @@ def test_float_amount_target_not_bit_gnomicked(fee_env):
     body = client.get(f"/api/credit-cards/{card.id}/annual-fee").json()
     assert body["qualified_amount"] == pytest.approx(0.8)
     assert body["met"] is True
+
+
+# --------------------------------------------------------------------------- #
+# 历史账单补拉（backfill）
+# --------------------------------------------------------------------------- #
+
+def _backfill_env_card(fee_env, *, bank="招商银行"):
+    """补拉测试卡：账单日 15（CMB fixture 账单日 2026-08-15 对齐）。
+    IMAP 账户复用 fee_env fixture 已建的 a@qq.com。"""
+    client, db, user = fee_env
+    card = CreditCard(
+        user_id=user.id, display_name="招行补拉卡", bank_name=bank,
+        last_four="6310", statement_day=15, due_day=3,
+        fee_waiver_anchor_date=date(2026, 12, 31),
+        fee_waiver_target_count=6,
+    )
+    db.add(card)
+    db.commit()
+    imap = db.query(ImapAccount).filter_by(user_id=user.id).one()
+    return client, db, user, card, imap
+
+
+def _mock_imap_single_mail(monkeypatch, mail_bytes):
+    """mock fetch_full_mime 返回单封邮件（断言区间参数而非真实 IMAP）。"""
+    calls = {}
+
+    def fake_fetch(email, password, provider, days, predicate=None, **kwargs):
+        calls.update({"days": days, "today": kwargs.get("today"), "before": kwargs.get("before")})
+        # predicate 是目标银行过滤——CMB fixture 发件人应通过
+        assert predicate is not None
+        assert predicate("cc@cmbchina.com") is True
+        assert predicate("spam@example.com") is False
+        return [{"uid": b"1", "from_address": "cc@cmbchina.com", "subject": "账单", "raw": mail_bytes}]
+
+    monkeypatch.setattr("app.services.credit_card_statement_sync.imap_client.fetch_full_mime", fake_fetch)
+    return calls
+
+
+def test_backfill_fills_missing_cycle(fee_env, monkeypatch):
+    """补拉成功路径：区间参数正确、账单落库、filled=true、卡片资料不回写。"""
+    from statement_fixtures import load_cmb
+
+    client, db, user, card, imap = _backfill_env_card(fee_env)
+    calls = _mock_imap_single_mail(monkeypatch, load_cmb())
+
+    resp = client.post(f"/api/credit-cards/{card.id}/statements/backfill", json={"year": 2026, "month": 8})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["filled"] is True
+    assert body["cycle"] == "26年8月"
+    assert body["saved"] == 1
+    assert body["accounts_tried"] == 1
+    # 搜索区间 = 名义账单日 2026-08-15 −10 ~ +5 天：
+    # SINCE = today−days = 08-20−15 = 08-05；BEFORE 排他上界 = 08-20
+    assert calls["today"] == date(2026, 8, 20)
+    assert calls["before"] == date(2026, 8, 20)
+    assert calls["days"] == 15
+
+    db.expire_all()
+    stmt = db.query(CreditCardStatement).filter_by(card_id=card.id).one()
+    assert stmt.statement_date == date(2026, 8, 15)
+    assert stmt.verify_status == "ok"
+    # 历史模式：卡片资料不被回写（账单日 15/额度由建卡值保持）
+    db.refresh(card)
+    assert card.credit_limit is None  # fixture 带额度，若回写会变成非 None
+
+
+def test_backfill_not_found_reason(fee_env, monkeypatch):
+    """邮箱中无该期邮件：filled=false 且原因响亮（不伪装成功）。"""
+    client, db, user, card, imap = _backfill_env_card(fee_env)
+    monkeypatch.setattr(
+        "app.services.credit_card_statement_sync.imap_client.fetch_full_mime",
+        lambda *a, **k: [],
+    )
+    resp = client.post(f"/api/credit-cards/{card.id}/statements/backfill", json={"year": 2026, "month": 7})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["filled"] is False
+    assert any("未找到" in r for r in body["reasons"])
+
+
+def test_backfill_idempotent(fee_env, monkeypatch):
+    """重复补拉同一期：第二次 skipped 计数、不产生重复账单。"""
+    from statement_fixtures import load_cmb
+
+    client, db, user, card, imap = _backfill_env_card(fee_env)
+    _mock_imap_single_mail(monkeypatch, load_cmb())
+    assert client.post(f"/api/credit-cards/{card.id}/statements/backfill", json={"year": 2026, "month": 8}).json()["filled"] is True
+    body2 = client.post(f"/api/credit-cards/{card.id}/statements/backfill", json={"year": 2026, "month": 8}).json()
+    assert body2["filled"] is True
+    assert body2["saved"] == 0
+    assert body2["skipped"] == 1  # 已存在去重
+    assert db.query(CreditCardStatement).filter_by(card_id=card.id).count() == 1
+
+
+def test_backfill_rejects_unknown_bank_and_inactive(fee_env):
+    """非支持银行 400；停用卡 400。"""
+    client, db, user = fee_env
+    foreign = CreditCard(user_id=user.id, display_name="外行卡", bank_name="花旗银行",
+                         last_four="1234", statement_day=5, due_day=25)
+    db.add(foreign)
+    db.commit()
+    assert client.post(f"/api/credit-cards/{foreign.id}/statements/backfill", json={"year": 2026, "month": 8}).status_code == 400
+    ok_card = _backfill_env_card(fee_env)[3]
+    ok_card.is_active = False
+    db.commit()
+    assert client.post(f"/api/credit-cards/{ok_card.id}/statements/backfill", json={"year": 2026, "month": 8}).status_code == 400
+
+
+def test_backfill_no_imap_account(fee_env):
+    client, db, user = fee_env
+    db.query(ImapAccount).delete()
+    db.commit()
+    card = _make_card(db, user.id, anchor=date(2026, 12, 31), count=6)
+    assert client.post(f"/api/credit-cards/{card.id}/statements/backfill", json={"year": 2026, "month": 8}).status_code == 400
+
+
+def test_backfill_503_when_busy(fee_env, monkeypatch):
+    """IMAP 信号量饱和 → 503（与手动解析同一语义）。"""
+    client, db, user, card, imap = _backfill_env_card(fee_env)
+    import threading
+    monkeypatch.setattr(
+        "app.services.imap_client.IMAP_SEMAPHORE",
+        threading.Semaphore(0),
+    )
+    assert client.post(f"/api/credit-cards/{card.id}/statements/backfill", json={"year": 2026, "month": 8}).status_code == 503
+
+
+def test_backfill_skips_account_without_bank(fee_env, monkeypatch):
+    """账户白名单不含目标银行 → 跳过该账户（accounts_tried=0）。"""
+    client, db, user, card, imap = _backfill_env_card(fee_env)
+    imap.banks = ["ccb"]  # 只允许建行
+    db.commit()
+    called = []
+    monkeypatch.setattr(
+        "app.services.credit_card_statement_sync.imap_client.fetch_full_mime",
+        lambda *a, **k: called.append(1) or [],
+    )
+    body = client.post(f"/api/credit-cards/{card.id}/statements/backfill", json={"year": 2026, "month": 8}).json()
+    assert body["accounts_tried"] == 0
+    assert called == []
+
+
+def test_backfill_two_accounts_same_mail_no_duplicate(fee_env, monkeypatch):
+    """审核 Major 回归：同一封账单经转发存在于两个邮箱——补拉只入库一份，
+    免年费统计不得把同一期交易累加两次（补齐即停止遍历后续账户）。"""
+    from statement_fixtures import load_cmb
+
+    client, db, user, card, imap1 = _backfill_env_card(fee_env)
+    imap2 = ImapAccount(user_id=user.id, email="b@126.com", password="code", provider="126")
+    db.add(imap2)
+    db.commit()
+    _mock_imap_single_mail(monkeypatch, load_cmb())  # 两账户返回同一封邮件
+
+    body = client.post(f"/api/credit-cards/{card.id}/statements/backfill", json={"year": 2026, "month": 8}).json()
+    assert body["filled"] is True
+    assert body["accounts_tried"] == 1  # 补齐即停止，第二个账户未尝试
+    assert db.query(CreditCardStatement).filter_by(card_id=card.id).count() == 1
+
+
+def test_backfill_skipped_first_account_still_breaks(fee_env, monkeypatch):
+    """复核回归锁定：首账户返回 skipped（期次已存在）也必须命中「补齐即
+    停止」分支——若退化为「只有新保存才 break」，第二账户会插入跨账户
+    重复记录且测试必须失败。"""
+    from statement_fixtures import load_cmb
+
+    client, db, user, card, imap1 = _backfill_env_card(fee_env)
+    imap2 = ImapAccount(user_id=user.id, email="b@126.com", password="code", provider="126")
+    db.add(imap2)
+    db.commit()
+    # 第一次补拉：账户 A 落库
+    _mock_imap_single_mail(monkeypatch, load_cmb())
+    assert client.post(f"/api/credit-cards/{card.id}/statements/backfill", json={"year": 2026, "month": 8}).json()["filled"] is True
+    # 第二次补拉同一期：账户 A 返回 skipped（已存在），必须仍然 break
+    body = client.post(f"/api/credit-cards/{card.id}/statements/backfill", json={"year": 2026, "month": 8}).json()
+    assert body["filled"] is True
+    assert body["skipped"] == 1
+    assert body["accounts_tried"] == 1  # 未错误尝试账户 B
+    assert db.query(CreditCardStatement).filter_by(card_id=card.id).count() == 1
+
+
+def test_backfill_aggregates_parse_error_across_accounts(fee_env, monkeypatch):
+    """复核回归锁定：账户 A 找到邮件但解析失败、账户 B 搜索成功但空结果——
+    聚合后原因必须是「解析失败」，不得被空账户遮蔽成「邮箱中未找到」。
+    （last_result 只留最后一个账户的旧实现会让本测试失败。）"""
+    client, db, user, card, imap1 = _backfill_env_card(fee_env)
+    imap2 = ImapAccount(user_id=user.id, email="b@126.com", password="code", provider="126")
+    db.add(imap2)
+    db.commit()
+
+    def fake_fetch(email, password, provider, days, predicate=None, **kwargs):
+        if email == "a@qq.com":
+            return [{"uid": b"1", "from_address": "cc@cmbchina.com", "subject": "账单", "raw": b"x"}]
+        return []  # 账户 B 空结果
+
+    def bad_parse(raw, from_address=""):
+        raise StatementParseError("模板不匹配")
+
+    monkeypatch.setattr("app.services.credit_card_statement_sync.imap_client.fetch_full_mime", fake_fetch)
+    monkeypatch.setattr("app.services.credit_card_statement_sync.parse_email", bad_parse)
+    body = client.post(f"/api/credit-cards/{card.id}/statements/backfill", json={"year": 2026, "month": 8}).json()
+    assert body["filled"] is False
+    assert body["parse_errors"] == 1
+    assert any("解析失败" in r for r in body["reasons"])
+    assert not any("未找到" in r for r in body["reasons"])
+
+
+def test_backfill_parse_error_reason(fee_env, monkeypatch):
+    """审核 Major 回归：邮件存在但解析失败 → 原因明确（不得误报「未找到」）。"""
+    from app.services.credit_card_statement_parser import StatementParseError
+
+    client, db, user, card, imap = _backfill_env_card(fee_env)
+
+    def bad_parse(raw, from_address=""):
+        raise StatementParseError("模板不匹配")
+
+    def fake_fetch(email, password, provider, days, predicate=None, **kwargs):
+        return [{"uid": b"1", "from_address": "cc@cmbchina.com", "subject": "账单", "raw": b"x"}]
+
+    monkeypatch.setattr("app.services.credit_card_statement_sync.imap_client.fetch_full_mime", fake_fetch)
+    monkeypatch.setattr("app.services.credit_card_statement_sync.parse_email", bad_parse)
+    body = client.post(f"/api/credit-cards/{card.id}/statements/backfill", json={"year": 2026, "month": 8}).json()
+    assert body["filled"] is False
+    assert body["parse_errors"] == 1
+    assert any("解析失败" in r for r in body["reasons"])
+
+
+def test_backfill_imap_error_reason(fee_env, monkeypatch):
+    """IMAP 连接失败：不伪装成功，原因带账户标识。"""
+    from app.services.imap_client import ImapConnectionError
+
+    client, db, user, card, imap = _backfill_env_card(fee_env)
+
+    def boom(*a, **k):
+        raise ImapConnectionError("login-failed")
+
+    monkeypatch.setattr("app.services.credit_card_statement_sync.imap_client.fetch_full_mime", boom)
+    body = client.post(f"/api/credit-cards/{card.id}/statements/backfill", json={"year": 2026, "month": 8}).json()
+    assert body["filled"] is False
+    # 连接级原因 + 未找到并存：账户 A 连接失败不代表邮箱里一定没有该期账单
+    assert body["reasons"] == ["a@qq.com: ImapConnectionError", "邮箱中未找到该期账单邮件"]

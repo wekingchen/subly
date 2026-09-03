@@ -2,11 +2,12 @@
   <section class="stmt-section">
     <div class="stmt-head">
       <strong>{{ t('creditCards.statementsTitle') }}</strong>
-      <span v-if="loaded && !statements.length" class="muted stmt-empty">
-        {{ unmatchedCount ? t('creditCards.statementsUnmatched') : t('creditCards.statementsEmpty') }}
-      </span>
-      <span v-else-if="error" class="stmt-err">{{ t('creditCards.statementsLoadFailed') }}
+      <!-- 刷新失败优先于空列表文案：补拉后刷新失败时「还没有账单」会掩盖错误 -->
+      <span v-if="error" class="stmt-err">{{ t('creditCards.statementsLoadFailed') }}
         <button type="button" class="btn ghost sm" @click="load">{{ t('imap.retry') }}</button>
+      </span>
+      <span v-else-if="loaded && !statements.length" class="muted stmt-empty">
+        {{ unmatchedCount ? t('creditCards.statementsUnmatched') : t('creditCards.statementsEmpty') }}
       </span>
     </div>
 
@@ -83,7 +84,9 @@ import { formatMoney } from '../../utils/money'
 
 // 账单明细：打开卡片详情时懒加载；金额一律 MoneyText（与订阅卡同源）。
 const props = defineProps({
-  cardId: { type: Number, required: true }
+  cardId: { type: Number, required: true },
+  // 父级递增触发账单列表重载（补拉新账单落库后）
+  refreshKey: { type: Number, default: 0 }
 })
 
 // 还款标记变化时通知父级（携带更新后的卡片派生数据，null=孤立账单）
@@ -121,14 +124,21 @@ const cycleName = (s) => {
 // 时区与服务端不同时会少算/隐藏徽标
 const overdueDays = (s) => (s.is_overdue ? s.overdue_days : null)
 
+let loadSeq = 0
+
 async function load() {
+  // 请求序号防竞态：refreshKey 触发的刷新与初始加载并发时，
+  // 旧响应最后写回会让刚补拉出的账单「消失」
+  const seq = ++loadSeq
   error.value = false
   try {
     const { data } = await api.get(`/api/credit-cards/${props.cardId}/statements`)
+    if (seq !== loadSeq) return
     statements.value = data.statements || []
     unmatchedCount.value = data.unmatched_count || 0
     loaded.value = true
   } catch {
+    if (seq !== loadSeq) return
     error.value = true
   }
 }
@@ -184,7 +194,8 @@ async function toggleRepaid(s) {
   }
 }
 
-watch(() => props.cardId, (id) => {
+// refreshKey 由父级递增触发重载（如补拉新账单落库后刷新明细）
+watch(() => [props.cardId, props.refreshKey], ([id]) => {
   if (id) load()
 }, { immediate: true })
 </script>

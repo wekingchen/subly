@@ -1,6 +1,7 @@
-from datetime import date
+from datetime import date, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
@@ -21,6 +22,7 @@ from app.models import (
     CreditCardStatement,
     CreditCardStatementItem,
     CreditCardStatementPollRun,
+    ImapAccount,
     User,
 )
 from app.schemas import CreditCardIn, CreditCardOut, CreditCardUpdate, StatementRepaidIn
@@ -400,7 +402,172 @@ def annual_fee_progress(
         "total_cycles": len(expected),
         # 「26年4月」格式，与待还汇总 cycles 一致
         "missing_cycles": [_cycle_label(y, m) for y, m in missing],
+        # 结构化缺期（供前端逐期补拉请求）：与 missing_cycles 一一对应
+        "missing_periods": [{"year": y, "month": m} for y, m in missing],
     }
+
+
+def _bank_key_of_card(card: CreditCard) -> str | None:
+    """卡 → 银行 key（补拉路由用；与 polling._bank_key_of 同一匹配语义）。"""
+    from app.bank_senders import BANK_SENDER_DOMAINS
+    from app.services.match_bank import bank_matches_card
+
+    return next(
+        (k for k in BANK_SENDER_DOMAINS if bank_matches_card(card.bank_name, k)),
+        None,
+    )
+
+
+class StatementBackfillIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    year: int = Field(ge=2000, le=2100, strict=True)
+    month: int = Field(ge=1, le=12, strict=True)
+
+
+@router.post("/{card_id}/statements/backfill")
+def backfill_statement(
+    card_id: int,
+    payload: StatementBackfillIn,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """单期历史账单补拉：按目标账单期附近的时间区间搜索 IMAP 并落库。
+
+    与手动解析的差异（历史补拉模式）：
+    - 搜索区间 = 名义账单日 −10 天 ~ +5 天（银行邮件在账单日前后几天到达），
+      IMAP SINCE+BEFORE 双界，避免开放式历史搜索
+    - 强制目标银行域名过滤（账户配置「全部银行」也不下载无关邮件）
+    - 禁用卡片资料回写——旧账单的账单日/还款日/额度不得覆盖卡片当前值
+    逐账户独立 commit（部分成功不回滚其他账户）。filled=该期已有本卡
+    勾稽通过账单；false 时 reason 说明未补齐原因。幂等：Message-ID 去重，
+    重复调用不会产生重复账单。
+    """
+    from app.bank_senders import sender_matches_banks
+    from app.services import credit_card_statement_sync, imap_client
+
+    card = _owned_card(db, card_id, user.id)
+    if not card.is_active:
+        raise HTTPException(400, "停用卡不支持补拉账单")
+    bank_key = _bank_key_of_card(card)
+    if bank_key is None:
+        raise HTTPException(400, "无法识别发卡银行，仅支持招商/平安/民生/中信/建设")
+
+    year, month = payload.year, payload.month
+    # 该期名义账单日 → 搜索区间 [账单日−10天, 账单日+5天)：银行邮件在账单日
+    # 前后几天到达；BEFORE 为排他上界，+5 天天然形成半开区间
+    occurrence = anchor_month_day(year, month, card.statement_day)
+    search_start = occurrence - timedelta(days=10)
+    search_end = occurrence + timedelta(days=5)
+    days_span = (search_end - search_start).days
+    predicate = lambda addr: sender_matches_banks(addr, [bank_key])  # noqa: E731
+
+    accounts = db.scalars(
+        select(ImapAccount).where(ImapAccount.user_id == user.id).order_by(ImapAccount.id)
+    ).all()
+    if not accounts:
+        raise HTTPException(400, "尚未绑定邮箱账户，请先在设置页添加")
+
+    if not imap_client.IMAP_SEMAPHORE.acquire(timeout=5):
+        raise HTTPException(503, "邮件服务繁忙，请稍后重试")
+    outcome: dict = {
+        "cycle": _cycle_label(year, month),
+        "filled": False,
+        "accounts_tried": 0,
+        "saved": 0,
+        "skipped": 0,
+        "parse_errors": 0,
+        "reasons": [],
+    }
+    # 结构化失败跨账户聚合：账户 A 找到邮件但解析失败、账户 B 空结果时，
+    # 只留最后一个 result 会把失败原因遮蔽成「未找到」（复核 Medium）
+    agg_errors = 0
+    agg_mismatched = 0
+    agg_unmatched = 0
+    try:
+        for account in accounts:
+            # 账户配置了银行白名单且不含目标银行 → 该账户不会有目标账单，跳过
+            if account.banks and bank_key not in account.banks:
+                continue
+            outcome["accounts_tried"] += 1
+            try:
+                result = credit_card_statement_sync.sync_statements_core(
+                    db, account, user,
+                    # fetch 语义：since = today − days → today 传区间右端、
+                    # days=区宽，SINCE 恰为区间起点；before 为排他上界
+                    days=days_span, since_date=search_end, before=search_end,
+                    update_card_profile=False, predicate_override=predicate,
+                )
+            except credit_card_statement_sync.ImapBusyError:
+                outcome["accounts_tried"] -= 1
+                continue
+            except Exception as exc:  # noqa: BLE001
+                # 单账户连接/登录失败不阻断其他账户；原因进结果响亮呈现
+                outcome["reasons"].append(f"{account.email}: {type(exc).__name__}")
+                db.rollback()
+                continue
+            db.commit()
+            agg_errors += len(result.errors)
+            agg_mismatched += len(result.mismatched)
+            agg_unmatched += len(result.unmatched) + len(result.ambiguous)
+            outcome["saved"] += result.saved
+            outcome["skipped"] += result.skipped
+            outcome["parse_errors"] += len(result.errors)
+            if result.saved and not outcome.get("filled"):
+                outcome.setdefault("saved_accounts", []).append(account.email)
+            # 该期已补齐 → 停止遍历后续账户：同一账单邮件可能同时存在于多个
+            # 邮箱（转发场景），唯一键含 source_account_id 挡不住跨账户重复
+            # 入库，免年费统计会把同一期交易累加两次（审核 Major）
+            if self_cycle_filled(db, card, year, month):
+                break
+    finally:
+        imap_client.IMAP_SEMAPHORE.release()
+
+    # 判定补齐：该卡该期已有勾稽通过的账单（不区分来源账户——认领/重建场景）
+    record = self_cycle_filled(db, card, year, month)
+    if record is not None:
+        outcome["filled"] = True
+        outcome["statement_id"] = record.id
+        outcome["verify_status"] = record.verify_status
+    else:
+        _append_backfill_failure_reasons(outcome, agg_errors, agg_mismatched, agg_unmatched)
+    _invalidate_scan_checkpoint(db)
+    db.commit()
+    return outcome
+
+
+def self_cycle_filled(db: Session, card: CreditCard, year: int, month: int):
+    """该卡该期是否已有勾稽通过的账单；有则返回最新一条记录。"""
+    return db.scalar(
+        select(CreditCardStatement).where(
+            CreditCardStatement.card_id == card.id,
+            CreditCardStatement.verify_status == "ok",
+            func.strftime("%Y", CreditCardStatement.statement_date) == str(year),
+            func.strftime("%m", CreditCardStatement.statement_date) == f"{month:02d}",
+        ).order_by(CreditCardStatement.id.desc())
+    )
+
+
+def _append_backfill_failure_reasons(
+    outcome: dict, agg_errors: int, agg_mismatched: int, agg_unmatched: int
+) -> None:
+    """未补齐时按跨账户聚合的结构化失败构造响亮原因（审核 Major：解析失败/
+    勾稽失败/尾号未匹配不得误报成「邮箱中未找到」；聚合不被后续空账户遮蔽）。"""
+    if outcome["accounts_tried"] == 0:
+        outcome["reasons"].append("没有邮箱账户的白名单覆盖该银行，未执行搜索")
+        return
+    if agg_errors:
+        outcome["reasons"].append(
+            f"找到 {agg_errors} 封疑似账单邮件，但解析失败（银行邮件模板可能变化）"
+        )
+        return
+    if agg_mismatched:
+        outcome["reasons"].append("找到账单邮件，但金额勾稽未通过（mismatch）")
+        return
+    if agg_unmatched:
+        outcome["reasons"].append("账单已解析，但卡号尾号未匹配到当前卡片")
+        return
+    outcome["reasons"].append("邮箱中未找到该期账单邮件")
 
 
 @router.get("/{card_id}/statements/{statement_id}/items")

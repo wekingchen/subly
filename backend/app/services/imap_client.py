@@ -345,11 +345,14 @@ def fetch_full_mime(
     max_message_bytes: int = 5 * 1024 * 1024,
     max_total_bytes: int = MAX_TOTAL_BYTES,
     today=None,
+    before=None,
 ) -> list[dict]:
     """拉取最近 N 天**完整邮件**（含正文），供账单解析。
 
     扫描 INBOX 及归档/订阅类文件夹（银行账单常被 QQ 自动分拣出 INBOX）。
     predicate(from_address) -> bool 过滤发件人（账单银行白名单）。
+    before 传入日期时搜索区间收窄为 [today−days, before)——历史账单
+    补拉按月分段用（只有 SINCE 下界时无法排除当前邮件占用扫描名额）。
     返回 [{uid, from_address, subject, raw(bytes)}]；单封超过
     max_message_bytes 直接跳过（防止异常大邮件撑爆内存）。
     """
@@ -359,6 +362,10 @@ def fetch_full_mime(
     if today is None:
         today = date.today()  # 业务日期可由调用方传入（自动轮询保持时区一致）
     since = (today - timedelta(days=days)).strftime("%d-%b-%Y")
+    search_clause = f'(SINCE "{since}"'
+    if before is not None:
+        search_clause += f' BEFORE "{before.strftime("%d-%b-%Y")}"'
+    search_clause += ")"
     try:
         client = imaplib.IMAP4_SSL(
             host,
@@ -387,7 +394,7 @@ def fetch_full_mime(
                     raise ImapConnectionError(type(exc).__name__) from exc
                 if status != "OK":
                     continue  # 文件夹打不开（权限/不存在）→ 跳过，不阻断其他文件夹
-                status, data = client.uid("search", None, f'(SINCE "{since}")')
+                status, data = client.uid("search", None, search_clause)
                 if status != "OK":
                     continue
                 scanned_any = True
