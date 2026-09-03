@@ -149,7 +149,7 @@ const zh = {
     txDate: '交易日', txDesc: '描述', txAmount: '金额', txType: '类型',
     txType_purchase: '消费', txType_payment: '还款', txType_refund: '退款', txType_installment: '分期', txType_interest: '利息', txType_fee: '费用', txType_unknown: '其他',
     truncatedHint: '明细超过 200 条，仅显示前 200 条',
-    feeWaiverAnchor: '免年费核卡日（可选）', feeWaiverAnchorHint: '按银行核卡日起算年费周期的卡才需要填；不确定可留空。', feeWaiverCount: '免年费目标笔数', feeWaiverCountPlaceholder: '如 6', feeWaiverAmount: '免年费目标金额', feeWaiverAmountPlaceholder: '如 30000', feeWaiverHint: '刷 N 笔 / 满 M 元满足其一即视为达标（分期计入，退款抵扣金额）；按账单自动统计，以银行实际规则为准。',
+    feeWaiverAnchor: '年费收取日（可选）', feeWaiverAnchorHint: '银行每年收取年费的日期（如核卡日对应日）；周期从该日起每 12 个月滚动，可填未来日期。不确定可留空。', feeWaiverCount: '免年费目标笔数', feeWaiverCountPlaceholder: '如 6', feeWaiverAmount: '免年费目标金额', feeWaiverAmountPlaceholder: '如 30000', feeWaiverHint: '刷 N 笔 / 满 M 元满足其一即视为达标（分期计入，退款抵扣金额）；按账单自动统计，以银行实际规则为准。',
     annualFeeTitle: '免年费进度', annualFeeMet: '年费可豁免', annualFeeCountProgress: '{n}/{total} 笔', annualFeeBarLabel: '免年费进度 {pct}%', annualFeeCharged: '检测到年费入账 {amount} 元（{cycle}账单），请核实银行是否已豁免', annualFeeMissing: '缺少 {n} 期账单数据（{cycles}），进度可能偏低', annualFeeLoadFailed: '免年费进度加载失败',
   },
   calendar: {

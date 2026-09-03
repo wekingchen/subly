@@ -101,7 +101,7 @@ function formatLimit(value) {
   return new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 2 }).format(Number(value))
 }
 
-// 免年费进度：配置了核卡日+目标的卡才请求；派生值随最新账单现算。
+// 免年费进度：配置了年费收取日+目标的卡才请求；派生值随最新账单现算。
 // watch immediate 即完成首次加载（onMounted 会重复请求一次，不加）；
 // 加载失败置错误态展示重试——区块消失会被误读成「未配置」。
 const feeWaiver = ref(null)

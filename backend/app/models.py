@@ -266,7 +266,7 @@ class CreditCard(Base):
     # 已还款到的名义还款日（含）：≤ 此期的展示/提醒视为已处理——卡片顺延到
     # 下期、当期提前提醒取消。标记已还款时单调推进，取消标记不回拨。
     repaid_through_due: Mapped[date | None] = mapped_column(Date, nullable=True)
-    # 免年费（可选，三项都有值才启用）：核卡日锚定年费周期（每 12 个月滚动），
+    # 免年费（可选，三项都有值才启用）：年费收取日锚定年费周期（每 12 个月滚动），
     # 达标条件为刷 N 笔 / 满 M 元（满足其一）。豁免状态是派生值不落库，
     # 由账单交易现算（见 routers.credit_cards.annual_fee_progress）。
     fee_waiver_anchor_date: Mapped[date | None] = mapped_column(Date, nullable=True)

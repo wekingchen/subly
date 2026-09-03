@@ -243,7 +243,14 @@ async function submitForm(payload, localError = '') {
         remainingLastFours: batch.remainingLastFours || []
       }
     } else {
-      formError.value = error.response?.data?.detail || t('common.networkError')
+      // FastAPI 校验错误的 detail 是数组（[{loc, msg}]）——逐条提取 msg 清理
+      // 英文前缀后拼接，否则表单错误区渲染成空、用户看到「点了保存没反应」
+      // （生产实测教训；多条错误时每条都要清前缀）
+      const detail = error.response?.data?.detail
+      const messages = Array.isArray(detail)
+        ? detail.map((d) => String(d?.msg || '').replace(/^Value error, /, '')).filter(Boolean)
+        : [detail].filter(Boolean)
+      formError.value = messages.join('；') || t('common.networkError')
     }
   }
 }

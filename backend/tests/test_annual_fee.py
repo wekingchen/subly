@@ -190,7 +190,7 @@ def test_cross_user_404(fee_env):
 
 def test_backup_validation_and_legacy(fee_env):
     """免年费三字段随备份校验/恢复；旧备份缺字段默认 None；非法值响亮拒绝。
-    JSON 字符串形态的核卡日同样受未来日期/极端日期校验（审核发现的绕过）。"""
+    JSON 字符串形态的收取日同样受极端日期校验（审核发现的绕过）。"""
     from app.routers.backup import _validated_credit_cards
 
     payload = {
@@ -222,10 +222,26 @@ def test_backup_validation_and_legacy(fee_env):
     extreme = {**payload, "credit_cards": [{**payload["credit_cards"][0], "fee_waiver_anchor_date": "9999-12-31"}]}
     with pytest.raises(ValueError):
         _validated_credit_cards(extreme)
-    # 未来核卡日拒绝
+    # 未来收取日合法（用户按「每年 X 月 X 日收年费」填，未必知道确切核卡日）
     future = {**payload, "credit_cards": [{**payload["credit_cards"][0], "fee_waiver_anchor_date": "2099-01-01"}]}
-    with pytest.raises(ValueError):
-        _validated_credit_cards(future)
+    assert _validated_credit_cards(future)[0]["fee_waiver_anchor_date"] == date(2099, 1, 1)
+
+
+def test_future_anchor_window_starts_at_anchor(fee_env):
+    """未来收取日：首个周期 [anchor, anchor+1y) 尚未开始——enabled 正常返回、
+    0 进度，且不得把「还没到账期的周期」报成缺账单（否则用户刚保存未来
+    收取日就看到一整年缺期，误以为抓取失败）。"""
+    client, db, user = fee_env
+    future_anchor = date.today() + timedelta(days=120)
+    card = _make_card(db, user.id, anchor=future_anchor, count=6)
+    body = client.get(f"/api/credit-cards/{card.id}/annual-fee").json()
+    assert body["enabled"] is True
+    assert body["window_start"] == future_anchor.isoformat()
+    assert body["qualified_count"] == 0
+    assert body["met"] is False
+    # 首周期未开始：不生成缺期警示
+    assert body["total_cycles"] == 0
+    assert body["missing_cycles"] == []
 
 
 def test_window_filters_previous_cycle_and_mismatch(fee_env):

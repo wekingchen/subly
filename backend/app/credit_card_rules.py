@@ -105,16 +105,17 @@ def _add_years(d: date, years: int) -> date:
     """日期加整数年；2/29 在平年回退到 2/28（anchor 是真实日期，不产生名义日）。
 
     超出 date 可表示范围时抛 OverflowError——调用方（schema 层）负责在
-    写入前拒绝极端核卡日，这里防御坏存量数据形成 500 之外的静默错误。
+    写入前拒绝极端收取日，这里防御坏存量数据形成 500 之外的静默错误。
     """
     return anchor_month_day(d.year + years, d.month, d.day)
 
 
 def annual_fee_window(as_of: date, anchor: date) -> tuple[date, date]:
-    """含 as_of 的年费周期 [start, end)：从核卡日（anchor）起每 12 个月滚动。
+    """含 as_of 的年费周期 [start, end)：从年费收取日（anchor）起每 12 个月滚动。
 
-    as_of 早于 anchor（未来核卡日）时返回 (anchor, anchor+1y)——
-    上层 schema 已拒绝未来核卡日，这里兜底保证窗口仍是合法区间。
+    anchor 允许是未来日期（用户按「每年 X 月 X 日收年费」填收取日）：
+    as_of 早于 anchor 时返回 (anchor, anchor+1y)——首个周期尚未开始，
+    窗口内无账单属正常状态，由上层正常展示 0 进度。
     """
     if as_of < anchor:
         return (anchor, _add_years(anchor, 1))

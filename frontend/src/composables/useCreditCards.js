@@ -27,7 +27,7 @@ export function buildCreditCardPayload(source) {
       source?.credit_limit === '' || source?.credit_limit === null || source?.credit_limit === undefined
         ? null
         : Number(source.credit_limit),
-    // 免年费（可选）：核卡日 + 刷 N 笔 / 满 M 元，空值归 null = 未启用
+    // 免年费（可选）：年费收取日 + 刷 N 笔 / 满 M 元，空值归 null = 未启用
     fee_waiver_anchor_date:
       source?.fee_waiver_anchor_date === '' || source?.fee_waiver_anchor_date == null
         ? null

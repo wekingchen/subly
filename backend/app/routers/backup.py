@@ -114,7 +114,7 @@ def _credit_card_dict(card: CreditCard) -> dict:
         "show_in_calendar": card.show_in_calendar,
         # 已还界线（名义还款日）：跨备份保留顺延/提醒静默状态
         "repaid_through_due": card.repaid_through_due,
-        # 免年费配置（可空）：核卡日锚定 + 刷 N 笔 / 满 M 元目标
+        # 免年费配置（可空）：年费收取日锚定 + 刷 N 笔 / 满 M 元目标
         "fee_waiver_anchor_date": card.fee_waiver_anchor_date,
         "fee_waiver_target_count": card.fee_waiver_target_count,
         "fee_waiver_target_amount": card.fee_waiver_target_amount,

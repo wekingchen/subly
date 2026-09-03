@@ -488,22 +488,22 @@ def _normalize_remind_days(value) -> list[int]:
 
 
 def _normalize_fee_waiver_anchor(value):
-    """免年费核卡日：接受 date 或 ISO 字符串（JSON 备份形态）；
-    不能是未来（年费周期从核卡日起算，未来日期无意义），
-    也不能接近 date.max（annual_fee_window 需计算 anchor+1 年）。"""
+    """免年费年费锚定日（年费收取日）：接受 date 或 ISO 字符串（JSON 备份形态）。
+
+    允许未来日期——用户通常知道「每年 X 月 X 日收年费」，未必知道确切核卡日；
+    锚定日只决定周期从哪天起算。仅挡接近 date.max 的极端值
+    （annual_fee_window 需计算 anchor±1 年）。"""
     if value is None:
         return None
     if isinstance(value, str):
         try:
             value = date.fromisoformat(value)
         except ValueError as exc:
-            raise ValueError("免年费核卡日必须是日期") from exc
+            raise ValueError("年费收取日必须是日期") from exc
     if not isinstance(value, date) or isinstance(value, datetime):
-        raise ValueError("免年费核卡日必须是日期")
-    if value > date.today():
-        raise ValueError("免年费核卡日不能晚于今天")
+        raise ValueError("年费收取日必须是日期")
     if value >= date(date.max.year - 2, 1, 1):
-        raise ValueError("免年费核卡日超出可用日期范围")
+        raise ValueError("年费收取日超出可用日期范围")
     return value
 
 
@@ -519,7 +519,7 @@ class CreditCardIn(BaseModel):
     credit_limit: float | None = Field(default=None, ge=0, le=1_000_000_000)
     is_active: bool = True
     show_in_calendar: bool = True
-    # 免年费（可选）：核卡日锚定年费周期 + 刷 N 笔 / 满 M 元目标（满足其一）。
+    # 免年费（可选）：年费收取日锚定年费周期 + 刷 N 笔 / 满 M 元目标（满足其一）。
     # 三项均可空；anchor 有值但两个目标都空 = 启用无效，按未配置处理（接口层判断）。
     fee_waiver_anchor_date: date | None = None
     fee_waiver_target_count: int | None = Field(default=None, ge=1, le=99, strict=True)
