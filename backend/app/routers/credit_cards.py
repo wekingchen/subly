@@ -362,20 +362,20 @@ def annual_fee_progress(
                 "cycle": _cycle_label(cycle_month.year, cycle_month.month) if cycle_month else None,
             }
 
-    # 覆盖比对：名义账单日（statement_day 锚定）落在本窗口内的月份集合。
-    # 不能按「窗口起点月」枚举到「终点月」——终点月的账单日可能已在窗口外
+    # 覆盖比对：名义账单日（statement_day 锚定）已过出账时点的期次集合。
+    # 只统计「今天之前应出账」的期次（账单日 < today；当天银行通常
+    # 尚未出账，计入会把「账单日当天还没收到账单」误报成缺账单）——
+    # 把尚未到来的月份报成「缺账单」是时间未到，不是数据缺失。
+    # 窗口起点月枚举到终点月不可取——终点月的账单日可能已在窗口外
     # （如窗口到 2027-03-15，2027-03 的账单日 3-15 不早于终点）。
-    # 收取日在未来（首周期未开始）时不生成缺期——窗口内无账单是正常状态，
-    # 把「还没到账期的周期」报成缺账单会让用户误以为抓取失败。
     expected: set[tuple[int, int]] = set()
-    if today >= window_start:
-        cursor = window_start
-        while cursor < window_end:
-            occurrence = anchor_month_day(cursor.year, cursor.month, card.statement_day)
-            if window_start <= occurrence < window_end:
-                expected.add((cursor.year, cursor.month))
-            year, month = _next_month(cursor.year, cursor.month)
-            cursor = date(year, month, 1)
+    cursor = window_start
+    while cursor < window_end:
+        occurrence = anchor_month_day(cursor.year, cursor.month, card.statement_day)
+        if window_start <= occurrence < window_end and occurrence < today:
+            expected.add((cursor.year, cursor.month))
+        year, month = _next_month(cursor.year, cursor.month)
+        cursor = date(year, month, 1)
     # covered_cycles 含窗口外历史期：响应与 missing 都只看窗口内交集
     covered_in_window = covered_cycles & expected
     missing = sorted(expected - covered_cycles)

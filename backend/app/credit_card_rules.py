@@ -102,28 +102,35 @@ def due_dates_in_range(start: date, end: date, due_day: int) -> list[date]:
 
 
 def _add_years(d: date, years: int) -> date:
-    """日期加整数年；2/29 在平年回退到 2/28（anchor 是真实日期，不产生名义日）。
+    """日期加减整数年；2/29 在平年回退到 2/28（anchor 是真实日期，不产生名义日）。
 
-    超出 date 可表示范围时抛 OverflowError——调用方（schema 层）负责在
-    写入前拒绝极端收取日，这里防御坏存量数据形成 500 之外的静默错误。
+    结果超出 date 可表示范围时抛 OverflowError——schema 层在写入前拒绝
+    极端收取日（上界），负向由 annual_fee_window 的未来分支产生
+    （anchor − 1y），date.min 附近同样由写入端拦截。
     """
     return anchor_month_day(d.year + years, d.month, d.day)
 
 
 def annual_fee_window(as_of: date, anchor: date) -> tuple[date, date]:
-    """含 as_of 的年费周期 [start, end)：从年费收取日（anchor）起每 12 个月滚动。
+    """含 as_of 的年费周期 [start, end)：以年费收取日（anchor）为周期终点，
+    每 12 个月滚动。银行在收取日检查的是此前一年内的达标情况——
+    窗口必须包含 as_of（不变量：window_start <= as_of < window_end）。
 
-    anchor 允许是未来日期（用户按「每年 X 月 X 日收年费」填收取日）：
-    as_of 早于 anchor 时返回 (anchor, anchor+1y)——首个周期尚未开始，
-    窗口内无账单属正常状态，由上层正常展示 0 进度。
+    周期段按收取日系列 [anchor+k年, anchor+(k+1)年)（k 为整数）划分，
+    as_of 落在哪段就返回哪段：end 为第一个严格晚于 as_of 的收取日，
+    start 为该段起点。收取日在未来时即 [anchor−1y, anchor)（收取日
+    2026-12-31、今天 2026-09-03 → 窗口 2025-12-31 ~ 2026-12-31）；收取日
+    很远时逐段回退直到含 as_of（2028-01-01、今天 2026-09-03 → 窗口
+    2026-01-01 ~ 2027-01-01）。当前账单总是计入下一次收费日前需达标
+    的周期。首段起点用 anchor 本身（2/29 收取日首段起点含真实 2/29），
+    后续段起点由 _add_years 平滑。
     """
-    if as_of < anchor:
-        return (anchor, _add_years(anchor, 1))
-    # 从 anchor 年起逐年推进：周期 k = [anchor+k 年, anchor+k+1 年)，
-    # as_of 落在第 k 段。回退跨度最多一年，逐段找比二分更直白。
-    start = anchor
-    while True:
-        end = _add_years(start, 1)
-        if as_of < end:
-            return (start, end)
-        start = end
+    end = anchor
+    # end 推进到第一个严格晚于 as_of 的收取日（anchor 在过去时向未来推进）
+    while as_of >= end:
+        end = _add_years(end, 1)
+    # anchor 远未来时 end 可能已越过 as_of 超过一段：回退直到窗口起点 <= as_of
+    while _add_years(end, -1) > as_of:
+        end = _add_years(end, -1)
+    start = anchor if end == _add_years(anchor, 1) else _add_years(end, -1)
+    return (start, end)

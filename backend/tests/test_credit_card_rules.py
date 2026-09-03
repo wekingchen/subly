@@ -154,9 +154,19 @@ def test_annual_fee_window_rolls_years():
     # 第二周期（跨年滚动）
     assert annual_fee_window(date(2026, 3, 14), anchor) == (date(2025, 3, 15), date(2026, 3, 15))
     assert annual_fee_window(date(2026, 3, 15), anchor) == (date(2026, 3, 15), date(2027, 3, 15))
-    # as_of 早于 anchor：返回首个（未开始的）窗口，由上层处理
-    assert annual_fee_window(date(2025, 1, 1), anchor) == (date(2025, 3, 15), date(2026, 3, 15))
-    # 2/29 收取日：滚动锚点逐年平滑（2025 起锚 2/28），周期无缝衔接
+    # as_of 早于 anchor（收取日在未来）：窗口回退为 [anchor−1y, anchor)——
+    # 银行在收取日检查此前一年的达标情况，当前消费计入下一个收费日前的周期
+    assert annual_fee_window(date(2025, 1, 1), anchor) == (date(2024, 3, 15), date(2025, 3, 15))
+    # 远期收取日：逐段回退直到窗口含 as_of（as_of 属于收取日前的第二个周期段）
+    assert annual_fee_window(date(2026, 9, 3), date(2028, 1, 1)) == (date(2026, 1, 1), date(2027, 1, 1))
+    assert annual_fee_window(date(2026, 9, 3), date(2099, 1, 1)) == (date(2026, 1, 1), date(2027, 1, 1))
+    # anchor 恰为 as_of：走已到达分支，窗口 [today, +1y)
+    assert annual_fee_window(date(2026, 9, 3), date(2026, 9, 3)) == (date(2026, 9, 3), date(2027, 9, 3))
+    # 2/29 收取日：首段起点用 anchor 本身（含真实 2/29），后续段平滑（2025 起锚 2/28）
     leap_anchor = date(2024, 2, 29)
+    # as_of 在收取日前一天：属上一周期 [2023-02-28, 2024-02-29)
+    assert annual_fee_window(date(2024, 2, 28), leap_anchor) == (date(2023, 2, 28), date(2024, 2, 29))
+    # 首段内
     assert annual_fee_window(date(2025, 2, 27), leap_anchor) == (date(2024, 2, 29), date(2025, 2, 28))
+    # 第二段：起点平滑到 2025-02-28，周期无缝衔接
     assert annual_fee_window(date(2025, 3, 1), leap_anchor) == (date(2025, 2, 28), date(2026, 2, 28))

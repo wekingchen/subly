@@ -31,6 +31,7 @@ from app.models import (
     ImapAccount,
     User,
 )
+from app.services import scheduler
 
 
 @pytest.fixture
@@ -162,19 +163,24 @@ def test_annual_fee_charged_detection(fee_env):
     assert body["met"] is True
 
 
-def test_missing_cycles_warning(fee_env):
-    """窗口内缺期响亮返回 missing_cycles（缺失=统计可能偏低）。"""
+def test_missing_cycles_warning(fee_env, monkeypatch):
+    """窗口内已过出账时点却未出账的期次响亮返回 missing_cycles（缺失=统计
+    可能偏低）；今天之后尚未到账期的月份不报缺（时间未到 ≠ 数据缺失）。
+    固定业务日期，不依赖墙钟。"""
     client, db, user = fee_env
+    today = date(2026, 9, 3)
+    monkeypatch.setattr(scheduler, "_local_today", lambda: today)
     card = _make_card(db, user.id, anchor=date(2025, 3, 15), count=6)
-    today = date.today()
-    # 只造本月一期账单：窗口内其他期都缺
+    # 只造业务日期前几天的一期账单：窗口内其他已过出账时点的期次都缺
     _make_statement_with_items(db, user.id, card.id, today - timedelta(days=3), [
         ("purchase", 100.0, "超市"),
     ])
     body = client.get(f"/api/credit-cards/{card.id}/annual-fee").json()
     assert body["covered_cycles"] == 1
-    assert body["total_cycles"] == 12
-    assert len(body["missing_cycles"]) == 11
+    # 窗口 = 含业务日期的段 [2026-03-15, 2027-03-15)；账单日 < 2026-09-03
+    # 的期次共 6 期（3/15、4/15、5/15、6/15、7/15、8/15；9/15 未到不计）
+    assert body["total_cycles"] == 6
+    assert len(body["missing_cycles"]) == 5
     # 缺失月份格式「26年4月」
     assert all("月" in m for m in body["missing_cycles"])
 
@@ -227,21 +233,35 @@ def test_backup_validation_and_legacy(fee_env):
     assert _validated_credit_cards(future)[0]["fee_waiver_anchor_date"] == date(2099, 1, 1)
 
 
-def test_future_anchor_window_starts_at_anchor(fee_env):
-    """未来收取日：首个周期 [anchor, anchor+1y) 尚未开始——enabled 正常返回、
-    0 进度，且不得把「还没到账期的周期」报成缺账单（否则用户刚保存未来
-    收取日就看到一整年缺期，误以为抓取失败）。"""
+def test_future_anchor_counts_current_bills(fee_env, monkeypatch):
+    """未来收取日：统计窗口 = [收取日−1年, 收取日)（日历年回退，非 365 天）——
+    银行在收取日检查此前一年的达标情况，当前账单的合格消费必须计入进度
+    （此前实现把窗口放到未来，当前账单全部不计入，进度恒 0——生产用户
+    实测发现）。窗口内尚未到账期的月份不报缺（时间未到 ≠ 数据缺失）。
+    固定业务日期，不依赖墙钟（运行日期跨月/跨年不得翻转结果）。"""
     client, db, user = fee_env
-    future_anchor = date.today() + timedelta(days=120)
+    today = date(2026, 9, 3)
+    monkeypatch.setattr(scheduler, "_local_today", lambda: today)
+    future_anchor = date(2026, 12, 31)  # 收取日在业务日期之后 119 天
     card = _make_card(db, user.id, anchor=future_anchor, count=6)
+    # 业务日期前一个月的账单：落在 [收取日−1年, 收取日) 窗口内
+    stmt_date = today - timedelta(days=30)
+    _make_statement_with_items(db, user.id, card.id, stmt_date, [
+        ("purchase", 100.0, "超市"), ("purchase", 200.0, "加油"),
+    ])
     body = client.get(f"/api/credit-cards/{card.id}/annual-fee").json()
     assert body["enabled"] is True
-    assert body["window_start"] == future_anchor.isoformat()
-    assert body["qualified_count"] == 0
-    assert body["met"] is False
-    # 首周期未开始：不生成缺期警示
-    assert body["total_cycles"] == 0
-    assert body["missing_cycles"] == []
+    assert body["window_start"] == "2025-12-31"
+    assert body["window_end"] == "2026-12-31"
+    assert body["qualified_count"] == 2  # 当前账单计入进度
+    assert body["covered_cycles"] == 1
+    # 窗口内已过出账时点的期次中未出账的照常报缺（统计偏低要响亮）；
+    # 今天之后尚未到账期的月份不计入缺期（时间未到 ≠ 数据缺失）：
+    # 窗口 [2025-12-31, 2026-12-31) 中账单日 < 2026-09-03 的期次共 8 期
+    # （2026年1月~8月；起点月账单日 2025-12-31 < 窗口起点不计数），缺 7 期
+    assert body["covered_cycles"] + len(body["missing_cycles"]) == 8
+    assert "26年10月" not in body["missing_cycles"]
+    assert "26年12月" not in body["missing_cycles"]
 
 
 def test_window_filters_previous_cycle_and_mismatch(fee_env):
