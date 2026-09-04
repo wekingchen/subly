@@ -192,6 +192,10 @@ def fetch_recent(
     if today is None:
         today = date.today()  # 业务日期可由调用方传入（自动轮询保持时区一致）
     since = (today - timedelta(days=days)).strftime("%d-%b-%Y")
+    # SEARCH 条目不用外层括号：QQ 邮箱对 (SINCE "…" …) 括号形态静默忽略日期
+    # 条件返回全量邮箱（生产实测 10551 封），无括号形态才生效（生产实测 33 封）。
+    # imaplib 可变参数会按 IMAP 协议逐 token 拼接，效果即无括号多条件。
+    search_args = ("SINCE", since)
     try:
         client = imaplib.IMAP4_SSL(
             host,
@@ -218,7 +222,7 @@ def fetch_recent(
                     raise ImapConnectionError(type(exc).__name__) from exc
                 if status != "OK":
                     continue
-                status, data = client.uid("search", None, f'(SINCE "{since}")')
+                status, data = client.uid("search", None, *search_args)
                 if status != "OK":
                     continue
                 scanned_any = True
@@ -377,10 +381,13 @@ def fetch_full_mime(
     if today is None:
         today = date.today()  # 业务日期可由调用方传入（自动轮询保持时区一致）
     since = (today - timedelta(days=days)).strftime("%d-%b-%Y")
-    search_clause = f'(SINCE "{since}"'
+    # SEARCH 条目不用外层括号：QQ 邮箱对 (SINCE "…" BEFORE "…") 括号形态
+    # 静默忽略日期条件、返回全量邮箱（生产实测 INBOX 10551 封），
+    # 无括号形态才生效（同邮箱同窗口实测 33 封）。逐 token 传参由
+    # imaplib 按协议拼接，即无括号多条件形态。
+    search_args = ["SINCE", since]
     if before is not None:
-        search_clause += f' BEFORE "{before.strftime("%d-%b-%Y")}"'
-    search_clause += ")"
+        search_args += ["BEFORE", before.strftime("%d-%b-%Y")]
     try:
         client = imaplib.IMAP4_SSL(
             host,
@@ -411,7 +418,7 @@ def fetch_full_mime(
                     raise ImapConnectionError(type(exc).__name__) from exc
                 if status != "OK":
                     continue  # 文件夹打不开（权限/不存在）→ 跳过，不阻断其他文件夹
-                status, data = client.uid("search", None, search_clause)
+                status, data = client.uid("search", None, *search_args)
                 if status != "OK":
                     continue
                 scanned_any = True

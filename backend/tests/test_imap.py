@@ -230,6 +230,60 @@ def test_update_banks_semantics(imap_env):
     assert db.get(ImapAccount, account_id).banks == ["ccb", "pab"]
 
 
+def test_fetch_recent_search_args_unparenthesized(imap_env, monkeypatch):
+    """QQ 邮箱对带外层括号的 SEARCH 日期条件静默忽略、返回全量邮箱
+    （生产实测 INBOX 10551 封成为候选 → 补拉超时）；fetch_recent 的
+    SINCE 条件必须同样是逐 token 无括号形态。括号形态回归在此被拦住。"""
+    from datetime import date
+
+    client, _, _ = imap_env
+    account_id = client.post("/api/imap/accounts", json={
+        "email": "a@qq.com", "password": "x", "provider": "qq",
+    }).json()["id"]
+    search_calls = []
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def login(self, email, password):
+            pass
+
+        def xatom(self, name, arg):
+            pass
+
+        def select(self, folder, readonly=False):
+            return "OK", [b"1"]
+
+        def uid(self, command, *args):
+            if command == "search":
+                search_calls.append(args)
+                return "OK", [b""]
+            return "OK", [None]
+
+        def logout(self):
+            pass
+
+        def shutdown(self):
+            pass
+
+    monkeypatch.setattr(imap_client.imaplib, "IMAP4_SSL", FakeClient)
+    # fetch 路由不透传 today（fetch_recent 内部 from datetime import date 后
+    # 用 date.today()）——为让断言确定，mock 模块级 date.today
+    real_date = date
+
+    class FixedDate(real_date):
+        @classmethod
+        def today(cls):
+            return real_date(2026, 4, 16)  # today−30 = 2026-03-17
+
+    monkeypatch.setattr("datetime.date", FixedDate)
+    client.post(f"/api/imap/accounts/{account_id}/fetch", json={"days": 30, "limit": 50})
+    # today−30 = 2026-03-17：逐 token (None, "SINCE", "17-Mar-2026")，
+    # 绝不能再出现单字符串带括号形态 '(SINCE "17-Mar-2026")'
+    assert search_calls == [(None, "SINCE", "17-Mar-2026")]
+
+
 def test_fetch_filters_by_bank_whitelist(imap_env, monkeypatch):
     """拉取结果按白名单过滤发件人域名；空白名单不过滤。"""
     client, _, _ = imap_env
@@ -1061,7 +1115,7 @@ def test_fetch_full_mime_before_bounds_search(imap_env, monkeypatch):
 
     bill = (b"From: bill <creditcard@service.pingan.com>\r\n"
             b"Subject: s\r\nMessage-ID: <m-before>\r\n\r\nbody")
-    search_clauses = []
+    search_calls = []
 
     class FakeClient:
         def __init__(self, *a, **k): pass
@@ -1073,7 +1127,7 @@ def test_fetch_full_mime_before_bounds_search(imap_env, monkeypatch):
             return "OK", [b"1"]
         def uid(self, cmd, *a):
             if cmd == "search":
-                search_clauses.append(a[1])
+                search_calls.append(a)
                 return "OK", [b"1"]
             if cmd == "fetch" and "BODY.PEEK[]" in a[1]:
                 return "OK", [(b"1 (UID 1 BODY[])", bill), b")"]
@@ -1088,10 +1142,10 @@ def test_fetch_full_mime_before_bounds_search(imap_env, monkeypatch):
         today=date(2026, 8, 20), before=date(2026, 8, 5),
     )
     assert len(mails) == 1
-    # 区间：SINCE = today−days = 2026-08-05；BEFORE = 2026-08-05（排他）
-    clause = search_clauses[0]
-    assert "SINCE" in clause and "BEFORE" in clause
-    assert clause.count("05-Aug-2026") == 2  # SINCE 下界与 BEFORE 上界同日（排他区间）
+    # 逐 token 无括号：("search", None, "SINCE", "05-Aug-2026", "BEFORE", "05-Aug-2026")
+    # QQ 邮箱对带括号形态 (SINCE "…" BEFORE "…") 静默忽略日期条件返回全量邮箱
+    # （生产实测 INBOX 10551 封）——括号形态回归必须在这里被拦住。
+    assert search_calls == [(None, "SINCE", "05-Aug-2026", "BEFORE", "05-Aug-2026")]
 
 
 def test_batch_fetch_uses_exact_uid_list_not_range(imap_env, monkeypatch):
@@ -1356,7 +1410,9 @@ def test_batch_no_downgrade_parses_uid_in_trailer(imap_env, monkeypatch):
 
 
 def test_fetch_full_mime_without_before_keeps_legacy_clause(imap_env, monkeypatch):
-    """不传 before：SEARCH 条件与既有行为一致（只有 SINCE，现有调用零改动）。"""
+    """不传 before：SEARCH 条件与既有行为一致（只有 SINCE，现有调用零改动）。
+    条目必须是逐 token 形态（无外层括号）——QQ 邮箱对括号形态静默忽略
+    日期条件返回全量邮箱（生产实测），括号形态的回归必须在这里被拦住。"""
     from datetime import date
 
     from app.services import imap_client as ic
@@ -1365,7 +1421,7 @@ def test_fetch_full_mime_without_before_keeps_legacy_clause(imap_env, monkeypatc
     client.post("/api/imap/accounts", json={
         "email": "a@qq.com", "password": "x", "provider": "qq",
     })
-    search_clauses = []
+    search_calls = []
 
     class FakeClient:
         def __init__(self, *a, **k): pass
@@ -1377,7 +1433,7 @@ def test_fetch_full_mime_without_before_keeps_legacy_clause(imap_env, monkeypatc
             return "OK", [b"1"]
         def uid(self, cmd, *a):
             if cmd == "search":
-                search_clauses.append(a[1])
+                search_calls.append(a)
                 return "OK", [b"5"]
             return "OK", [None]
         def logout(self): pass
@@ -1385,4 +1441,6 @@ def test_fetch_full_mime_without_before_keeps_legacy_clause(imap_env, monkeypatc
 
     monkeypatch.setattr(ic.imaplib, "IMAP4_SSL", FakeClient)
     ic.fetch_full_mime("a@qq.com", "x", "qq", 31, today=date(2026, 9, 3))
-    assert search_clauses == ['(SINCE "03-Aug-2026")']
+    # 逐 token：("search", None, "SINCE", "03-Aug-2026")——绝不能再出现
+    # 单字符串带括号形态 '(SINCE "…")'
+    assert search_calls == [(None, "SINCE", "03-Aug-2026")]
