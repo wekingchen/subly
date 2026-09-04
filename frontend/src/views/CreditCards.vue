@@ -77,8 +77,6 @@
       v-if="detailTarget"
       :card="detailTarget"
       @close="detailTarget = null"
-      @edit="editFromDetail"
-      @delete="requestDelete"
       @statements-changed="(updated) => { applyCardUpdate(updated); refreshOutstanding().catch(() => {}) }"
     />
 
@@ -205,11 +203,6 @@ function closeForm() {
 
 function openDetail(card) {
   detailTarget.value = card
-}
-
-function editFromDetail(card) {
-  detailTarget.value = null
-  openEdit(card)
 }
 
 async function submitForm(payload, localError = '') {

@@ -99,7 +99,6 @@
       v-if="creditCardDetailTarget"
       :card="creditCardDetailTarget"
       @close="creditCardDetailTarget = null"
-      @edit="goToCreditCard"
       @statements-changed="onCardStatementsChanged"
     />
 
@@ -172,7 +171,6 @@
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { useRouter } from 'vue-router'
 import api from '../api'
 import AppModal from '../components/AppModal.vue'
 import AppToastRegion from '../components/AppToastRegion.vue'
@@ -203,7 +201,6 @@ import {
 import { radarBucket as renewalRadarBucket, renewalStatus } from '../utils/renewal'
 
 const { t } = useI18n()
-const router = useRouter()
 const auth = useAuth()
 const now = new Date()
 const year = ref(now.getFullYear())
@@ -436,10 +433,6 @@ function openDetail(event) {
 }
 function closeDetail() {
   detailId.value = null
-}
-function goToCreditCard() {
-  creditCardDetailTarget.value = null
-  router.push('/credit-cards')
 }
 
 // 日历弹窗内单期标记还款：后端返回更新卡片（界线推进 → 派生变化）。

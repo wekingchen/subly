@@ -99,10 +99,8 @@
     </aside>
 
     <template #footer>
+      <!-- 编辑/删除不在此提供：已收敛在卡片右上「⋯」菜单，详情只读 -->
       <button type="button" class="btn ghost" @click="$emit('close')">{{ t('common.close') }}</button>
-      <!-- 删除收进详情与卡片「⋯」：危险操作不在卡片主区直接暴露 -->
-      <button type="button" class="btn ghost detail-delete" @click="$emit('delete', card)">{{ t('creditCards.delete') }}</button>
-      <button type="button" class="btn" @click="$emit('edit', card)">{{ t('creditCards.edit') }}</button>
     </template>
   </AppModal>
 </template>
@@ -118,7 +116,7 @@ import CreditCardCycleTrack from './CreditCardCycleTrack.vue'
 import CreditCardStatementList from './CreditCardStatementList.vue'
 
 const props = defineProps({ card: { type: Object, required: true } })
-const emit = defineEmits(['close', 'edit', 'delete', 'statements-changed'])
+const emit = defineEmits(['close', 'statements-changed'])
 const { t } = useI18n()
 function formatLimit(value) {
   return new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 2 }).format(Number(value))
@@ -258,7 +256,6 @@ function onModalChange(value) {
 .fee-charged { margin: 8px 0 0; color: var(--danger-text); font-size: 12px; font-weight: 650; }
 .fee-missing { margin: 8px 0 0; color: var(--warning-text); font-size: 12px; }
 .fee-retry { margin-left: 6px; padding: 0; border: 0; background: none; color: var(--primary); font: inherit; font-weight: 750; cursor: pointer; text-decoration: underline; }
-.detail-delete { color: var(--danger-text); border-color: color-mix(in srgb, var(--danger) 38%, var(--border)); }
 /* 历史账单补拉：按钮行 + 逐期进度列表 */
 .fee-backfill-row { margin-top: 10px; }
 .fee-backfill-btn { width: 100%; justify-content: center; color: var(--primary); border-color: color-mix(in srgb, var(--primary) 38%, var(--border)); }
