@@ -60,6 +60,14 @@ class ImapConnectionError(RuntimeError):
     """连接或登录失败（对外只暴露泛化信息）。"""
 
 
+class ImapScanBudgetExceeded(RuntimeError):
+    """候选邮件超过安全扫描预算，扫描不完整。
+
+    不是连接失败（不继承 ImapConnectionError）：调用方应向用户报告
+    「扫描不完整，请缩小范围」，而非伪装成「未找到」或连接故障。
+    """
+
+
 def provider_host(provider: str) -> str:
     """返回预设服务商的 IMAP 主机名；未知服务商抛配置错误。"""
     entry = IMAP_PROVIDERS.get(provider)
@@ -346,6 +354,7 @@ def fetch_full_mime(
     max_total_bytes: int = MAX_TOTAL_BYTES,
     today=None,
     before=None,
+    max_header_scan: int = 2000,
 ) -> list[dict]:
     """拉取最近 N 天**完整邮件**（含正文），供账单解析。
 
@@ -353,6 +362,12 @@ def fetch_full_mime(
     predicate(from_address) -> bool 过滤发件人（账单银行白名单）。
     before 传入日期时搜索区间收窄为 [today−days, before)——历史账单
     补拉按月分段用（只有 SINCE 下界时无法排除当前邮件占用扫描名额）。
+    区间查询（before 有值）不受 max_scan 截断——生产实测（建行 2025-11
+    历史补拉）收件箱邮件量远超 200 后，历史账单按 UID 倒序根本进不了
+    扫描窗口，全部「未找到」；但头部扫描有 max_header_scan 上限兜底，
+    超限抛 ImapScanBudgetExceeded（区间内营销/订阅邮件可适数千封，
+    逐封头部 FETCH 不能无界），由调用方把「扫描不完整」响亮转达，
+    不得伪装成「未找到」。
     返回 [{uid, from_address, subject, raw(bytes)}]；单封超过
     max_message_bytes 直接跳过（防止异常大邮件撑爆内存）。
     """
@@ -386,6 +401,8 @@ def fetch_full_mime(
             seen_message_ids: set[str] = set()
             scanned_any = False
             total_bytes = 0  # 全局正文字节预算（跨文件夹累计）
+            # 头部扫描超限跨文件夹累计：早文件夹超限的状态不能被后续空文件夹覆盖（复核 Medium）
+            truncated_any = False
             folders_scanned = _list_scan_folders(client)[:MAX_SCAN_FOLDERS]
             for folder in folders_scanned:
                 try:
@@ -399,16 +416,38 @@ def fetch_full_mime(
                     continue
                 scanned_any = True
                 uids = sorted((data[0] or b"").split(), key=lambda u: int(u), reverse=True)
+                # max_scan 只为「开放式最近搜索」设防：生产实测（建行 2025-11 历史补拉）
+                # 收件箱邮件量早已超过 200，历史账单按 UID 倒序根本进不了扫描窗口，
+                # 全部「未找到」。带 BEFORE 上界的区间查询候选量受区间本身限制，
+                # 截断反而丢数据——有上界时不截断，改用 max_header_scan 兜底：
+                # 区间内营销/订阅邮件可适数千封，逐封头部 FETCH 不能无界（复核 Medium）。
+                # 开放式查询超 200 保持旧行为：安静扫描最新 200 封并返回。
+                if before is not None:
+                    scan_limit = max_header_scan
+                    folder_truncated = len(uids) > scan_limit
+                    if folder_truncated:
+                        logger.warning(
+                            "event=imap_header_scan_budget_exceeded total_uids=%d limit=%d folder=%s",
+                            len(uids), scan_limit, folder,
+                        )
+                    truncated_any = truncated_any or folder_truncated
+                else:
+                    scan_limit = max_scan
                 # 两阶段拉取：先取头部+大小（发件人过滤与大小判断都不需要正文），
                 # 只对通过筛选的邮件下载完整 BODY——避免把大附件/无关邮件整个
                 # 拉进内存后才丢弃（审核修复：资源保护必须发生在下载之前）。
-                for uid in uids[:max_scan]:
+                for uid in uids[:scan_limit]:
                     if total_bytes >= max_total_bytes:
                         logger.warning(
                             "event=imap_fetch_budget_exhausted total_bytes=%d",
                             total_bytes,
                         )
-                        return out  # 全局预算耗尽，响亮记录后返回已收集结果
+                        if before is not None:
+                            # 区间查询预算耗尽=扫描不完整：直接抛，不得伪装成
+                            # 「未找到」（复核 Medium——置标记后 return 仍会被
+                            # 上层当成完整结果）
+                            raise ImapScanBudgetExceeded()
+                        return out  # 开放式查询保持原行为：安静返回部分结果
                     status, head_data = client.uid("fetch", uid, "(BODY.PEEK[HEADER] RFC822.SIZE)")
                     if status != "OK" or not head_data or head_data[0] is None:
                         continue
@@ -451,6 +490,10 @@ def fetch_full_mime(
                 # 失败要响亮：所有文件夹都无法 SELECT/SEARCH 不能伪装成
                 # 「成功但没有邮件」（Unsafe Login / 权限拒绝等）
                 raise ImapConnectionError("select-failed")
+            if truncated_any:
+                # 响亮：扫描不完整不能伪装成「未找到」（复核 Medium——
+                # 调用方据此向用户报告「候选邮件过多，请缩小范围」）
+                raise ImapScanBudgetExceeded()
             return out
         except (imaplib.IMAP4.error, OSError, TimeoutError) as exc:
             raise ImapConnectionError(type(exc).__name__) from exc

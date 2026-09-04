@@ -851,6 +851,177 @@ def test_list_folders_failure_falls_back_to_inbox(imap_env, monkeypatch):
     assert ic._list_scan_folders(BrokenClient()) == ["INBOX"]
 
 
+def test_fetch_full_mime_bounded_query_not_truncated_by_max_scan(imap_env, monkeypatch):
+    """生产实测回归（建行 2025-11 历史补拉全「未找到」）：收件箱邮件量远超
+    200 后，历史账单按 UID 倒序进不了扫描窗口。带 BEFORE 上界的区间查询
+    候选量受区间本身限制，不得再做 max_scan 截断。"""
+    from datetime import date
+
+    from app.services import imap_client as ic
+
+    client, _, _ = imap_env
+    client.post("/api/imap/accounts", json={
+        "email": "a@qq.com", "password": "x", "provider": "qq",
+    })
+
+    def bill_for(uid: str) -> bytes:
+        return (b"From: bill <creditcard@service.ccb.com>\r\n"
+                b"Subject: old bill\r\n"
+                b"Message-ID: <old-" + uid.encode() + b">\r\n\r\nbody")
+
+    class FakeClient:
+        def __init__(self, *a, **k): pass
+        def login(self, *a): pass
+        def xatom(self, *a): pass
+        def list(self):
+            return "OK", [b'(\\HasNoChildren) "/" "INBOX"']
+        def select(self, folder, readonly=False):
+            return "OK", [b"1"]
+        def uid(self, cmd, *a):
+            if cmd == "search":
+                # 模拟区间命中 250 封（超过默认 max_scan=200）：
+                # 老账单 UID 小、排在倒序尾部——开放式搜索会被截断丢弃
+                return "OK", [b" ".join(str(i).encode() for i in range(1, 251))]
+            uid_str = a[0].decode()
+            bill = bill_for(uid_str)
+            if cmd == "fetch" and "BODY.PEEK[]" in a[1]:
+                return "OK", [(f"{uid_str} (UID {uid_str} BODY[])".encode(), bill), b")"]
+            header = bill.split(b"\r\n\r\n")[0]
+            return "OK", [(f"{uid_str} (UID {uid_str} RFC822.SIZE 500 BODY[HEADER] {len(header)})".encode(), header), b")"]
+        def logout(self): pass
+        def shutdown(self): pass
+
+    monkeypatch.setattr(ic.imaplib, "IMAP4_SSL", FakeClient)
+    mails = ic.fetch_full_mime(
+        "a@qq.com", "x", "qq", 15,
+        today=date(2025, 12, 2), before=date(2025, 12, 2),
+    )
+    assert len(mails) == 250  # 区间查询不截断：最老的 UID=1 也被扫描
+
+
+def _make_fake_mailbox(monkeypatch, uid_count, folders=None, per_folder_counts=None):
+    """构造 mock 邮箱：INBOX uid_count 封；folders 各文件夹可用 per_folder_counts
+    指定各自 UID 数（缺省同 uid_count）。Message-ID 按文件夹+UID 唯一；
+    返回 search 条件记录。"""
+    from app.services import imap_client as ic
+
+    search_clauses = []
+    state = {"folder": "INBOX"}
+    counts = {"INBOX": uid_count}
+    for f in (folders or []):
+        counts[f] = (per_folder_counts or {}).get(f, uid_count)
+
+    class FakeClient:
+        def __init__(self, *a, **k): pass
+        def login(self, *a): pass
+        def xatom(self, *a): pass
+
+        def select(self, folder, readonly=False):
+            state["folder"] = folder.strip('"')
+            return "OK", [b"1"]
+
+        def list(self):
+            items = [b'(\HasNoChildren) "/" "INBOX"']
+            for f in (folders or []):
+                items.append((f'(\HasNoChildren) "/" "{f}"').encode())
+            return "OK", items
+
+        def uid(self, cmd, *a):
+            if cmd == "search":
+                search_clauses.append(a[1])
+                n = counts.get(state["folder"], uid_count)
+                return "OK", [b" ".join(str(i).encode() for i in range(1, n + 1))]
+            uid_str = a[0].decode()
+            tag = state["folder"]  # Message-ID 按文件夹+UID 唯一
+            bill = (
+                b"From: bill <creditcard@service.ccb.com>\r\n"
+                b"Subject: bill\r\n"
+                b"Message-ID: <" + tag.encode() + b"-" + uid_str.encode() + b">\r\n\r\nbody"
+            )
+            if cmd == "fetch" and "BODY.PEEK[]" in a[1]:
+                return "OK", [(f"{uid_str} (UID {uid_str} BODY[])".encode(), bill), b")"]
+            header = bill.split(b"\r\n\r\n")[0]
+            return "OK", [(f"{uid_str} (UID {uid_str} RFC822.SIZE 500 BODY[HEADER] {len(header)})".encode(), header), b")"]
+
+        def logout(self): pass
+        def shutdown(self): pass
+
+    monkeypatch.setattr(ic.imaplib, "IMAP4_SSL", FakeClient)
+    return search_clauses
+
+
+def test_open_query_over_200_keeps_legacy_behavior(imap_env, monkeypatch):
+    """复核 High 回归：开放式查询（无 before）命中 201 封时保持旧行为——
+    安静扫描最新 200 封并返回，绝不抛扫描预算异常。"""
+    from datetime import date
+
+
+    from app.services import imap_client as ic
+
+    client, _, _ = imap_env
+    client.post("/api/imap/accounts", json={"email": "a@qq.com", "password": "x", "provider": "qq"})
+    _make_fake_mailbox(monkeypatch, uid_count=201)
+    mails = ic.fetch_full_mime("a@qq.com", "x", "qq", 31, today=date(2026, 9, 3))
+    assert len(mails) == 200  # 旧行为：最新 200 封
+
+
+def test_bounded_query_body_budget_exhaustion_raises(imap_env, monkeypatch):
+    """复核 Medium 回归：区间查询正文预算耗尽时必须抛 ImapScanBudgetExceeded，
+    不得置标记后直接 return 部分结果（那样上层仍会误报「未找到」）。"""
+    from datetime import date
+
+    import pytest
+
+    from app.services import imap_client as ic
+
+    client, _, _ = imap_env
+    client.post("/api/imap/accounts", json={"email": "a@qq.com", "password": "x", "provider": "qq"})
+    _make_fake_mailbox(monkeypatch, uid_count=2)
+    with pytest.raises(ic.ImapScanBudgetExceeded):
+        ic.fetch_full_mime(
+            "a@qq.com", "x", "qq", 15,
+            today=date(2025, 12, 2), before=date(2025, 12, 2),
+            max_total_bytes=1,  # 第一封正文后预算即耗尽
+        )
+
+
+def test_bounded_query_over_budget_raises_scan_exceeded(imap_env, monkeypatch):
+    """复核 High 回归：区间查询命中 2001 封（超 max_header_scan）→
+    抛 ImapScanBudgetExceeded（确切类型），不伪装成「未找到」。"""
+    from datetime import date
+
+    import pytest
+
+    from app.services import imap_client as ic
+
+    client, _, _ = imap_env
+    client.post("/api/imap/accounts", json={"email": "a@qq.com", "password": "x", "provider": "qq"})
+    _make_fake_mailbox(monkeypatch, uid_count=2001)
+    with pytest.raises(ic.ImapScanBudgetExceeded):
+        ic.fetch_full_mime("a@qq.com", "x", "qq", 15, today=date(2025, 12, 2), before=date(2025, 12, 2))
+
+
+def test_truncated_flag_accumulates_across_folders(imap_env, monkeypatch):
+    """复核 Medium 回归：首文件夹超限、后续文件夹为空——truncated 状态
+    不得被覆盖清除，仍必须抛扫描预算异常。"""
+    from datetime import date
+
+    import pytest
+
+    from app.services import imap_client as ic
+
+    client, _, _ = imap_env
+    client.post("/api/imap/accounts", json={"email": "a@qq.com", "password": "x", "provider": "qq"})
+    # INBOX 2001 封（超限）+ 归档文件夹 0 封：早文件夹的超限状态
+    # 不得被后续空文件夹清除（覆盖式写法会让本测试失败）
+    clauses = _make_fake_mailbox(
+        monkeypatch, uid_count=2001, folders=["邮件归档"], per_folder_counts={"邮件归档": 0}
+    )
+    with pytest.raises(ic.ImapScanBudgetExceeded):
+        ic.fetch_full_mime("a@qq.com", "x", "qq", 15, today=date(2025, 12, 2), before=date(2025, 12, 2))
+    assert len(clauses) == 2  # 两个文件夹都搜索了
+
+
 def test_fetch_full_mime_before_bounds_search(imap_env, monkeypatch):
     """before 参数 → SEARCH 条件含 BEFORE 上界（历史账单补拉的月度分段）。"""
     from datetime import date

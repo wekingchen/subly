@@ -300,24 +300,31 @@ def test_window_filters_previous_cycle_and_mismatch(fee_env):
     assert "26年5月" in body["missing_cycles"]  # mismatch 期响亮报缺（明细不可信）
 
 
-def test_zero_item_statement_counts_as_covered(fee_env):
+def test_zero_item_statement_counts_as_covered(fee_env, monkeypatch):
     """零交易账单（银行仍发账单、无明细行）也算已覆盖期次，不得误报缺期（审核发现）。"""
     client, db, user = fee_env
     card = _make_card(db, user.id, anchor=date(2025, 3, 15), count=6)
-    stmt_date = date.today() - timedelta(days=3)
+
+    today = date(2026, 9, 3)  # 固定业务日期，消除跨月漂移（复核 Low）
+    monkeypatch.setattr(scheduler, "_local_today", lambda: today)
+    stmt_date = today - timedelta(days=3)
     # 有明细的一期
     _make_statement_with_items(db, user.id, card.id, stmt_date, [("purchase", 100.0, "超市")])
-    # 零明细的一期（造一个月前）
+    # 零明细的一期（造两个月前，确保是「账单日已过」的期次——未来期次不进 expected）
     empty = CreditCardStatement(
         user_id=user.id, card_id=card.id, bank_key="cmb", card_last_four="6310",
-        match_status="matched", statement_date=stmt_date.replace(day=1) - timedelta(days=25),
+        match_status="matched", statement_date=stmt_date.replace(day=1) - timedelta(days=55),
         total_due=0, message_id="fee-empty", verify_status="ok",
     )
     db.add(empty)
     db.commit()
 
     body = client.get(f"/api/credit-cards/{card.id}/annual-fee").json()
-    assert body["covered_cycles"] == 2  # 零交易期也算覆盖
+    # 零交易期（6月）计入覆盖、不出现在缺失列表——核心断言；
+    # 有明细那期落在 8 月（today−3天=8/31），covered={6月,8月}，
+    # missing=3/4/5/7 月（9 月账单日 9/15 未到，不进 expected）
+    assert "26年6月" not in body["missing_cycles"]
+    assert body["missing_cycles"] == ["26年3月", "26年4月", "26年5月", "26年7月"]
 
 
 def test_float_amount_target_not_bit_gnomicked(fee_env):
@@ -473,6 +480,24 @@ def test_backfill_skips_account_without_bank(fee_env, monkeypatch):
     body = client.post(f"/api/credit-cards/{card.id}/statements/backfill", json={"year": 2026, "month": 8}).json()
     assert body["accounts_tried"] == 0
     assert called == []
+
+
+def test_backfill_scan_incomplete_reason(fee_env, monkeypatch):
+    """复核 High 回归：区间候选超扫描预算 → 中文原因「扫描不完整」，
+    绝不伪装成「未找到」，也不暴露英文异常类名。"""
+    from app.services.imap_client import ImapScanBudgetExceeded
+
+    client, db, user, card, imap = _backfill_env_card(fee_env)
+
+    def boom(*a, **k):
+        raise ImapScanBudgetExceeded()
+
+    monkeypatch.setattr("app.services.credit_card_statement_sync.imap_client.fetch_full_mime", boom)
+    body = client.post(f"/api/credit-cards/{card.id}/statements/backfill", json={"year": 2026, "month": 8}).json()
+    assert body["filled"] is False
+    assert any("扫描不完整" in r for r in body["reasons"])
+    assert not any("未找到" in r for r in body["reasons"])
+    assert not any("ImapScanBudgetExceeded" in r for r in body["reasons"])
 
 
 def test_backfill_two_accounts_same_mail_no_duplicate(fee_env, monkeypatch):

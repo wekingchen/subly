@@ -501,6 +501,14 @@ def backfill_statement(
             except credit_card_statement_sync.ImapBusyError:
                 outcome["accounts_tried"] -= 1
                 continue
+            except imap_client.ImapScanBudgetExceeded:
+                # 扫描不完整（区间内候选超预算）：中文原因，绝不伪装成「未找到」
+                outcome["reasons"].append(
+                    f"{account.email}: 该期候选邮件过多，本次扫描不完整，请整理邮箱后重试"
+                )
+                outcome["scan_incomplete"] = True
+                db.rollback()
+                continue
             except Exception as exc:  # noqa: BLE001
                 # 单账户连接/登录失败不阻断其他账户；原因进结果响亮呈现
                 outcome["reasons"].append(f"{account.email}: {type(exc).__name__}")
@@ -529,7 +537,8 @@ def backfill_statement(
         outcome["filled"] = True
         outcome["statement_id"] = record.id
         outcome["verify_status"] = record.verify_status
-    else:
+    elif not outcome.get("scan_incomplete"):
+        # 扫描不完整时不得追加「未找到」——账单可能就在未扫描的部分里（复核 High）
         _append_backfill_failure_reasons(outcome, agg_errors, agg_mismatched, agg_unmatched)
     _invalidate_scan_checkpoint(db)
     db.commit()
