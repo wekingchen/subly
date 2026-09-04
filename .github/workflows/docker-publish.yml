@@ -138,6 +138,7 @@ jobs:
       - name: Generate ${{ matrix.arch }} Trivy SARIF report
         uses: aquasecurity/trivy-action@v0.36.0
         with:
+          version: v0.74.0
           input: /tmp/subly-${{ matrix.arch }}.tar
           format: sarif
           output: trivy-results-${{ matrix.arch }}.sarif
@@ -155,6 +156,7 @@ jobs:
       - name: Enforce ${{ matrix.arch }} fixable high-severity vulnerability gate
         uses: aquasecurity/trivy-action@v0.36.0
         with:
+          version: v0.74.0
           input: /tmp/subly-${{ matrix.arch }}.tar
           format: table
           severity: HIGH,CRITICAL
