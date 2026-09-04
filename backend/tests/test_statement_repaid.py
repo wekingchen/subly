@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -148,6 +148,346 @@ def test_summary_excludes_mismatch_and_repaid(repaid_env):
     assert entry["cycles"] == []  # 账单未给日期 → 无月份标签
     assert entry["overdue_cycles"] == []
     assert entry["max_overdue_days"] == 0
+
+
+def test_summary_latest_statement_wins_not_accumulation(repaid_env):
+    """用户确认口径回归：待还以最新账单为准，不逐期累加。
+    滚动余额语义——最新账单已包含历史欠款，累加会重复计数。
+    26年7月 +3000（欠款）、26年8月 -1000、26年9月 -500（最新，负）
+    → 该卡按最新一期 -500 展示富余，total 不含它；老期次不累加。"""
+    from datetime import date
+
+    client, db, user, _ = repaid_env
+    card = _make_card(db, user.id)
+    s1 = _make_statement(db, user.id, card.id, 3000.00)
+    s2 = _make_statement(db, user.id, card.id, -1000.00)
+    s3 = _make_statement(db, user.id, card.id, -500.00)
+    db.expire_all()
+    db.get(CreditCardStatement, s1.id).statement_date = date(2026, 7, 13)
+    db.get(CreditCardStatement, s2.id).statement_date = date(2026, 8, 13)
+    db.get(CreditCardStatement, s3.id).statement_date = date(2026, 9, 13)
+    db.commit()
+
+    body = client.get("/api/credit-cards/outstanding/summary").json()
+    entry = next(e for e in body["per_card"] if e["card_id"] == card.id)
+    assert entry["total_due"] == pytest.approx(-500.00)   # 最新账单，非累加 +1500
+    assert entry["is_surplus"] is True
+    assert body["total"] == 0.0                            # 富余卡不进全局待还
+    assert body["surplus_total"] == pytest.approx(-500.00)
+    assert body["unrepaid_count"] == 3                     # 期数口径不变
+
+    # 最新为正：待还就是最新账单金额（历史负期次不冲抵）
+    s4 = _make_statement(db, user.id, card.id, 1200.00)
+    db.expire_all()
+    db.get(CreditCardStatement, s4.id).statement_date = date(2026, 10, 13)
+    db.commit()
+    body2 = client.get("/api/credit-cards/outstanding/summary").json()
+    entry2 = next(e for e in body2["per_card"] if e["card_id"] == card.id)
+    assert entry2["total_due"] == pytest.approx(1200.00)
+    assert entry2["is_surplus"] is False
+    assert body2["total"] == pytest.approx(1200.00)
+
+
+def test_summary_statement_date_fallback_to_bill_period(repaid_env):
+    """statement_date 缺失时回退 bill_period_end 比较「最新」；两者都缺失的
+    账单不参与最新判定（孤立日期数据保持累加口径，不静默丢弃）。"""
+    from datetime import date
+
+    client, db, user, _ = repaid_env
+    card = _make_card(db, user.id)
+    a = _make_statement(db, user.id, card.id, 100.00)
+    b = _make_statement(db, user.id, card.id, 55.00)
+    db.expire_all()
+    # statement_date 都缺失，用 bill_period_end 区分先后
+    db.get(CreditCardStatement, a.id).bill_period_end = date(2026, 7, 31)
+    db.get(CreditCardStatement, b.id).bill_period_end = date(2026, 8, 31)
+    db.commit()
+    entry = client.get("/api/credit-cards/outstanding/summary").json()["per_card"][0]
+    assert entry["total_due"] == pytest.approx(55.00)  # 8月那笔更新
+
+
+def test_backfill_auto_marks_historical_statements_repaid(repaid_env, monkeypatch):
+    """用户确认口径：补拉的历史旧账单应自动标记已还款（滚动余额已含历史
+    欠款），只有最新一期需要用户手动标记。补拉成功后：该期被自动标记、
+    更早的未标记期次一并标记、最新期保持未标记；不推进 repaid_through_due
+    界线（顺延/静默提醒是用户手动标记的语义）。"""
+    from datetime import date
+
+    client, db, user, account = repaid_env
+
+    card = CreditCard(
+        user_id=user.id, display_name="平安卡", bank_name="平安银行",
+        last_four="1151", statement_day=13, due_day=1,
+    )
+    db.add(card)
+    db.commit()
+
+    # 邮箱里已有更早一期（25年12月，未标记）——补拉 26年1月 成功后应被顺带标记
+    old = CreditCardStatement(
+        user_id=user.id, card_id=card.id, bank_key="pab", card_last_four="1151",
+        match_status="matched", statement_date=date(2025, 12, 13),
+        due_date=date(2026, 1, 1), total_due=1265.95,
+        message_id="old-dec", verify_status="ok", is_repaid=False,
+    )
+    db.add(old)
+    db.commit()
+
+
+    def fake_sync(*args, **kwargs):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(saved=1, skipped=0, errors=[], mismatched=[],
+                               unmatched=[], ambiguous=[])
+
+    from app.services import credit_card_statement_sync
+
+    monkeypatch.setattr(credit_card_statement_sync, "sync_statements_core", fake_sync)
+    # self_cycle_filled 按库查询——预先插入本次「补拉落库」的 26年1月账单
+    # （fake_sync 不真落库，等价于：邮件解析入库后查询命中）
+    import app.routers.credit_cards as cc
+
+    orig_filled = cc.self_cycle_filled
+
+    def seeded_filled(db_, card_, year, month):
+        stmt = CreditCardStatement(
+            user_id=card_.user_id, card_id=card_.id, bank_key="pab",
+            card_last_four="1151", match_status="matched",
+            statement_date=date(2026, 1, 13), due_date=date(2026, 2, 1),
+            total_due=2364.06, message_id="new-jan", verify_status="ok",
+            is_repaid=False,
+        )
+        db_.add(stmt)
+        db_.commit()
+        return orig_filled(db_, card_, year, month)
+
+    monkeypatch.setattr(cc, "self_cycle_filled", seeded_filled)
+    resp = client.post(f"/api/credit-cards/{card.id}/statements/backfill",
+                       json={"year": 2026, "month": 1})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["filled"] is True
+    assert body["auto_marked"] == 1  # 只有 25年12月 那期被自动标记
+    db.expire_all()
+    assert db.get(CreditCardStatement, old.id).is_repaid is True
+    new_stmt = db.scalars(
+        select(CreditCardStatement).where(CreditCardStatement.message_id == "new-jan")
+    ).first()
+    assert new_stmt.is_repaid is False  # 最新期保持未标记（用户手动）
+    card_row = db.get(CreditCard, card.id)
+    assert card_row.repaid_through_due is None  # 不推进界线
+
+
+def test_backfill_auto_mark_uses_bill_period_fallback(repaid_env, monkeypatch):
+    """审核 Low 回归：旧账单 statement_date 缺失但 bill_period_end 明确早于
+    最新期时，同样要被自动补标（比较键与待还汇总口径一致：coalesce 回退）；
+    两者都缺失的旧账单保守不标。"""
+    from datetime import date
+
+    client, db, user, account = repaid_env
+
+    card = CreditCard(
+        user_id=user.id, display_name="平安卡", bank_name="平安银行",
+        last_four="1151", statement_day=13, due_day=1,
+    )
+    db.add(card)
+    db.commit()
+
+    # 旧账单 A：statement_date 缺失、bill_period_end=2025-12-31（应被补标）
+    old_a = CreditCardStatement(
+        user_id=user.id, card_id=card.id, bank_key="pab", card_last_four="1151",
+        match_status="matched", statement_date=None, due_date=date(2026, 1, 1),
+        total_due=1265.95, message_id="old-a", verify_status="ok", is_repaid=False,
+        bill_period_end=date(2025, 12, 31),
+    )
+    # 旧账单 B：两个日期都缺失（无法判定先后 → 保守不标）
+    old_b = CreditCardStatement(
+        user_id=user.id, card_id=card.id, bank_key="pab", card_last_four="1151",
+        match_status="matched", statement_date=None, due_date=None,
+        total_due=100.00, message_id="old-b", verify_status="ok", is_repaid=False,
+    )
+    db.add_all([old_a, old_b])
+    db.commit()
+
+    from types import SimpleNamespace
+
+    from app.services import credit_card_statement_sync
+
+    monkeypatch.setattr(credit_card_statement_sync, "sync_statements_core",
+                        lambda *a, **k: SimpleNamespace(
+                            saved=1, skipped=0, errors=[], mismatched=[],
+                            unmatched=[], ambiguous=[]))
+    import app.routers.credit_cards as cc
+
+    orig_filled = cc.self_cycle_filled
+
+    def seeded_filled(db_, card_, year, month):
+        stmt = CreditCardStatement(
+            user_id=card_.user_id, card_id=card_.id, bank_key="pab",
+            card_last_four="1151", match_status="matched",
+            statement_date=date(2026, 1, 13), due_date=date(2026, 2, 1),
+            total_due=2364.06, message_id="new-jan", verify_status="ok",
+            is_repaid=False,
+        )
+        db_.add(stmt)
+        db_.commit()
+        return orig_filled(db_, card_, year, month)
+
+    monkeypatch.setattr(cc, "self_cycle_filled", seeded_filled)
+    resp = client.post(f"/api/credit-cards/{card.id}/statements/backfill",
+                       json={"year": 2026, "month": 1})
+    assert resp.status_code == 200
+    assert resp.json()["auto_marked"] == 1  # 只有 A（B 无法判定先后）
+    db.expire_all()
+    assert db.get(CreditCardStatement, old_a.id).is_repaid is True
+    assert db.get(CreditCardStatement, old_b.id).is_repaid is False
+
+
+def test_overdue_follows_latest_statement_not_accumulation(repaid_env):
+    """WHY 回归（审核 High）：逾期随最新账单滚动余额口径，不逐期累加。
+    旧期 +3000 逾期、最新期 -500 富余 → 卡是纯富余（逾期 0），
+    不得同时出现「富余 500」和「逾期 3000」的自相矛盾；
+    旧期逾期金额再大也不能越过最新正余额成为卡级逾期。"""
+    from datetime import date, timedelta
+
+    from app.services.scheduler import _local_today
+
+    client, db, user, _ = repaid_env
+    card = _make_card(db, user.id)
+    today = _local_today()
+
+    old = _make_statement(db, user.id, card.id, 3000.00)
+    latest = _make_statement(db, user.id, card.id, -500.00)
+    db.expire_all()
+    db.get(CreditCardStatement, old.id).statement_date = date(2026, 8, 13)
+    db.get(CreditCardStatement, old.id).due_date = today - timedelta(days=10)
+    db.get(CreditCardStatement, latest.id).statement_date = date(2026, 9, 13)
+    db.get(CreditCardStatement, latest.id).due_date = today + timedelta(days=5)
+    db.commit()
+
+    body = client.get("/api/credit-cards/outstanding/summary").json()
+    entry = next(e for e in body["per_card"] if e["card_id"] == card.id)
+    assert entry["total_due"] == pytest.approx(-500.00)
+    assert entry["is_surplus"] is True
+    assert entry["overdue_amount"] == 0.0      # 富余卡无实质逾期（旧期被滚动吸收）
+    assert entry["max_overdue_days"] == 0
+    assert body["overdue_total"] == 0.0
+    assert body["total"] == 0.0
+
+    # 对照：旧期逾期 + 最新期正余额且未逾期 → 卡级逾期 0（最新才是当前欠款）
+    latest2 = _make_statement(db, user.id, card.id, 1200.00)
+    db.expire_all()
+    db.get(CreditCardStatement, latest2.id).statement_date = date(2026, 10, 13)
+    db.get(CreditCardStatement, latest2.id).due_date = today + timedelta(days=5)
+    db.commit()
+    body2 = client.get("/api/credit-cards/outstanding/summary").json()
+    entry2 = next(e for e in body2["per_card"] if e["card_id"] == card.id)
+    assert entry2["total_due"] == pytest.approx(1200.00)
+    assert entry2["overdue_amount"] == 0.0
+    # 最新期正余额且其 due 已过 → 卡级逾期 = 最新金额（哪怕旧期更大）
+    latest3 = _make_statement(db, user.id, card.id, 800.00)
+    db.expire_all()
+    db.get(CreditCardStatement, latest3.id).statement_date = date(2026, 11, 13)
+    db.get(CreditCardStatement, latest3.id).due_date = today - timedelta(days=2)
+    db.commit()
+    body3 = client.get("/api/credit-cards/outstanding/summary").json()
+    entry3 = next(e for e in body3["per_card"] if e["card_id"] == card.id)
+    assert entry3["overdue_amount"] == pytest.approx(800.00)
+    assert body3["overdue_total"] == pytest.approx(800.0)
+
+
+def test_summary_orphan_statements_accumulate_not_latest(repaid_env):
+    """WHY 回归（审核 Medium）：孤立账单（card_id=None，多张已删卡共享分组键）
+    保持逐期累加历史口径，不被「取最新一笔」覆盖；负金额孤立账单同样计入
+    total（孤立组不参与富余判定）。"""
+    from datetime import date
+
+    client, db, user, _ = repaid_env
+    # 模拟两张已删卡的账单：全部孤立化
+    card_a = _make_card(db, user.id, last_four="1111", name="删卡A")
+    card_b = _make_card(db, user.id, last_four="2222", name="删卡B")
+    a1 = _make_statement(db, user.id, card_a.id, 100.00)
+    a2 = _make_statement(db, user.id, card_a.id, 200.00)
+    b1 = _make_statement(db, user.id, card_b.id, 300.00)
+    neg = _make_statement(db, user.id, card_b.id, -50.00)
+    db.expire_all()
+    db.get(CreditCardStatement, a1.id).statement_date = date(2026, 7, 13)
+    db.get(CreditCardStatement, a2.id).statement_date = date(2026, 8, 13)
+    db.get(CreditCardStatement, b1.id).statement_date = date(2026, 8, 20)
+    db.get(CreditCardStatement, neg.id).statement_date = date(2026, 8, 25)
+    for stmt in (a1, a2, b1, neg):
+        db.get(CreditCardStatement, stmt.id).card_id = None
+    db.commit()
+
+    body = client.get("/api/credit-cards/outstanding/summary").json()
+    orphan = next(e for e in body["per_card"] if e["card_id"] is None)
+    # 累加 100+200+300-50 = 550，不是「最新一笔」-50
+    assert orphan["total_due"] == pytest.approx(550.00)
+    assert orphan["is_surplus"] is False
+    assert body["total"] == pytest.approx(550.00)
+    assert body["surplus_total"] == 0.0
+
+
+def test_summary_orphan_negative_net_is_not_surplus(repaid_env):
+    """复审 Medium 回归：孤立组累计净额为负时不得被判成「富余卡」——
+    多张已删卡共享分组键，净负只是多还的数字巧合。全额（含负项）按
+    历史口径计入 total，surplus_total 不含孤立组。"""
+    from datetime import date
+
+    client, db, user, _ = repaid_env
+    card_a = _make_card(db, user.id, last_four="1111", name="删卡A")
+    card_b = _make_card(db, user.id, last_four="2222", name="删卡B")
+    owe_card = _make_card(db, user.id, last_four="3333", name="欠款卡")
+    a = _make_statement(db, user.id, card_a.id, 100.00)
+    b = _make_statement(db, user.id, card_b.id, -200.00)
+    owe = _make_statement(db, user.id, owe_card.id, 500.00)
+    db.expire_all()
+    db.get(CreditCardStatement, a.id).statement_date = date(2026, 7, 13)
+    db.get(CreditCardStatement, b.id).statement_date = date(2026, 8, 13)
+    db.get(CreditCardStatement, owe.id).statement_date = date(2026, 9, 13)
+    for stmt in (a, b):
+        db.get(CreditCardStatement, stmt.id).card_id = None
+    db.commit()
+
+    body = client.get("/api/credit-cards/outstanding/summary").json()
+    orphan = next(e for e in body["per_card"] if e["card_id"] is None)
+    assert orphan["total_due"] == pytest.approx(-100.00)
+    assert orphan["is_surplus"] is False           # 不判富余
+    assert body["surplus_total"] == 0.0            # 不进富余合计
+    assert body["total"] == pytest.approx(400.00)  # 孤立净额 -100 全额计入 + 欠款卡 500
+
+
+def test_summary_orphan_overdue_still_accumulates(repaid_env):
+    """复审 Medium 回归：孤立账单的逾期按笔累计（孤立组无 latest 口径），
+    不得因卡级逾期改随最新账单而归零——否则已删卡逾期账单的明细行
+    is_overdue=True 与汇总 overdue_total=0 互相矛盾。"""
+    from datetime import date, timedelta
+
+    from app.services.scheduler import _local_today
+
+    client, db, user, _ = repaid_env
+    card = _make_card(db, user.id)
+    today = _local_today()
+
+    # 正常卡：最新账单 +88 未逾期
+    ok = _make_statement(db, user.id, card.id, 88.00)
+    # 两笔孤立逾期账单（已删卡）：500（5 天前）+ 300（2 天前）
+    o1 = _make_statement(db, user.id, None, 500.00)
+    o2 = _make_statement(db, user.id, None, 300.00)
+    db.expire_all()
+    db.get(CreditCardStatement, ok.id).statement_date = date(2026, 9, 13)
+    db.get(CreditCardStatement, ok.id).due_date = today + timedelta(days=5)
+    db.get(CreditCardStatement, o1.id).statement_date = date(2026, 7, 13)
+    db.get(CreditCardStatement, o1.id).due_date = today - timedelta(days=5)
+    db.get(CreditCardStatement, o2.id).statement_date = date(2026, 8, 13)
+    db.get(CreditCardStatement, o2.id).due_date = today - timedelta(days=2)
+    db.commit()
+
+    body = client.get("/api/credit-cards/outstanding/summary").json()
+    orphan = next(e for e in body["per_card"] if e["card_id"] is None)
+    assert orphan["overdue_amount"] == pytest.approx(800.00)  # 500+300 逐笔累计
+    assert orphan["max_overdue_days"] == 5
+    assert orphan["overdue_cycles"] != []
+    assert body["overdue_total"] == pytest.approx(800.00)     # 正常卡最新未逾期不进
 
 
 def test_summary_null_total_due_counts_as_zero(repaid_env):
@@ -382,6 +722,14 @@ def test_overdue_detection_and_cycles(repaid_env):
     db.get(CreditCardStatement, ok_stmt.id).statement_date = date(2026, 2, 15)
     db.commit()
 
+    # 汇总口径随最新账单（滚动余额）：让 500 那期成为该卡最新账单，
+    # 其还款日已过 → 卡级逾期即它的金额
+    db.get(CreditCardStatement, overdue_stmt.id).statement_date = date(2026, 2, 20)
+    db.get(CreditCardStatement, ok_stmt.id).statement_date = date(2026, 2, 15)
+    db.get(CreditCardStatement, future_stmt.id).statement_date = date(2026, 2, 10)
+    db.get(CreditCardStatement, null_due_stmt.id).statement_date = date(2026, 2, 5)
+    db.commit()
+
     # 未标记：overdue 的那笔 is_overdue=True；还款日当天/未来/NULL 均 False
     lst = client.get(f"/api/credit-cards/{card.id}/statements").json()
     by_id = {s["id"]: s for s in lst["statements"]}
@@ -412,29 +760,30 @@ def test_overdue_detection_and_cycles(repaid_env):
 
 def test_cycles_sort_by_date_not_label_and_cross_card_dedup(repaid_env):
     """月份用 (year, month) 键排序：26年10月 必须排在 26年9月 前
-    （字符串排序会把「26年9月」排到「26年10月」后面）。"""
-    from datetime import date
+    （字符串排序会把「26年9月」排到「26年10月」后面）。
+    逾期随最新账单口径（滚动余额）：最新那期（10月 +300）due 已过才逾期。"""
+    from datetime import date, timedelta
 
     from app.services.scheduler import _local_today
 
     client, db, user, _ = repaid_env
     card = _make_card(db, user.id)
     today = _local_today()
-    # 逾期笔：due = 昨天（保证 is_overdue），月份用上月与上上月表达 9/10 排序
-    # 直接用今年 9/10 月做 statement_date，逾期用固定昨天的 due_date
+    # 9月那笔 due=昨天（旧期逾期，但被滚动余额吸收）；10月最新一笔 due=昨天 → 卡级逾期
     for month, due in ((9, 500.0), (10, 300.0)):
         stmt = _make_statement(db, user.id, card.id, due)
         db.expire_all()
         s = db.get(CreditCardStatement, stmt.id)
         s.statement_date = date(2026, month, 15)
-        if month == 9:
-            s.due_date = today - __import__("datetime").timedelta(days=1)
+        s.due_date = today - timedelta(days=1)
         db.commit()
 
     body = client.get("/api/credit-cards/outstanding/summary").json()
     entry = body["per_card"][0]
     assert entry["cycles"] == ["26年10月", "26年9月"]
-    assert entry["overdue_cycles"] == ["26年9月"]
+    # 卡级逾期 = 最新账单（10月 +300）的逾期；旧期 500 不再单独累加
+    assert entry["overdue_cycles"] == ["26年10月"]
+    assert body["overdue_total"] == pytest.approx(300.0)
 
 
 def test_summary_unknown_cycle_count(repaid_env):
@@ -449,37 +798,64 @@ def test_summary_unknown_cycle_count(repaid_env):
 
 
 def test_summary_negative_total_due_is_surplus(repaid_env):
-    """负 total_due（溢缴款/多还/退款冲抵）是合法业务数据：汇总原样保留负数，
+    """负 total_due（溢缴款/多还/退款冲抵）是合法业务数据（用户确认口径）：
+    待还/富余按最新账单滚动余额计——最新账单为负 = 富余，绝对值展示且
+    不参与全局待还合计（富余不是「负欠款」，也不抵扣他卡账单）。
     金额为负的账单不算逾期（钱已多还，不存在实质欠款逾期）——否则前端
-    会出现「已逾期 n 天」红标 + 负金额的自相矛盾。is_surplus 供前端展示转换。"""
+    会出现「已逾期 n 天」红标 + 负金额的自相矛盾。"""
     client, db, user, _ = repaid_env
     card = _make_card(db, user.id)
-    surplus = _make_statement(db, user.id, card.id, -5000.00)
-    owe = _make_statement(db, user.id, card.id, 2352.69)
+    # 同一期两条记录（更正账单场景，审核 Medium）：先入 +3000、后入 -2647.31，
+    # 同 statement_date 时后插入的（id 更大）胜出——银行后发的更正反映最新状态
+    stale = _make_statement(db, user.id, card.id, 3000.00)
+    surplus = _make_statement(db, user.id, card.id, -2647.31)
+    assert surplus.id > stale.id  # 前置：surplus 是后插入的
     db.expire_all()
     # 富余账单的还款日已过：金额为负 → 不得计入逾期
     from datetime import date, timedelta
 
     from app.services.scheduler import _local_today
 
-    db.get(CreditCardStatement, surplus.id).due_date = _local_today() - timedelta(days=3)
-    db.get(CreditCardStatement, owe.id).due_date = _local_today() - timedelta(days=2)
-    # 两笔同月（都属 26年8月账单期）——逾期月份标签只能来自欠款期
-    db.get(CreditCardStatement, surplus.id).bill_period_end = date(2026, 8, 31)
-    db.get(CreditCardStatement, owe.id).bill_period_end = date(2026, 8, 31)
+    for sid in (stale.id, surplus.id):
+        row = db.get(CreditCardStatement, sid)
+        row.due_date = _local_today() - timedelta(days=3)
+        row.bill_period_end = date(2026, 8, 31)
+        row.statement_date = date(2026, 8, 13)
     db.commit()
 
     body = client.get("/api/credit-cards/outstanding/summary").json()
-    assert body["total"] == pytest.approx(-2647.31)
-    assert body["overdue_total"] == pytest.approx(2352.69)  # 只含正金额欠款
+    # 富余不计入全局待还合计：total 为 0（不是 -2647.31）
+    assert body["total"] == 0.0
+    assert body["surplus_total"] == pytest.approx(-2647.31)
+    assert body["overdue_total"] == 0.0  # 负金额不算逾期
     entry = body["per_card"][0]
     assert entry["total_due"] == pytest.approx(-2647.31)
     assert entry["is_surplus"] is True
-    assert entry["overdue_amount"] == pytest.approx(2352.69)
-    assert entry["max_overdue_days"] == 2  # 负金额账单不推高逾期天数
-    # 月份标签：欠款期在逾期列表；富余期同样有月份标签但不进逾期
+    assert entry["overdue_amount"] == 0.0
+    assert entry["max_overdue_days"] == 0
     assert entry["cycles"] == ["26年8月"]
-    assert entry["overdue_cycles"] == ["26年8月"]
+
+    # 正欠款卡照常计入 total；富余卡与欠款卡并存时互不抵扣
+    owe_card = _make_card(db, user.id, last_four="8888", name="欠款卡")
+    owe = _make_statement(db, user.id, owe_card.id, 2352.69)
+    db.expire_all()
+    db.get(CreditCardStatement, owe.id).statement_date = date(2026, 8, 13)
+    db.get(CreditCardStatement, owe.id).bill_period_end = date(2026, 8, 31)
+    db.commit()
+    body2 = client.get("/api/credit-cards/outstanding/summary").json()
+    assert body2["total"] == pytest.approx(2352.69)   # 富余不抵扣他卡欠款
+    assert body2["surplus_total"] == pytest.approx(-2647.31)
+
+    # 纯富余卡：is_surplus 且无逾期
+    card2 = _make_card(db, user.id, last_four="9999", name="富余卡")
+    pure = _make_statement(db, user.id, card2.id, -800.00)
+    db.expire_all()
+    db.get(CreditCardStatement, pure.id).statement_date = date(2026, 8, 13)
+    db.commit()
+    body3 = client.get("/api/credit-cards/outstanding/summary").json()
+    entry3 = next(e for e in body3["per_card"] if e["card_id"] == card2.id)
+    assert entry3["is_surplus"] is True
+    assert entry3["max_overdue_days"] == 0
 
     # 纯富余卡：is_surplus 且无逾期
     card2 = _make_card(db, user.id, last_four="9999", name="富余卡")

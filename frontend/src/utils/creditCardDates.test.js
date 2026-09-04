@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  buildOutstandingDesc,
   buildRepaidScopeText,
   calendarDayDiff,
   countUpcomingCreditCardDues,
@@ -179,5 +180,73 @@ describe('buildRepaidScopeText', () => {
   it('全部未知月份回退笔数', () => {
     expect(buildRepaidScopeText({ cycles: [], unknown_cycle_count: 2, count: 2 }, t))
       .toBe('2 笔未知月份账单')
+  })
+})
+
+// 待还款统计块说明文字的口径分支（审核 Low 回归——该逻辑原先
+// 内联在 CreditCardStats.vue，无任何测试覆盖「富余+欠款并存」的分支）。
+// t 用直接回模板的假 i18n：断言键名与参数，不依赖真实文案。
+const t2 = (key, params) => {
+  const vars = params ? Object.entries(params).map(([k, v]) => `${k}=${v}`).join(',') : ''
+  return vars ? `${key}{${vars}}` : key
+}
+
+describe('buildOutstandingDesc', () => {
+  it('returns empty hint when no unrepaid statements', () => {
+    expect(buildOutstandingDesc({ unrepaid_count: 0 }, t2)).toBe('creditCards.outstandingEmpty')
+  })
+
+  it('pure surplus: total<=0 and no overdue -> surplus description only', () => {
+    const data = {
+      total: 0, surplus_total: -500, unrepaid_count: 2, overdue_total: 0,
+      per_card: [{ card_id: 1, is_surplus: true, cycles: ['26年9月'], count: 2 }],
+    }
+    expect(buildOutstandingDesc(data, t2)).toBe('creditCards.outstandingSurplusDesc')
+  })
+
+  it('surplus + dated debt: surplus aside AND debt cycles both present', () => {
+    const data = {
+      total: 100, surplus_total: -500, unrepaid_count: 2, overdue_total: 0,
+      per_card: [
+        { card_id: 1, is_surplus: true, cycles: ['26年9月'], count: 1 },
+        { card_id: 2, is_surplus: false, cycles: ['26年8月'], count: 1 },
+      ],
+    }
+    const desc = buildOutstandingDesc(data, t2)
+    expect(desc).toContain('creditCards.outstandingSurplusAside{amount=500}')
+    expect(desc).toContain('creditCards.outstandingHint{cycles=26年8月}')
+  })
+
+  it('surplus + undated debt: debt count is NOT swallowed by surplus branch (审核 Medium 回归)', () => {
+    const data = {
+      total: 100, surplus_total: -500, unrepaid_count: 2, overdue_total: 0,
+      per_card: [
+        { card_id: 1, is_surplus: true, cycles: ['26年9月'], count: 1 },
+        { card_id: 2, is_surplus: false, cycles: [], count: 1 },
+      ],
+    }
+    const desc = buildOutstandingDesc(data, t2)
+    expect(desc).toContain('creditCards.outstandingSurplusAside{amount=500}')
+    expect(desc).toContain('creditCards.outstandingCountOnly{n=1}')
+  })
+
+  it('overdue cycles appended with amount', () => {
+    const data = {
+      total: 300, surplus_total: 0, unrepaid_count: 1, overdue_total: 300,
+      per_card: [{ card_id: 1, is_surplus: false, cycles: ['26年9月'], overdue_cycles: ['26年9月'], count: 1 }],
+    }
+    const desc = buildOutstandingDesc(data, t2)
+    expect(desc).toContain('creditCards.outstandingHint{cycles=26年9月}')
+    expect(desc).toContain('creditCards.outstandingOverdue{cycles=26年9月,amount=300}')
+  })
+
+  it('orphan statements noted separately', () => {
+    const data = {
+      total: 88, surplus_total: 0, unrepaid_count: 1, overdue_total: 0,
+      per_card: [{ card_id: null, is_surplus: false, cycles: [], count: 1 }],
+    }
+    const desc = buildOutstandingDesc(data, t2)
+    expect(desc).toContain('creditCards.outstandingCountOnly{n=1}')
+    expect(desc).toContain('creditCards.outstandingOrphan{n=1}')
   })
 })

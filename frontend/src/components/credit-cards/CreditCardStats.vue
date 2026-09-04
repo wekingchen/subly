@@ -71,7 +71,7 @@
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import CreditCardBrandBadge from './CreditCardBrandBadge.vue'
-import { calendarDayDiff, nearestCreditCardDue } from '../../utils/creditCardDates'
+import { buildOutstandingDesc, calendarDayDiff, nearestCreditCardDue } from '../../utils/creditCardDates'
 import { matchBankBrand } from '../../utils/creditCardBanks'
 
 const props = defineProps({
@@ -91,59 +91,21 @@ const activeCount = computed(() => props.cards.filter((card) => card.is_active).
 const totalCount = computed(() => props.cards.length)
 const nearest = computed(() => nearestCreditCardDue(props.cards, props.today))
 
-// 待还款总额：服务端已按「未标记还款 + 勾稽通过」口径过滤，这里只做展示格式化
+// 待还款总额：服务端已按「每卡最新账单 + 未标记还款 + 勾稽通过」口径计算
+// （富余卡的负数不混入 total，单独放 surplus_total），这里只做展示格式化
 const outstandingTotal = computed(() => {
   const n = Number(props.outstanding?.total)
   return Number.isFinite(n) ? n : 0
 })
-const outstandingCount = computed(() => Number(props.outstanding?.unrepaid_count) || 0)
 const overdueTotal = computed(() => Number(props.outstanding?.overdue_total) || 0)
-// 合计为负 = 溢缴款/多还多过欠款：显示「账上有富余」而非负数。
-// 仅当确实没有逾期欠款时才算纯富余展示——跨卡净额不能掩盖另一张卡的欠款
-// （A 卡溢缴款不会自动还 B 卡的账），有逾期欠款时逾期金额优先展示。
-const isSurplus = computed(() => outstandingTotal.value < 0 && overdueTotal.value <= 0)
+// 富余合计（负值）：某卡最新账单为负 = 该卡「账上有富余」，不参与待还合计
+const surplusTotal = computed(() => Number(props.outstanding?.surplus_total) || 0)
+const isSurplus = computed(() => surplusTotal.value < 0 && outstandingTotal.value <= 0 && overdueTotal.value <= 0)
 const outstandingLabel = computed(() => {
-  const n = Math.abs(outstandingTotal.value)
+  const n = isSurplus.value ? Math.abs(surplusTotal.value) : Math.abs(outstandingTotal.value)
   return Number.isInteger(n) ? n.toLocaleString('zh-CN') : n.toFixed(2)
 })
-const outstandingDesc = computed(() => {
-  // 按账单月份列出（「26年8月账单未标记还款」），不再用「n 期」计数；
-  // 月份跨卡全局去重（Set）——多卡同月只显示一次；孤立账单与逾期单独提示
-  if (!outstandingCount.value) return t('creditCards.outstandingEmpty')
-  // 纯富余（净额为负且无逾期欠款）：主金额是「多还的部分」，月份列表不再是「要还的账单」
-  if (isSurplus.value) return t('creditCards.outstandingSurplusDesc')
-  const parts = []
-  // 净额为负但仍有逾期欠款：欠款说明优先于富余（净额只是抵扣后的余数）
-  if (outstandingTotal.value < 0) {
-    parts.push(t('creditCards.outstandingNetWithDebt', {
-      amount: Math.abs(outstandingTotal.value).toLocaleString('zh-CN')
-    }))
-  }
-  const allCycles = [...new Set((props.outstanding?.per_card || [])
-    .flatMap((e) => e.cycles || []))]
-    .sort()
-    .reverse()
-  if (allCycles.length) {
-    parts.push(t('creditCards.outstandingHint', { cycles: allCycles.join('、') }))
-  } else {
-    parts.push(t('creditCards.outstandingCountOnly', { n: outstandingCount.value }))
-  }
-  const overdueCycles = [...new Set((props.outstanding?.per_card || [])
-    .flatMap((e) => e.overdue_cycles || []))]
-    .sort()
-    .reverse()
-  if (overdueCycles.length) {
-    parts.push(t('creditCards.outstandingOverdue', {
-      cycles: overdueCycles.join('、'),
-      amount: overdueTotal.value.toLocaleString('zh-CN')
-    }))
-  }
-  const orphan = (props.outstanding?.per_card || []).find((e) => e.card_id == null)
-  if (orphan?.count) {
-    parts.push(t('creditCards.outstandingOrphan', { n: orphan.count }))
-  }
-  return parts.join(' · ')
-})
+const outstandingDesc = computed(() => buildOutstandingDesc(props.outstanding, t))
 
 // 移动端第二行：7 天内有计划还款的启用卡，按银行去重（同银行多卡只显一个 logo）。
 // 未收录银行不能丢弃——否则移动端可能错显"暂无还款"；以品牌 key 优先去重，

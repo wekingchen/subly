@@ -141,3 +141,57 @@ export function buildRepaidScopeText(entry, t) {
   if (!parts.length) parts.push(t('creditCards.outstandingCountOnly', { n: entry?.count || 0 }))
   return parts.join(t('creditCards.scopeJoin'))
 }
+
+// 待还款统计块的说明文字（CreditCardStats.vue 用）。后端响应口径：total=各卡
+// 最新账单正金额之和（富余卡负数不混入，孤立账单累加），surplus_total=富余合计（负值）。
+// t 为 i18n 函数。分支意图（WHY）：
+// - 纯富余（只有富余卡且无逾期）：主金额是「多还的部分」，说明就是富余语义
+// - 富余+欠款并存：富余只是「另有」提示，欠款月份/笔数才是主金额来源说明——
+//   无月份欠款（日期缺失/孤立）也不能漏说（曾因 hasSurplus 分支吞掉笔数提示）
+// - 逾期、孤立账单各自独立提示
+export function buildOutstandingDesc(outstanding, t) {
+  const count = Number(outstanding?.unrepaid_count) || 0
+  if (!count) return t('creditCards.outstandingEmpty')
+  const total = Number(outstanding?.total) || 0
+  const overdueAmount = Number(outstanding?.overdue_total) || 0
+  const surplusTotal = Number(outstanding?.surplus_total) || 0
+  const hasSurplus = surplusTotal < 0
+  const isPureSurplus = hasSurplus && total <= 0 && overdueAmount <= 0
+  if (isPureSurplus) return t('creditCards.outstandingSurplusDesc')
+  const perCard = outstanding?.per_card || []
+  const parts = []
+  if (hasSurplus) {
+    parts.push(t('creditCards.outstandingSurplusAside', {
+      amount: Math.abs(surplusTotal).toLocaleString('zh-CN')
+    }))
+  }
+  const allCycles = [...new Set(perCard
+    .flatMap((e) => !e.is_surplus ? (e.cycles || []) : []))]
+    .sort()
+    .reverse()
+  if (allCycles.length) {
+    parts.push(t('creditCards.outstandingHint', { cycles: allCycles.join('、') }))
+  } else {
+    const debtCount = perCard
+      .filter((e) => !e.is_surplus)
+      .reduce((sum, e) => sum + (e.count || 0), 0)
+    if (debtCount > 0) {
+      parts.push(t('creditCards.outstandingCountOnly', { n: debtCount }))
+    }
+  }
+  const overdueCycles = [...new Set(perCard
+    .flatMap((e) => e.overdue_cycles || []))]
+    .sort()
+    .reverse()
+  if (overdueCycles.length) {
+    parts.push(t('creditCards.outstandingOverdue', {
+      cycles: overdueCycles.join('、'),
+      amount: overdueAmount.toLocaleString('zh-CN')
+    }))
+  }
+  const orphan = perCard.find((e) => e.card_id == null)
+  if (orphan?.count) {
+    parts.push(t('creditCards.outstandingOrphan', { n: orphan.count }))
+  }
+  return parts.join(' · ')
+}

@@ -182,7 +182,9 @@ def delete_credit_card(
 
 def _statement_out(s: CreditCardStatement, today: date | None = None) -> dict:
     # 账单逾期（派生值，不落库）：已出账单未标记还款且还款日已过且是真实欠款
-    # （金额为正——负金额是溢缴款/多还，不存在实质欠款逾期，与汇总口径一致）。
+    # （金额为正——负金额是溢缴款/多还，不存在实质欠款逾期）。
+    # total_due 为 NULL（解析器未提取到金额）同样不判逾期——「金额未知」不能
+    # 当成「确定欠款」红标吓用户，与汇总把 NULL 按 0 计的口径一致（审核 Low）。
     # due_date 为 NULL 时不判逾期（无法确定还款日，宁不冤枉）。
     # overdue_days 一并在此算好（业务时区），前端不做本地时间重算——
     # 浏览器时区与服务端不同时会少算/隐藏徽标。
@@ -191,7 +193,8 @@ def _statement_out(s: CreditCardStatement, today: date | None = None) -> dict:
     overdue_days = (
         (today - s.due_date).days
         if not s.is_repaid
-        and (s.total_due is None or s.total_due > 0)
+        and s.total_due is not None
+        and s.total_due > 0
         and s.due_date is not None
         and s.due_date < today
         else None
@@ -537,12 +540,52 @@ def backfill_statement(
         outcome["filled"] = True
         outcome["statement_id"] = record.id
         outcome["verify_status"] = record.verify_status
+        # 历史旧账单自动标记已还款（用户确认口径）：账单应还总额是滚动余额，
+        # 最新一期已包含历史欠款——旧期次的钱无需也不应再单独还，让用户
+        # 逐个给补拉账单打标毫无意义。只有「当期最新账单」需要手动标记，
+        # 因此仅标记严格早于该卡最新账单的期次（含本次补拉的这期）。
+        outcome["auto_marked"] = _auto_mark_historical_repaid(db, card, record)
     elif not outcome.get("scan_incomplete"):
         # 扫描不完整时不得追加「未找到」——账单可能就在未扫描的部分里（复核 High）
         _append_backfill_failure_reasons(outcome, agg_errors, agg_mismatched, agg_unmatched)
     _invalidate_scan_checkpoint(db)
     db.commit()
     return outcome
+
+
+def _auto_mark_historical_repaid(db: Session, card: CreditCard, record: CreditCardStatement) -> int:
+    """补拉场景：把该卡除最新一期外、未标记的勾稽通过账单标记已还款。
+
+    「最新一期」= 期比较键（statement_date 优先、缺失回退 bill_period_end，
+    与待还汇总口径一致——审核 Low：只比 statement_date 会漏掉仅有期止的
+    历史账单）最晚的账单；同键并列时全部保留为最新，不猜哪封才该手动还。
+    两者都缺失的账单无法判定先后，保守不标。返回标记条数。只动 is_repaid
+    标记，不推进 repaid_through_due 界线——界线推进属于用户手动「标记
+    已还款」的语义（顺延展示与静默提醒），自动补标不该改变提醒节奏。
+    """
+    latest_key = db.scalar(
+        select(func.max(func.coalesce(
+            CreditCardStatement.statement_date, CreditCardStatement.bill_period_end,
+        ))).where(
+            CreditCardStatement.card_id == card.id,
+            CreditCardStatement.verify_status == "ok",
+        )
+    )
+    if latest_key is None:
+        return 0
+    result = db.execute(
+        CreditCardStatement.__table__.update()
+        .where(
+            CreditCardStatement.card_id == card.id,
+            CreditCardStatement.verify_status == "ok",
+            CreditCardStatement.is_repaid.is_(False),
+            func.coalesce(
+                CreditCardStatement.statement_date, CreditCardStatement.bill_period_end,
+            ) < latest_key,
+        )
+        .values(is_repaid=True, repaid_at=utcnow())
+    )
+    return result.rowcount or 0
 
 
 def self_cycle_filled(db: Session, card: CreditCard, year: int, month: int):
@@ -802,17 +845,23 @@ def outstanding_summary(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """待还款总额：所有已出账单未标记还款的合计（勾稽异常 mismatch 不计入）。
+    """待还款口径：每卡以最新一期未标记还款的勾稽通过账单为准（滚动余额）。
 
-    含已删卡的孤立账单（历史账单的钱仍是要还的，card_id=None 条目）。
-    total_due 为 NULL 的账单按 0 计入金额但仍计数——期数口径与批量标记
-    弹窗一致，金额未知不代表不用还。
-    负 total_due（溢缴款/多还/退款冲抵）是合法业务数据，汇总原样保留：
-    合计为负的卡 is_surplus=True（「账上有富余」），前端不做负数展示。
-    逾期只统计正金额账单——富余的期次不存在实质欠款逾期。
-    per_card[].cycles 是各未还账单的月份标签（「26年8月」，降序），
-    供前端文案（「26年8月账单未标记还款」）；overdue_cycles/max_overdue_days
-    表达逾期（还款日已过未标记），overdue_total 是逾期金额合计。
+    银行账单的应还总额本身就是滚动计算的（上期余额+本期消费−本期还款），
+    最新账单已包含历史欠款——逐期累加会把同一笔钱重复计数（用户确认口径）。
+    - 最新账单 total_due 为正 → 该卡待还款即它；为负（溢缴款/多还/退款冲抵）
+      → 该卡「账上有富余」，富余绝对值展示且**不参与全局待还合计**
+      （富余是「多还的钱」，不是负的欠款——跨卡也不能抵扣他卡账单）
+    - 逾期同样随最新账单口径：只有最新账单为正且其还款日已过才算逾期，
+      金额即最新账单金额（滚动余额已吸收旧期欠款，旧期金额不能再作为
+      「当前逾期本金」累加——否则富余卡会同时显示「富余 500」和
+      「逾期 3000」的自相矛盾，审核 High）
+    - 最新账单 total_due 为 NULL 按 0 计但仍计数
+    - per_card[].cycles 仍是该卡全部未标记还款账单的月份（降序），供
+      确认弹窗与文案；unrepaid_count 同样是账单期数口径（与标记范围一致）
+    含已删卡的孤立账单（card_id=None 条目：多张已删卡的账单共享同一
+    分组键，无法界定「哪期最新」的卡归属——保持逐期累加的历史口径，
+    不参与最新账单/富余判定）。
     """
     today = scheduler._local_today()
     rows = db.scalars(
@@ -826,12 +875,14 @@ def outstanding_summary(
     ).all()
     total = 0.0
     unrepaid_count = 0
-    overdue_total = 0.0
     unknown_cycle_count = 0
     per_card: dict[int | None, dict] = {}
+    # 每卡的「最新账单记录」：比较键 statement_date 优先、缺失回退 bill_period_end。
+    # 孤立账单（card_id=None）不进 latest——None 是所有已删卡账单的共享键，
+    # 取「最新一笔」会把多卡的累加值覆盖掉（审核 Medium），保持逐期累加。
+    latest: dict[int, dict] = {}
     for s in rows:
         amount = float(s.total_due or 0.0)
-        total += amount
         unrepaid_count += 1
         entry = per_card.setdefault(s.card_id, {
             "total_due": 0.0, "count": 0, "cycle_keys": [],
@@ -850,24 +901,64 @@ def outstanding_summary(
         else:
             unknown_cycle_count += 1
             entry["unknown_cycle_count"] += 1
-        # 逾期口径只看欠款（正金额）：富余期次多还的钱不存在「逾期」
-        if amount > 0 and s.due_date is not None and s.due_date < today:
-            overdue_total += amount
+        # 记录每卡最新账单（金额+还款日+月份，供口径覆盖用）。
+        # 并列规则（审核 Medium）：同一期可能有多条记录（更正账单/跨邮箱重复，
+        # 唯一键含 message_id 挡不住）——比较键 (日期, id)，后插入的胜出，
+        # 语义是「银行后发的更正账单反映最新状态」。
+        s_key = s.statement_date or s.bill_period_end
+        if s.card_id is not None and s_key is not None:
+            cur = latest.get(s.card_id)
+            if cur is None or (s_key, s.id) > (cur["key"], cur["id"]):
+                latest[s.card_id] = {"key": s_key, "id": s.id, "amount": amount,
+                                     "due_date": s.due_date, "month_key": month_key}
+        # 孤立账单组保持逐期逾期累计（复审 Medium）：正常卡的逾期由下方
+        # latest 口径覆盖，孤立组没有 latest，必须在此处按笔累计——否则
+        # 已删卡逾期账单的汇总归零，与明细行 is_overdue=True 矛盾
+        if s.card_id is None and amount > 0 and s.due_date is not None and s.due_date < today:
             entry["overdue_amount"] += amount
-            overdue_days = (today - s.due_date).days
-            entry["max_overdue_days"] = max(entry["max_overdue_days"], overdue_days)
+            entry["max_overdue_days"] = max(entry["max_overdue_days"], (today - s.due_date).days)
             if month_key is not None and month_key not in entry["overdue_keys"]:
                 entry["overdue_keys"].append(month_key)
-    for entry in per_card.values():
+    # 卡级口径覆盖（孤立账单组保持累加）：待还与逾期都以最新账单为准
+    overdue_total = 0.0
+    surplus_total = 0.0
+    for cid, entry in per_card.items():
+        if cid is not None and cid in latest:
+            lat = latest[cid]
+            entry["total_due"] = round(lat["amount"], 2)
+            # 逾期随滚动余额口径：最新账单为正且其还款日已过才算逾期
+            if lat["amount"] > 0 and lat["due_date"] is not None and lat["due_date"] < today:
+                entry["overdue_amount"] = round(lat["amount"], 2)
+                entry["max_overdue_days"] = (today - lat["due_date"]).days
+                if lat["month_key"] is not None:
+                    entry["overdue_keys"] = [lat["month_key"]]
         entry["cycle_keys"].sort(reverse=True)
-        entry["overdue_keys"].sort(reverse=True)
+        keys = entry.pop("overdue_keys")
+        entry["overdue_cycles"] = [_cycle_label(y, m) for y, m in sorted(keys, reverse=True)]
         entry["cycles"] = [_cycle_label(y, m) for y, m in entry.pop("cycle_keys")]
-        entry["overdue_cycles"] = [_cycle_label(y, m) for y, m in entry.pop("overdue_keys")]
         entry["total_due"] = round(entry["total_due"], 2)
         entry["overdue_amount"] = round(entry["overdue_amount"], 2)
-        entry["is_surplus"] = entry["total_due"] < 0
+        if cid is None:
+            # 孤立账单组不参与富余判定（复审 Medium）：多张已删卡共享分组键，
+            # 累计净额为负只是多还的数字巧合，不是「某张卡账上有富余」——
+            # 全额（含负项）按历史口径计入 total
+            entry["is_surplus"] = False
+            total += entry["total_due"]
+        elif entry["total_due"] < 0:
+            # 富余不计入待还合计（正欠款卡照常计入；负数不是「负欠款」）
+            entry["is_surplus"] = True
+            surplus_total += entry["total_due"]
+        else:
+            entry["is_surplus"] = False
+            total += entry["total_due"]
+        # 全局逾期 = 正常卡最新账单逾期 + 孤立组逐笔累计（复审 Medium）；
+        # 基于取整后的金额累计，避免浮点误差（复审 Low）
+        overdue_total += entry["overdue_amount"]
     return {
-        "total": round(total, 2),
+        # 全局待还 = 各卡最新账单正金额之和 + 孤立账单累加（富余卡为 0，不抵扣他卡）
+        "total": round(max(total, 0.0), 2),
+        # 富余合计（负值，仅展示用；不混入 total）
+        "surplus_total": round(surplus_total, 2),
         "unrepaid_count": unrepaid_count,
         "overdue_total": round(overdue_total, 2),
         # 日期缺失的未还账单数：确认弹窗用它补全实际标记范围
