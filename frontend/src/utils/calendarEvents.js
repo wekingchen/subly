@@ -93,7 +93,11 @@ export function creditCardCalendarEvents(cards, start, end) {
         sourceId: card.id,
         sourceLabel: '信用卡',
         name: groupedName,
-        icon: null,
+        // 事件图标用所属银行 logo（与卡片徽标同源：内置图标库按 slug 提供、
+        // 后端已消毒缓存）。官方 logo 抓取失败时，后端返回生成的银行首字
+        // 字标（HTTP 200）；未收录银行 icon 置 null，接口或图片加载失败时
+        // 由 ServiceIcon 回退 💳。
+        icon: brand?.slug ? `/api/icons/library/${brand.slug}` : null,
         occurrence_date: occurrenceDate,
         next_renewal_date: occurrenceDate,
         amount: null,

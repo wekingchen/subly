@@ -164,6 +164,20 @@ describe('creditCardCalendarEvents', () => {
     expect(events[0].cards_count).toBe(2)
   })
 
+  it('事件图标用所属银行官方 logo；未收录银行回退 null（💳 兜底）', () => {
+    const events = creditCardCalendarEvents([
+      { ...card, id: 61, display_name: '招行卡', bank_name: '招商银行' },
+      { ...card, id: 62, display_name: '汇丰卡', bank_name: 'HSBC' }
+    ], new Date(2024, 0, 1), new Date(2024, 0, 31))
+    const ccb = events.find((event) => event.sourceId === 61)
+    const hsbc = events.find((event) => event.sourceId === 62)
+    // 与卡片徽标同源：内置图标库 slug（cmbchina.com → cmbchina_com）。
+    // 官方 logo 抓取失败时后端返回生成的银行首字字标（HTTP 200）；
+    // 未收录银行 icon 置 null，由 ServiceIcon 回退 💳
+    expect(ccb.icon).toBe('/api/icons/library/cmbchina_com')
+    expect(hsbc.icon).toBeNull()
+  })
+
   it('银行名称别名（「民生」「中国民生银行」）与「民生银行」合并为同组', () => {
     const events = creditCardCalendarEvents([
       { ...card, id: 41, display_name: '山姆联名卡', bank_name: '民生' },
