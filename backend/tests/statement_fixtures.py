@@ -55,6 +55,7 @@ def load_cmb() -> bytes:
 def load_ccb() -> bytes:
     """建行：8-td 交易行（结算金额 td[7]）+ 多卡应还明细 + 公式行。"""
     html = """<html><body>
+    <div>我们已收到您上一账单周期（2026年06月28日-2026年07月27日）的还款，人民币: ￥1,102.26。</div>
     <table><tr><td>账单周期Statement Cycle</td><td>2026/07/28-2026/08/27</td></tr>
     <tr><td>本期到期还款日Payment Due Date</td><td>2026/09/16</td></tr>
     <tr><td>本期账单日Statement Date</td><td>2026-08-27</td><td>授信额度 Credit Limit</td><td>CNY</td><td>60,000</td></tr></table>
@@ -66,7 +67,7 @@ def load_ccb() -> bytes:
     </tr></table>
     <table><tr><td>【应还款明细】</td></tr>
     <tr><td>51100000****5561</td><td>人民币(CNY)</td><td>-100.00</td><td>0.00</td><td></td><td></td><td></td></tr>
-    <tr><td>53160000****6714</td><td>人民币(CNY)</td><td>1,042.26</td><td>90.00</td><td></td><td></td><td></td></tr>
+    <tr><td>53160000****6714</td><td>人民币(CNY)</td><td>1,658.72</td><td>90.00</td><td></td><td></td><td></td></tr>
     <tr><td>62590000****5468</td><td>人民币(CNY)</td><td>200.00</td><td>90.00</td><td></td><td></td><td></td></tr></table>
     <table><tr><td>【交易明细】</td></tr>
     <tr><td>交易日</td><td>银行记账日</td><td>卡号后四位</td><td>交易描述</td><td>交易币/金额</td><td></td><td>结算币/金额</td><td></td></tr>
@@ -76,6 +77,7 @@ def load_ccb() -> bytes:
     <tr><td>2026-07-29</td><td>2026-07-29</td><td>6714</td><td>示例商户-购物</td><td>CNY</td><td>180.00</td><td>CNY</td><td>180.00</td></tr>
     <tr><td>2026-08-05</td><td>2026-08-05</td><td>6714</td><td>示例商户-退款</td><td>CNY</td><td>-20.00</td><td>CNY</td><td>-20.00</td></tr>
     <tr><td>2026-08-06</td><td>2026-08-06</td><td>6714</td><td>建行 按卡转账还款</td><td>CNY</td><td>-160.00</td><td>CNY</td><td>-160.00</td></tr>
+    <tr><td>2026-08-06</td><td>2026-08-07</td><td>6714/扫码</td><td>成都市 跨行消费 税务</td><td>CNY</td><td>1498.72</td><td>CNY</td><td>1498.72</td></tr>
     </table>
     </body></html>"""
     return build_mime(html, "service@vip.ccb.com", "中国建设银行信用卡电子账单", "ccb-fix-1")

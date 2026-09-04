@@ -119,6 +119,21 @@ def _statement_sort_key(parsed, st):
     )
 
 
+def _items_differ(db: Session, statement_id: int, st) -> bool:
+    """比较 DB 已存明细与新解析明细是否一致（金额序列口径）。
+
+    解析器修复（如建行扫码行此前被丢弃）后重新解析同一封邮件时，
+    旧记录需要重建明细——此处检测是否需要重建。
+    """
+    existing = db.scalars(
+        select(CreditCardStatementItem.amount).where(
+            CreditCardStatementItem.statement_id == statement_id
+        ).order_by(CreditCardStatementItem.line_no)
+    ).all()
+    new_amounts = [float(i.amount) for i in st.items]
+    return [float(a) for a in existing] != new_amounts
+
+
 def _pick_newer(best, challenger):
     """返回两份 (parsed, st) 候选中账单日更新的那份。"""
     if best is None:
@@ -309,6 +324,28 @@ def sync_statements_core(
                 record.min_due = st.min_due
                 record.credit_limit = st.credit_limit
                 record.subject = parsed.subject
+                # 交易明细同步重建：解析器修复（如建行扫码行此前被丢弃）后，
+                # 重新解析必须让旧记录补齐缺失明细——只更新账单字段会留下
+                # 残缺明细且 verify=ok 掩盖问题（生产实测复核 High）。
+                # 用户状态（is_repaid/repaid_at）在账单级，不受影响。
+                if _items_differ(db, record.id, st):
+                    db.query(CreditCardStatementItem).filter(
+                        CreditCardStatementItem.statement_id == record.id
+                    ).delete()
+                    for line_no, item in enumerate(st.items, start=1):
+                        db.add(CreditCardStatementItem(
+                            statement_id=record.id,
+                            line_no=line_no,
+                            trans_date_raw=item.trans_date_raw or "",
+                            trans_date=item.trans_date,
+                            posted_date=item.posted_date,
+                            description=item.description[:255],
+                            amount=item.amount,
+                            tx_amount=item.tx_amount,
+                            tx_currency=item.tx_currency,
+                            tx_type=item.tx_type,
+                            installment_note=item.installment_note,
+                        ))
                 mail_skipped += 1
                 continue
             record = CreditCardStatement(

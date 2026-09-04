@@ -32,7 +32,7 @@ ADDR = {
 }
 
 # (卡数, 总交易笔数) —— 与真实样本结构等价的合成样本预期
-EXPECT = {"cmb": (1, 5), "ccb": (3, 6), "citic": (1, 3), "pab": (1, 3), "cmbc": (2, 3)}
+EXPECT = {"cmb": (1, 5), "ccb": (3, 7), "citic": (1, 3), "pab": (1, 3), "cmbc": (2, 3)}
 
 
 # ---------- 工具单元 ----------
@@ -138,9 +138,17 @@ def test_parse_ccb_multi_card_and_settlement_amount():
     assert by_card["5468"].bill_period_start == date(2026, 7, 28)
     # 授信额度（平铺标签流提取）
     assert by_card["5468"].credit_limit == 60000.0
-    # 账户级勾稽（结算金额口径）
-    v = parsed.verify_all()["_account"]
-    assert v["ok"] is True
+    # 逐卡勾稽（排除还款分录后的非还款净额 == 应还）
+    v = parsed.verify_all()
+    assert v["5468"]["ok"] is True
+    assert v["6714"]["ok"] is True
+    # 5561 溢缴卡（滚动余额口径）跳过勾稽，不进结果
+    assert "5561" not in v
+    # 扫码通道行归入 6714：金额 1498.72、分类消费
+    scan = next(i for st in parsed.statements if st.card_last_four == "6714"
+                for i in st.items if "扫码" in (i.description or "") or "税务" in (i.description or ""))
+    assert scan.amount == 1498.72
+    assert scan.tx_type == "purchase"
 
 
 def test_parse_citic_datakey_and_refund():

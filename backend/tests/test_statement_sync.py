@@ -22,7 +22,7 @@ from app.models import (  # noqa: E402
     ImapAccount,
     User,
 )
-from app.services import imap_client  # noqa: E402
+from app.services import credit_card_statement_sync, imap_client  # noqa: E402
 
 
 @pytest.fixture
@@ -513,3 +513,60 @@ def test_all_statements_endpoint_includes_orphans(sync_env, monkeypatch):
 
     # 越权隔离
     assert client.get("/api/credit-cards/statements/all/99999/items").status_code == 404
+
+
+def test_resync_rebuilds_stale_items(sync_env, monkeypatch):
+    """复核 High 回归：解析器修复（建行扫码行此前被丢弃）后重新解析同一封
+    邮件——旧记录的交易明细必须重建补齐，且 verify 从 mismatch 转 ok；
+    还款标记（is_repaid/repaid_at）不受明细重建影响。"""
+
+    from statement_fixtures import load_ccb
+
+    client, db, _, account = sync_env
+    client.post("/api/credit-cards", json={
+        "display_name": "建行卡", "bank_name": "建设银行", "last_four": "6714",
+        "statement_day": 27, "due_day": 16, "remind_days_before": [3],
+        "credit_limit": None, "is_active": True, "show_in_calendar": True,
+    })
+    account_id = account.id
+
+    from app.services import imap_client as ic
+
+    def fake_fetch(email, password, provider, days, predicate=None, **kwargs):
+        return [{"uid": b"1", "from_address": "cc@ccb.com", "subject": "账单",
+                 "raw": load_ccb()}]
+
+    monkeypatch.setattr(ic, "fetch_full_mime", fake_fetch)
+
+    orig_parse = credit_card_statement_sync.parse_email
+
+    def old_parse(raw, from_address=""):
+        r = orig_parse(raw, from_address=from_address)
+        st = next(s for s in r.statements if s.card_last_four == "6714")
+        st.items = [i for i in st.items if "税务" not in i.description]  # 旧解析器丢扫码行
+        return r
+
+    monkeypatch.setattr(credit_card_statement_sync, "parse_email", old_parse)
+    assert client.post(f"/api/imap/accounts/{account_id}/sync-statements",
+                       json={"days": 31}).status_code == 200
+    stmt = db.query(CreditCardStatement).filter_by(card_last_four="6714").one()
+    n_before = db.query(CreditCardStatementItem).filter_by(statement_id=stmt.id).count()
+    # fixture 无「已收到上期还款」正文 → prev_period_settled=None → 勾稽跳过
+    # （verify=ok 未验证默认）；明细重建回归的核心是笔数变化
+    assert n_before == 3  # 旧解析器丢扫码行后的残缺明细
+
+    # 用户标记还款（验证重建不覆盖用户状态）
+    client.patch(f"/api/credit-cards/statements/{stmt.id}/repaid", json={"is_repaid": True})
+
+    monkeypatch.setattr(credit_card_statement_sync, "parse_email", orig_parse)
+    assert client.post(f"/api/imap/accounts/{account_id}/sync-statements",
+                       json={"days": 31}).status_code == 200
+    db.expire_all()
+    stmt = db.get(CreditCardStatement, stmt.id)
+    n_after = db.query(CreditCardStatementItem).filter_by(statement_id=stmt.id).count()
+    assert n_after == n_before + 1  # 扫码明细补回
+    assert db.query(CreditCardStatementItem).filter_by(
+        statement_id=stmt.id, amount=1498.72).count() == 1
+    assert stmt.verify_status == "ok"
+    assert stmt.is_repaid is True  # 用户标记保留
+    assert stmt.repaid_at is not None

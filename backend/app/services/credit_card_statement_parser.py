@@ -65,6 +65,10 @@ class ParsedEmail:
     message_id: str
     subject: str
     statements: list[ParsedStatement] = field(default_factory=list)
+    # 上期账单是否已全额结清（建行从正文「已收到上一账单周期的还款 ￥X」
+    # 与摘要上期应还款额比对得出；其他银行 None）。
+    # None = 无法判定（跳过依赖此标志的勾稽）；True/False = 明确。
+    prev_period_settled: bool | None = None
 
     def verify_all(self) -> dict[str, dict]:
         """整封邮件级勾稽（自校验）。
@@ -83,7 +87,6 @@ class ParsedEmail:
                 return out
             tol = 0.01 * len(items) + 0.001
             pos = sum(i.amount for i in items if i.amount > 0)
-            neg = abs(sum(i.amount for i in items if i.amount < 0))
             if key == "cmbc":
                 # 值区与标签区顺序不保证对齐（探索结论）无法逐项勾稽。
                 # 上期未结清时「正数合计 == 应还」不成立（合法业务场景），
@@ -95,14 +98,47 @@ class ParsedEmail:
                     return out
                 out["_account"] = {"ok": abs(pos - charges) <= tol, "expected": float(charges), "actual": float(pos), "diff": float(charges - pos)}
             else:  # ccb
-                spend = next((st.summary.get("spend") for st in self.statements if st.summary.get("spend") is not None), None)
-                repay = next((st.summary.get("repay") for st in self.statements if st.summary.get("repay") is not None), None)
-                if spend is None:
-                    return out
-                ok = abs(pos - spend) <= tol
-                if repay is not None:
-                    ok = ok and abs(neg - repay) <= tol
-                out["_account"] = {"ok": ok, "expected": float(spend + (repay or 0)), "actual": float(pos + neg), "diff": float(spend + (repay or 0) - pos - neg)}
+                # 建行账单按卡分列明细。多卡用户（生产实测：三张建行卡同邮件）
+                # 账户级摘要 spend/repay 是全账户合计，且溢缴款分录（如 -3000
+                # 无消费纯还款入账）计入明细但不计入摘要 repay——账户级合并
+                # 勾稽天然对不上（生产误报 mismatch 的根因）。
+                # 改为逐卡勾稽并以尾号为 key 返回（与中信/平安/招行同构）：
+                # 「按卡转账还款」分录在上期已结清的卡上是清偿记录、不是本期
+                # 应还的构成——due >= 0 时排除还款分录后，非还款交易净额 ==
+                # total_due（生产实测 6714: 180-20+1498.72 == 1658.72 ✓；
+                # 5468: 50+150 == 200 ✓）。容差按本卡交易数计，不受同邮件
+                # 其他卡笔数放大。
+                # 以下两种情况跳过勾稽（不进结果 = 未验证，不算失败；同步层
+                # 也不会把别的卡的失败映射到它身上）：
+                # - due < 0（溢缴款）：溢缴应还是「上期溢缴余额 + 本期消费
+                #   净额」的滚动值（生产实测 5561: 上期溢缴 3000 − 本期消费
+                #   142.23 = -2857.77），缺少上期余额无法验证；
+                # - due > 0 且无法确认上期结清：正数应还同样可能是「上期未
+                #   结清余额 + 本期消费」的滚动值（如上期 1160 只还 160 结转
+                #   1000，本期应还合法地 > 本期消费），而建行邮件不提供逐卡
+                #   上期余额——无法区分「滚动余额」与「漏解析交易」。
+                # 上期结清的判定：账单正文含「我们已收到您上一账单周期…的
+                # 还款」且还款金额 == 上期全部应还款额（生产实测 3~5 月邮件
+                # 均含此句；摘要 prev 即上期应还，repay 含退货冲抵——
+                # prev_settled 在 _parse_ccb 摘要解析处尚不可得，这里用
+                # 邮件级标志位由解析器主体传入 self）。
+                for st in self.statements:
+                    if not st.items or st.total_due is None or st.total_due < 0:
+                        continue
+                    if self.prev_period_settled is not True:
+                        continue  # 上期未确认全额结清（滚动余额）→ 不验证，不误判
+                    card_tol = 0.01 * len(st.items) + 0.001
+                    pos_rest = sum(
+                        i.amount for i in st.items
+                        if i.amount > 0 or (i.amount < 0 and i.tx_type != "payment")
+                    )
+                    due = float(st.total_due)
+                    out[st.card_last_four] = {
+                        "ok": abs(pos_rest - due) <= card_tol,
+                        "expected": float(due),
+                        "actual": float(pos_rest),
+                        "diff": float(due - pos_rest),
+                    }
             return out
         # 逐卡：citic / pab / cmb
         for st in self.statements:
@@ -156,6 +192,32 @@ class ParsedEmail:
 # ----------------------------------------------------------------------- #
 # 入口
 # ----------------------------------------------------------------------- #
+
+def _ccb_prev_settled_from_text(bank_key: str, html: str | None) -> bool | None:
+    """建行账单：正文「已收到您上一账单周期（…）的还款，人民币: ￥X」的 X
+    是否等于摘要「上期全部应还款额」（取 HTML 摘要表的 Last Statement Balance）。
+    相等 → 上期已全额结清，逐卡勾稽公式（应还 == 非还款净额）成立；
+    不等或取不到 → None/False，勾稽跳过不误判（滚动余额合法场景）。
+    其他银行返回 None（无此正文结构）。"""
+    if bank_key != "ccb" or not html:
+        return None
+    text = re.sub(r"<[^>]+>", " ", html)
+    text = re.sub(r"\s+", " ", text)
+    m_receipt = re.search(
+        # 括号全角/半角都可能出现（银行模板不一），日期段用非贪婪跨括号匹配
+        r"已收到您上一账单周期.*?的还款[，,]?\s*人民币[:：]?\s*[￥¥]?\s*([\d,]+\.?\d*)",
+        text,
+    )
+    m_prev = re.search(
+        r"上期全部应还款额\s*Last Statement Balance.*?人民币\s*[（(]CNY[）)]\s*([\d,]+\.\d{2})",
+        text,
+    )
+    if not m_receipt or not m_prev:
+        return None  # 正文结构不完整：无法判定
+    paid = float(m_receipt[1].replace(",", ""))
+    prev_due = float(m_prev[1].replace(",", ""))
+    return abs(paid - prev_due) <= 0.005
+
 
 def detect_bank(from_address: str | None) -> str | None:
     """按发件人域名识别银行（主域/子域匹配，见 bank_senders）。"""
@@ -231,6 +293,11 @@ def parse_email(raw_mime: bytes, from_address: str | None = None) -> ParsedEmail
         message_id=message_id,
         subject=subject[:255],
         statements=parsed,
+        # 建行逐卡勾稽前置条件：账单正文声明「已收到上一账单周期的还款」
+        # 且金额 == 上期全部应还款额（正文可提取），即上期已全额结清——
+        # 只有此时「本期应还 == 本期非还款交易净额」的逐卡公式才成立；
+        # 上期未结清（滚动余额）时公式不成立，勾稽跳过不误判。
+        prev_period_settled=_ccb_prev_settled_from_text(bank_key, html),
     )
 
 
@@ -485,8 +552,13 @@ def _parse_ccb(html: str) -> list[ParsedStatement]:
             stl_amt = cells[7]  # 结算金额 td[7]（勾稽口径）；td[6] 结算币固定 CNY 不取
             if not (re.match(r"^\d{4}-\d{2}-\d{2}$", tr_raw) and re.match(r"^\d{4}-\d{2}-\d{2}$", post_raw)):
                 continue
-            if not re.match(r"^\d{4}$", last4c):
+            # 尾号列通常是 4 位数字；银联扫码通道为「6714/扫码」格式——
+            # 取「/」前的 4 位尾号归入对应卡（生产实测：漏掉会少 1498.72
+            # 的扫码消费，勾稽误报 mismatch）
+            m4 = re.match(r"^(\d{4})(?:/\S+)?$", last4c)
+            if not m4:
                 continue
+            last4c = m4[1]
             settled = parse_money(stl_amt)
             if settled is None or not desc:
                 continue
