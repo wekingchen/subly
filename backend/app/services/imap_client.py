@@ -436,7 +436,84 @@ def fetch_full_mime(
                 # 两阶段拉取：先取头部+大小（发件人过滤与大小判断都不需要正文），
                 # 只对通过筛选的邮件下载完整 BODY——避免把大附件/无关邮件整个
                 # 拉进内存后才丢弃（审核修复：资源保护必须发生在下载之前）。
-                for uid in uids[:scan_limit]:
+                # 头部按批获取（逗号分隔的精确 UID 列表，一次往返最多 50 封）：
+                # 逐封串行在数千封邮箱上会产生数千次网络往返（生产实测 QQ 邮箱
+                # 8625 封补拉超时断连，且长期占用全局信号量令后续请求 503）。
+                # 不用 lo:hi 区间——候选稀疏时区间会扩张成全量（候选 14000,1 的
+                # 区间 1:14000 会拉回一万多封），恰好重新引入超时（复核 Medium）。
+                import email as _email
+
+                BATCH = 50
+                FETCH_HEADS_MACRO = "(BODY.PEEK[HEADER] RFC822.SIZE)"
+                scan_target = uids[:scan_limit] if scan_limit is not None else uids
+
+                def _parse_fetch_uid(meta: bytes):
+                    """从 FETCH 记录元数据提取 UID；UID 无论在 literal 前缀还是
+                    后随 trailer 里都能命中（属性顺序服务器自定，复核 Medium）。"""
+                    mu = re.search(rb"UID\s+(\d+)", meta)
+                    return mu[1] if mu else None
+
+                def _parse_batch_headers(head_batch) -> dict:
+                    """批量 FETCH 响应 → {uid: (头部literal, RFC822.SIZE)}。
+                    literal 前缀（tuple[0]）与紧随的 trailer 行（bytes 项）合并
+                    后再解析，不假设 UID 出现在 literal 之前。"""
+                    headers: dict[bytes, tuple[bytes, int]] = {}
+                    items = head_batch or []
+                    i = 0
+                    while i < len(items):
+                        item = items[i]
+                        if not isinstance(item, tuple) or len(item) < 2:
+                            i += 1
+                            continue
+                        trailer = b""
+                        if i + 1 < len(items) and isinstance(items[i + 1], bytes):
+                            trailer = items[i + 1]
+                            i += 1
+                        uid_b = _parse_fetch_uid(item[0] + trailer)
+                        if uid_b is not None:
+                            msize = re.search(rb"RFC822.SIZE\s+(\d+)", item[0] + trailer)
+                            headers[uid_b] = (item[1], int(msize[1]) if msize else 0)
+                        i += 1
+                    return headers
+
+                def _fetch_single_header(uid_b: bytes):
+                    """逐封头部获取（批量 NO 的降级路径）。复用批量解析——
+                    UID/SIZE 同样可能位于 literal 之后的 trailer（复核 Medium），
+                    否则降级路径在合法响应排列下仍会丢信或漏判大小。"""
+                    status, head_data = client.uid("fetch", uid_b, FETCH_HEADS_MACRO)
+                    if status != "OK" or not head_data:
+                        return None
+                    parsed = _parse_batch_headers(head_data)
+                    return parsed.get(uid_b)
+
+                # 只保留解析后的小字段，不跨批缓存原始头部 literal——
+                # 2000 封大头部全部驻留内存可致进程 OOM（复核 Medium）。
+                head_info: dict[bytes, tuple[str, str, str, int]] = {}
+                for i in range(0, len(scan_target), BATCH):
+                    batch = scan_target[i:i + BATCH]
+                    status, head_batch = client.uid("fetch", b",".join(batch), FETCH_HEADS_MACRO)
+                    if status == "OK":
+                        batch_headers = _parse_batch_headers(head_batch)
+                    else:
+                        # NO：响亮降级为逐封重试（旧版单封语义），不得把整批
+                        # 50 封静默丢弃后伪装成「未找到」（复核 Medium；BAD
+                        # 已由 imaplib 直接抛出，走外层连接错误转换）
+                        logger.warning(
+                            "event=imap_batch_fetch_degraded status=%s batch_size=%d",
+                            status, len(batch),
+                        )
+                        batch_headers = {}
+                        for uid_b in batch:
+                            got = _fetch_single_header(uid_b)
+                            if got is not None:
+                                batch_headers[uid_b] = got
+                    for uid_b, (literal, size_int) in batch_headers.items():
+                        head_msg = _email.message_from_bytes(literal)
+                        _, sender_addr = _parse_from(head_msg.get("From"))
+                        mid = str(head_msg.get("Message-ID") or "").strip()
+                        subject = _decode_header_value(head_msg.get("Subject"))
+                        head_info[uid_b] = (sender_addr, mid, subject, size_int)
+                for uid in scan_target:
                     if total_bytes >= max_total_bytes:
                         logger.warning(
                             "event=imap_fetch_budget_exhausted total_bytes=%d",
@@ -448,27 +525,20 @@ def fetch_full_mime(
                             # 上层当成完整结果）
                             raise ImapScanBudgetExceeded()
                         return out  # 开放式查询保持原行为：安静返回部分结果
-                    status, head_data = client.uid("fetch", uid, "(BODY.PEEK[HEADER] RFC822.SIZE)")
-                    if status != "OK" or not head_data or head_data[0] is None:
+                    info = head_info.get(uid)
+                    if info is None:
                         continue
-                    if not isinstance(head_data[0], tuple):
-                        continue
-                    meta_raw = head_data[0][1]
-                    size_raw = head_data[0][0] if isinstance(head_data[0][0], bytes) else b""
-                    msize = re.search(rb"RFC822.SIZE\s+(\d+)", size_raw)
-                    if msize and int(msize[1]) > max_message_bytes:
+                    sender_addr, mid, subject, size_int = info
+                    if size_int > max_message_bytes:
                         continue  # 超限：不下载正文
-                    import email as _email
-
-                    head_msg = _email.message_from_bytes(meta_raw)
-                    _, sender_addr = _parse_from(head_msg.get("From"))
                     if predicate is not None and not predicate(sender_addr):
-                        continue
+                        continue  # 发件人过滤（银行白名单/补拉目标银行）——
+                        # 必须在正文下载之前：无关邮件既不该进结果，
+                        # 也不该消耗正文预算（复核 High）
                     # 跨文件夹去重（同一封邮件可能被 QQ 复制进多个文件夹）：
                     # Message-ID 全局唯一，比 UID 稳定（UID 每文件夹独立编号）。
                     # 只在正文成功取得后才标记已见——首副本下载失败时仍可从
                     # 其他文件夹的副本补拉（审核修复：过早标记会漏掉唯一可用副本）。
-                    mid = str(head_msg.get("Message-ID") or "").strip()
                     if mid and mid in seen_message_ids:
                         continue
                     status, body_data = client.uid("fetch", uid, "(BODY.PEEK[])")
@@ -483,7 +553,7 @@ def fetch_full_mime(
                     out.append({
                         "uid": uid.decode("ascii", errors="replace"),
                         "from_address": sender_addr,
-                        "subject": _decode_header_value(head_msg.get("Subject")),
+                        "subject": subject,
                         "raw": raw,
                     })
             if not scanned_any:

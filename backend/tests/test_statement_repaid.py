@@ -76,9 +76,25 @@ def _mock_imap(monkeypatch, mails: list[bytes]):
         def uid(self, command, *args):
             if command == "search":
                 return "OK", [" ".join(str(i) for i in range(1, len(mails) + 1)).encode()]
-            idx = int(args[0]) - 1
-            raw = mails[idx]
-            return "OK", [(f"1 (UID {args[0]} BODY[])".encode(), raw), b")"]
+            target = args[0].decode() if isinstance(args[0], bytes) else str(args[0])
+            uids_in_range = []
+            for seg in target.split(","):
+                if ":" in seg:
+                    lo, hi = (int(x) for x in seg.split(":"))
+                    uids_in_range.extend(str(u).encode() for u in range(lo, hi + 1))
+                else:
+                    uids_in_range.append(seg.encode())
+            out_items = []
+            for u in uids_in_range:
+                idx = int(u) - 1
+                raw = mails[idx]
+                if command == "fetch" and "BODY.PEEK[]" in args[1]:
+                    out_items.append((f"1 (UID {u.decode()} BODY[])".encode(), raw))
+                    continue
+                header = raw.split(b"\r\n\r\n")[0]
+                out_items.append((f"1 (UID {u.decode()} RFC822.SIZE 500 BODY[HEADER] {len(header)})".encode(), header))
+            out_items.append(b")")
+            return "OK", out_items
 
         def logout(self):
             pass

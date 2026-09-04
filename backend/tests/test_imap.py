@@ -882,12 +882,25 @@ def test_fetch_full_mime_bounded_query_not_truncated_by_max_scan(imap_env, monke
                 # 模拟区间命中 250 封（超过默认 max_scan=200）：
                 # 老账单 UID 小、排在倒序尾部——开放式搜索会被截断丢弃
                 return "OK", [b" ".join(str(i).encode() for i in range(1, 251))]
-            uid_str = a[0].decode()
-            bill = bill_for(uid_str)
-            if cmd == "fetch" and "BODY.PEEK[]" in a[1]:
-                return "OK", [(f"{uid_str} (UID {uid_str} BODY[])".encode(), bill), b")"]
-            header = bill.split(b"\r\n\r\n")[0]
-            return "OK", [(f"{uid_str} (UID {uid_str} RFC822.SIZE 500 BODY[HEADER] {len(header)})".encode(), header), b")"]
+            target = a[0].decode() if isinstance(a[0], bytes) else str(a[0])
+            uids_in_range = []
+            for seg in target.split(","):
+                if ":" in seg:
+                    lo, hi = (int(x) for x in seg.split(":"))
+                    uids_in_range.extend(str(u).encode() for u in range(lo, hi + 1))
+                else:
+                    uids_in_range.append(seg.encode())
+            out_items = []
+            for u in uids_in_range:
+                uid_str = u.decode()
+                bill = bill_for(uid_str)
+                if cmd == "fetch" and "BODY.PEEK[]" in a[1]:
+                    out_items.append((f"{uid_str} (UID {uid_str} BODY[])".encode(), bill))
+                    continue
+                header = bill.split(b"\r\n\r\n")[0]
+                out_items.append((f"{uid_str} (UID {uid_str} RFC822.SIZE 500 BODY[HEADER] {len(header)})".encode(), header))
+            out_items.append(b")")
+            return "OK", out_items
         def logout(self): pass
         def shutdown(self): pass
 
@@ -931,17 +944,30 @@ def _make_fake_mailbox(monkeypatch, uid_count, folders=None, per_folder_counts=N
                 search_clauses.append(a[1])
                 n = counts.get(state["folder"], uid_count)
                 return "OK", [b" ".join(str(i).encode() for i in range(1, n + 1))]
-            uid_str = a[0].decode()
             tag = state["folder"]  # Message-ID 按文件夹+UID 唯一
-            bill = (
-                b"From: bill <creditcard@service.ccb.com>\r\n"
-                b"Subject: bill\r\n"
-                b"Message-ID: <" + tag.encode() + b"-" + uid_str.encode() + b">\r\n\r\nbody"
-            )
-            if cmd == "fetch" and "BODY.PEEK[]" in a[1]:
-                return "OK", [(f"{uid_str} (UID {uid_str} BODY[])".encode(), bill), b")"]
-            header = bill.split(b"\r\n\r\n")[0]
-            return "OK", [(f"{uid_str} (UID {uid_str} RFC822.SIZE 500 BODY[HEADER] {len(header)})".encode(), header), b")"]
+            target = a[0].decode() if isinstance(a[0], bytes) else str(a[0])  # 单 UID 或「1:50」区间
+            uids_in_range = []
+            for seg in target.split(","):
+                if ":" in seg:
+                    lo, hi = (int(x) for x in seg.split(":"))
+                    uids_in_range.extend(str(u).encode() for u in range(lo, hi + 1))
+                else:
+                    uids_in_range.append(seg.encode())
+            out_items = []
+            for u in uids_in_range:
+                us = u.decode() if isinstance(u, bytes) else u
+                bill = (
+                    b"From: bill <creditcard@service.ccb.com>\r\n"
+                    b"Subject: bill\r\n"
+                    b"Message-ID: <" + tag.encode() + b"-" + us.encode() + b">\r\n\r\nbody"
+                )
+                if cmd == "fetch" and "BODY.PEEK[]" in a[1]:
+                    out_items.append((f"{us} (UID {us} BODY[])".encode(), bill))
+                    continue
+                header = bill.split(b"\r\n\r\n")[0]
+                out_items.append((f"{us} (UID {us} RFC822.SIZE 500 BODY[HEADER] {len(header)})".encode(), header))
+            out_items.append(b")")
+            return "OK", out_items
 
         def logout(self): pass
         def shutdown(self): pass
@@ -1066,6 +1092,267 @@ def test_fetch_full_mime_before_bounds_search(imap_env, monkeypatch):
     clause = search_clauses[0]
     assert "SINCE" in clause and "BEFORE" in clause
     assert clause.count("05-Aug-2026") == 2  # SINCE 下界与 BEFORE 上界同日（排他区间）
+
+
+def test_batch_fetch_uses_exact_uid_list_not_range(imap_env, monkeypatch):
+    """复核 Medium 回归：批量头部 FETCH 必须用逗号分隔的精确 UID 列表，
+    不得扩张成 lo:hi 区间——候选稀疏（如 14000,1）时区间会拉回区间内
+    全部 14000 封，重新引入大邮箱超时。"""
+    from datetime import date
+
+    from app.services import imap_client as ic
+
+    client, _, _ = imap_env
+    client.post("/api/imap/accounts", json={"email": "a@qq.com", "password": "x", "provider": "qq"})
+
+    def bill_for(uid: str) -> bytes:
+        return (b"From: bill <creditcard@service.ccb.com>\r\n"
+                b"Subject: bill\r\n"
+                b"Message-ID: <sparse-" + uid.encode() + b">\r\n\r\nbody")
+
+    fetch_targets = []
+
+    class FakeClient:
+        def __init__(self, *a, **k): pass
+        def login(self, *a): pass
+        def xatom(self, *a): pass
+        def list(self):
+            return "OK", [b'(\\HasNoChildren) "/" "INBOX"']
+        def select(self, folder, readonly=False):
+            return "OK", [b"1"]
+        def uid(self, cmd, *a):
+            if cmd == "search":
+                # 稀疏候选：只有 UID 1 与 14000，区间 1:14000 之间存在
+                # 大量不在候选里的邮件
+                return "OK", [b"14000 1"]
+            target = a[0].decode() if isinstance(a[0], bytes) else str(a[0])
+            uids_hit = target.split(",") if cmd == "fetch" and "BODY.PEEK[HEADER]" in a[1] else [target]
+            if "BODY.PEEK[]" in a[1]:
+                return "OK", [(f"{target} (UID {target} BODY[])".encode(), bill_for(target)), b")"]
+            fetch_targets.append(target)
+            # 真服务器对 UID 集合逐封各回一条记录（不是把集合当一个 UID）
+            out_items = []
+            for u in uids_hit:
+                header = bill_for(u).split(b"\r\n\r\n")[0]
+                out_items.append((f"{u} (UID {u} RFC822.SIZE 500 BODY[HEADER] {len(header)})".encode(), header))
+            out_items.append(b")")
+            return "OK", out_items
+        def logout(self): pass
+        def shutdown(self): pass
+
+    monkeypatch.setattr(ic.imaplib, "IMAP4_SSL", FakeClient)
+    mails = ic.fetch_full_mime("a@qq.com", "x", "qq", 15, today=date(2025, 12, 2), before=date(2025, 12, 2))
+    # 两封候选都拉到
+    assert sorted(m["uid"] for m in mails) == ["1", "14000"]
+    # 头部 FETCH 的目标是精确逗号列表（无冒号区间），不是 1:14000
+    assert len(fetch_targets) == 1
+    target = fetch_targets[0]
+    assert ":" not in target, f"批量 FETCH 用了区间而非精确列表: {target}"
+    assert set(target.split(",")) == {"1", "14000"}
+
+
+def test_batch_fetch_uid_after_literal_still_parses(imap_env, monkeypatch):
+    """复核 Medium 回归：服务器把 UID 放在 literal 之后的 trailer 行
+    （属性顺序服务器自定）时，头部仍能解析，邮件不被静默丢弃。"""
+    from datetime import date
+
+    from app.services import imap_client as ic
+
+    client, _, _ = imap_env
+    client.post("/api/imap/accounts", json={"email": "a@qq.com", "password": "x", "provider": "qq"})
+
+    bill = (b"From: bill <creditcard@service.ccb.com>\r\n"
+            b"Subject: bill\r\nMessage-ID: <trailer-1>\r\n\r\nbody")
+    header = bill.split(b"\r\n\r\n")[0]
+
+    class TrailerFirstClient:
+        """UID/RFC822.SIZE 在 trailer（tuple 后的 bytes 项），literal 在前。"""
+        def __init__(self, *a, **k): pass
+        def login(self, *a): pass
+        def xatom(self, *a): pass
+        def list(self):
+            return "OK", [b'(\\HasNoChildren) "/" "INBOX"']
+        def select(self, folder, readonly=False):
+            return "OK", [b"1"]
+        def uid(self, cmd, *a):
+            if cmd == "search":
+                return "OK", [b"7"]
+            if "BODY.PEEK[]" in a[1]:
+                return "OK", [(b"7 (BODY[] {83}", bill), b" UID 7)"]
+            # UID 在 literal 后的 trailer：BODY[HEADER] {len} 挪进前缀
+            return "OK", [
+                (f"7 (BODY[HEADER] {{{len(header)}}}".encode(), header),
+                b" UID 7 RFC822.SIZE 500)",
+            ]
+        def logout(self): pass
+        def shutdown(self): pass
+
+    monkeypatch.setattr(ic.imaplib, "IMAP4_SSL", TrailerFirstClient)
+    mails = ic.fetch_full_mime("a@qq.com", "x", "qq", 15, today=date(2025, 12, 2), before=date(2025, 12, 2))
+    assert len(mails) == 1  # UID 在 trailer 也能解析 → 邮件不被丢弃
+    assert mails[0]["from_address"] == "creditcard@service.ccb.com"
+
+
+def test_batch_fetch_no_downgrades_to_single_fetches(imap_env, monkeypatch):
+    """复核 Medium 回归：批量 FETCH 返回 NO 时降级为逐封重试，不得把整批
+    50 封静默丢弃后伪装成「未找到」。"""
+    from datetime import date
+
+    from app.services import imap_client as ic
+
+    client, _, _ = imap_env
+    client.post("/api/imap/accounts", json={"email": "a@qq.com", "password": "x", "provider": "qq"})
+
+    def bill_for(uid: str) -> bytes:
+        return (b"From: bill <creditcard@service.ccb.com>\r\n"
+                b"Subject: bill\r\n"
+                b"Message-ID: <no-fallback-" + uid.encode() + b">\r\n\r\nbody")
+
+    batch_calls = 0
+    single_calls = 0
+
+    class FlakyClient:
+        """首次批量 FETCH 返回 NO（服务器繁忙），逐封重试成功。"""
+        def __init__(self, *a, **k): pass
+        def login(self, *a): pass
+        def xatom(self, *a): pass
+        def list(self):
+            return "OK", [b'(\\HasNoChildren) "/" "INBOX"']
+        def select(self, folder, readonly=False):
+            return "OK", [b"1"]
+        def uid(self, cmd, *a):
+            nonlocal batch_calls, single_calls
+            if cmd == "search":
+                return "OK", [b" ".join(str(i).encode() for i in range(1, 4))]  # 3 封
+            target = a[0].decode() if isinstance(a[0], bytes) else str(a[0])
+            if "BODY.PEEK[]" in a[1]:
+                return "OK", [(f"{target} (UID {target} BODY[])".encode(), bill_for(target)), b")"]
+            if "," in target:  # 批量调用
+                batch_calls += 1
+                return "NO", [b"[SERVERBUSY] try again"]
+            single_calls += 1
+            header = bill_for(target).split(b"\r\n\r\n")[0]
+            return "OK", [(f"{target} (UID {target} RFC822.SIZE 500 BODY[HEADER] {len(header)})".encode(), header), b")"]
+        def logout(self): pass
+        def shutdown(self): pass
+
+    monkeypatch.setattr(ic.imaplib, "IMAP4_SSL", FlakyClient)
+    mails = ic.fetch_full_mime("a@qq.com", "x", "qq", 15, today=date(2025, 12, 2), before=date(2025, 12, 2))
+    assert batch_calls == 1      # 确实先走了批量路径
+    assert single_calls == 3     # NO 后逐封降级
+    assert len(mails) == 3       # 整批未被丢弃
+
+
+def test_full_mime_predicate_filters_before_body_download(imap_env, monkeypatch):
+    """复核 High 回归：fetch_full_mime 必须执行 predicate 发件人过滤——
+    白名单外的邮件不进结果、不下载正文（不消耗正文预算）。"""
+    from datetime import date
+
+    from app.services import imap_client as ic
+
+    client, _, _ = imap_env
+    client.post("/api/imap/accounts", json={"email": "a@qq.com", "password": "x", "provider": "qq"})
+
+    def bill_for(uid: str, domain: str) -> bytes:
+        return (b"From: bill <bill@" + domain.encode() + b">\r\n"
+                b"Subject: bill\r\n"
+                b"Message-ID: <pred-" + uid.encode() + b">\r\n\r\nbody")
+
+    body_fetches = []
+
+    class MixedClient:
+        """INBOX 里混有白名单（cmb.com）与白名单外（ccb.com）的邮件。"""
+        def __init__(self, *a, **k): pass
+        def login(self, *a): pass
+        def xatom(self, *a): pass
+        def list(self):
+            return "OK", [b'(\\HasNoChildren) "/" "INBOX"']
+        def select(self, folder, readonly=False):
+            return "OK", [b"1"]
+        def uid(self, cmd, *a):
+            if cmd == "search":
+                return "OK", [b" ".join(str(i).encode() for i in range(1, 4))]  # UID 1,2,3
+            target = a[0].decode() if isinstance(a[0], bytes) else str(a[0])
+            uids_hit = target.split(",") if "BODY.PEEK[HEADER]" in a[1] else [target]
+            if "BODY.PEEK[]" in a[1]:
+                body_fetches.append(target)
+                return "OK", [(f"{target} (UID {target} BODY[])".encode(), bill_for(target, "cmb.com")), b")"]
+            out_items = []
+            for u in uids_hit:
+                # UID 2 是白名单外的建行邮件
+                domain = "ccb.com" if u == "2" else "cmb.com"
+                bill = bill_for(u, domain)
+                header = bill.split(b"\r\n\r\n")[0]
+                out_items.append((f"{u} (UID {u} RFC822.SIZE 500 BODY[HEADER] {len(header)})".encode(), header))
+            out_items.append(b")")
+            return "OK", out_items
+        def logout(self): pass
+        def shutdown(self): pass
+
+    monkeypatch.setattr(ic.imaplib, "IMAP4_SSL", MixedClient)
+    mails = ic.fetch_full_mime(
+        "a@qq.com", "x", "qq", 15,
+        today=date(2025, 12, 2), before=date(2025, 12, 2),
+        predicate=lambda addr: addr.endswith("@cmb.com"),
+    )
+    # 白名单外的建行邮件不进结果（UID 倒序扫描：3 在前）
+    assert [m["uid"] for m in mails] == ["3", "1"]
+    # 白名单外的邮件从未被下载正文
+    assert body_fetches == ["3", "1"]
+
+
+def test_batch_no_downgrade_parses_uid_in_trailer(imap_env, monkeypatch):
+    """复核 Medium 回归：批量 NO 降级后的单封 FETCH，UID/RFC822.SIZE 位于
+    literal 后 trailer（属性顺序服务器自定）时仍能解析——降级不丢信、
+    trailer 中的超大 SIZE 仍能阻止正文下载。"""
+    from datetime import date
+
+    from app.services import imap_client as ic
+
+    client, _, _ = imap_env
+    client.post("/api/imap/accounts", json={"email": "a@qq.com", "password": "x", "provider": "qq"})
+
+    def bill_for(uid: str) -> bytes:
+        return (b"From: bill <creditcard@service.ccb.com>\r\n"
+                b"Subject: bill\r\n"
+                b"Message-ID: <no-trailer-" + uid.encode() + b">\r\n\r\nbody")
+
+    class NoThenTrailerClient:
+        """批量 FETCH 永远 NO；单封响应把 UID 和 SIZE 都放 trailer。"""
+        def __init__(self, *a, **k): pass
+        def login(self, *a): pass
+        def xatom(self, *a): pass
+        def list(self):
+            return "OK", [b'(\\HasNoChildren) "/" "INBOX"']
+        def select(self, folder, readonly=False):
+            return "OK", [b"1"]
+        def uid(self, cmd, *a):
+            if cmd == "search":
+                return "OK", [b" ".join(str(i).encode() for i in range(1, 3))]  # UID 1,2
+            target = a[0].decode() if isinstance(a[0], bytes) else str(a[0])
+            if "BODY.PEEK[]" in a[1]:
+                return "OK", [(f"{target} (BODY[])".encode(), bill_for(target)), b")"]
+            if "," in target:  # 批量调用：服务器繁忙
+                return "NO", [b"[SERVERBUSY]"]
+            bill = bill_for(target)
+            header = bill.split(b"\r\n\r\n")[0]
+            # UID 1 正常大小；UID 2 超大（trailer 声明 10MB）
+            size = 10_000_000 if target == "2" else 500
+            return "OK", [
+                (f"{target} (BODY[HEADER] {{{len(header)}}}".encode(), header),
+                f" UID {target} RFC822.SIZE {size})".encode(),
+            ]
+        def logout(self): pass
+        def shutdown(self): pass
+
+    monkeypatch.setattr(ic.imaplib, "IMAP4_SSL", NoThenTrailerClient)
+    mails = ic.fetch_full_mime(
+        "a@qq.com", "x", "qq", 15,
+        today=date(2025, 12, 2), before=date(2025, 12, 2),
+        max_message_bytes=5_000_000,
+    )
+    # UID 1：trailer 形态解析成功、不丢信；UID 2：trailer 里的超大 SIZE 生效跳过
+    assert [m["uid"] for m in mails] == ["1"]
 
 
 def test_fetch_full_mime_without_before_keeps_legacy_clause(imap_env, monkeypatch):

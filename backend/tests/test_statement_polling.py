@@ -65,13 +65,27 @@ def _mock_imap(monkeypatch, mails: list[bytes]):
         def uid(self, cmd, *a):
             if cmd == "search":
                 return "OK", [" ".join(str(i) for i in range(1, len(mails) + 1)).encode()]
-            idx = int(a[0]) - 1
-            if idx >= len(mails):
-                return "OK", [b""]  # 无邮件
-            if "BODY.PEEK[]" in a[1]:
-                return "OK", [(f"1 (UID {a[0]} BODY[])".encode(), mails[idx]), b")"]
-            header = (mails[idx] or b"").split(b"\r\n\r\n")[0]
-            return "OK", [(f"1 (UID {a[0]} RFC822.SIZE 500 BODY[HEADER] {len(header)})".encode(), header), b")"]
+            target = a[0].decode() if isinstance(a[0], bytes) else str(a[0])
+            uids_in_range = []
+            for seg in target.split(","):
+                if ":" in seg:
+                    lo, hi = (int(x) for x in seg.split(":"))
+                    uids_in_range.extend(str(u).encode() for u in range(lo, hi + 1))
+                else:
+                    uids_in_range.append(seg.encode())
+            out_items = []
+            for u in uids_in_range:
+                idx = int(u) - 1
+                if idx >= len(mails):
+                    continue  # 无邮件
+                raw = mails[idx]
+                if "BODY.PEEK[]" in a[1]:
+                    out_items.append((f"1 (UID {u.decode()} BODY[])".encode(), raw))
+                    continue
+                header = (raw or b"").split(b"\r\n\r\n")[0]
+                out_items.append((f"1 (UID {u.decode()} RFC822.SIZE 500 BODY[HEADER] {len(header)})".encode(), header))
+            out_items.append(b")")
+            return "OK", out_items
         def logout(self): pass
         def shutdown(self): pass
 
