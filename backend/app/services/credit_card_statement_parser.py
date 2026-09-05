@@ -929,10 +929,15 @@ def _parse_cmbc(html: str) -> list[ParsedStatement]:
         min_due = _f(parse_money(msum[2]))
     # 上期结清判定（prev_settled）：「已还 ≥ 上期余额」即结清。两种压平形态：
     # A（值跟标签）：「BalanceB/F<余额>-…Payment<已还>+…Interest<利息>」
-    #   ——生产 2025+ 真实邮件形态，余额/已还各自锚定标签；
-    # B（标签行值行分离）：标签流后值集中出现在 Interest 之后，
-    #   「Interest<余额><已还><本期账单><调整><利息>」——2021-2024 真实
-    #   邮件与 fixture 形态，前两值即 [余额, 已还]。
+    #   ——2021-2025 多数邮件形态，余额/已还各自锚定标签；
+    # B（标签行值行分离）：公式标签流后值集中出现在 Interest 之后，固定位次
+    #   [应还, 上期余额, 已还, NewCharges, 调整, 利息] 共 6 值（生产 2026-07/08
+    #   样本验证：公式自恒等式 应还=上期−已还+NewCharges+调整+利息，5/5 期）。
+    #   旧实现取前两值把 [应还, 上期] 当 [余额, 已还]——上期结清时必然误判
+    #   （应还==上期 而已还位取到上期值，只有恰好全结清才侥幸正确）；8 月账单
+    #   上期未结清被误判结清/结清被误判未结清，多卡分摊分支随之走错（生产反馈：
+    #   26年8月账单两张卡待还显示 0 的根因）。6 值才按位次取 [1],[2]；值数
+    #   不足（早期邮件结构不同/汇总区缺失）保持 None 不猜。
     prev_settled = None
     mvals = re.search(
         r"BalanceB/F(?:人民币)?(?:RMB)?(-?[\d,]+\.\d{2})"
@@ -940,12 +945,41 @@ def _parse_cmbc(html: str) -> list[ParsedStatement]:
         flat,
     )
     if not mvals:
-        mvals = re.search(
-            r"Interest((?:RMB)?-?[\d,]+\.\d{2})(?:RMB)?(-?[\d,]+\.\d{2})", flat
+        # 形态 B：以完整公式标签流定位（BalanceB/F → … → Adjustment → Interest），
+        # 只认紧跟公式 Interest 的**连续**金额且必须恰为 6 值位次——无边界
+        # 扫描会把交易区金额补进公式值或锚定到营销文案的 Interest（审核 Medium）
+        m_anchor = re.search(
+            r"BalanceB/F.*?Payment.*?NewCharges.*?Adjustment.*?Interest",
+            flat,
         )
+        if m_anchor:
+            # 金额 token：可带 RMB/人民币 前缀（部分邮件形态带货币头）+
+            # 可选正负号 + 数字（复审 Medium：恢复旧实现的 RMB 前缀兼容；
+            # parse_money 接受 "+7.00" 形态，第 7 值边界须同步覆盖）
+            amt = r"(?:RMB|人民币)?([+-]?[\d,]+\.\d{2})"
+            m_vals = re.match(
+                amt + amt + amt + amt + amt + amt
+                # 尾部边界（两个条件都要）：
+                # a) 第 7 个金额 token（含正负号/货币前缀变体）不得紧跟
+                # b) 不得是数值前缀部分匹配（第 6 值实际是三位小数「0.000」、
+                #    逗号延续「0,00」等——复审 Low 两轮）
+                + r"(?!(?:RMB|人民币)?[+-]?[\d,]+\.\d{2})"
+                + r"(?![.,+]?\d)",
+                flat[m_anchor.end():],
+            )
+            # 不足 6 值保持 None 不猜
+            if m_vals:
+                vals = m_vals.groups()
+                mvals = (vals[1], vals[2])  # [上期余额, 已还]
     if mvals:
-        prev_bal = parse_money(mvals[1])
-        prev_pay = parse_money(mvals[2])
+        # 形态 A 时 mvals 是 match 对象（[1]=group1）；形态 B 时是二元 tuple
+        # （[0]=上期余额、[1]=已还）——分别取值
+        if isinstance(mvals, tuple):
+            prev_bal = parse_money(mvals[0])
+            prev_pay = parse_money(mvals[1])
+        else:
+            prev_bal = parse_money(mvals[1])
+            prev_pay = parse_money(mvals[2])
         if prev_bal is not None and prev_pay is not None:
             prev_settled = float(prev_pay) >= float(prev_bal) - 0.005  # type: ignore[operator]
     for cells in rows:

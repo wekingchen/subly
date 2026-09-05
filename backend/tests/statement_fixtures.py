@@ -131,7 +131,11 @@ def load_pab() -> bytes:
 
 
 def load_cmbc() -> bytes:
-    """民生：拆行结构（6-td 行 + 碎片行）+ 分组标题 + 平铺正则汇总。"""
+    """民生：拆行结构（6-td 行 + 碎片行）+ 分组标题 + 平铺正则汇总。
+
+    公式区值行为形态 B 的 6 值位次：[应还573.35, 上期1664.79, 已还1664.79,
+    NewCharges573.35, 调整0.00, 利息0.00]——上期全额结清（已还==上期），
+    恒等式自洽：应还 = 1664.79−1664.79+573.35+0+0 = 573.35。"""
     html = """<html><body><table>
     <tr><td></td><td>尊敬的客户您好，本期账单日</td><td>Statement Date</td><td>2026/07/16</td><td>本期最后还款日</td><td>Payment Due Date</td></tr>
     <tr><td></td><td>2026/08/05</td><td>账户名称</td><td>Account</td><td>本期应还款金额</td><td>New Balance</td></tr>
@@ -140,8 +144,7 @@ def load_cmbc() -> bytes:
     <tr><td></td><td>本期应还款金额</td><td>NewBalance</td><td>=</td><td>上期账单金额</td><td>BalanceB/F</td></tr>
     <tr><td></td><td>-</td><td>本期已还金额</td><td>Payment</td><td>+</td><td>本期账单金额</td></tr>
     <tr><td></td><td>NewCharges</td><td>+</td><td>本期调整金额</td><td>Adjustment</td><td>+</td></tr>
-    <tr><td></td><td>循环利息</td><td>Interest</td><td>573.35</td><td>1,664.79</td><td>573.35</td></tr>
-    <tr><td></td><td>-22.61</td><td>0.00</td><td></td><td></td><td></td></tr>
+    <tr><td></td><td>循环利息</td><td>Interest</td><td>573.35</td><td>1,664.79</td><td>1,664.79</td><td>573.35</td><td>0.00</td><td>0.00</td></tr>
     <tr><td></td><td>消 费</td><td></td><td></td><td></td><td></td></tr>
     <tr><td></td><td>06/17</td><td>06/17</td><td><span><table><tr><td></td><td><div>示例商户-外卖A</div></td></tr></table></span></td><td><span><table><tr><td></td><td><div>116.00</div></td></tr></table></span></td><td><span><table><tr><td></td><td><div>2280</div></td></tr></table></span></td></tr>
     <tr><td></td><td>06/19</td><td>06/19</td><td><span><table><tr><td></td><td><div>示例商户-外卖B</div></td></tr></table></span></td><td><span><table><tr><td></td><td><div>457.35</div></td></tr></table></span></td><td><span><table><tr><td></td><td><div>1027</div></td></tr></table></span></td></tr>

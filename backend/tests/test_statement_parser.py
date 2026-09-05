@@ -213,13 +213,22 @@ def test_parse_cmbc_fragment_merge_and_groups():
 
 # ---------- 民生逐卡应还：审核场景回归 ----------
 
-def _cmbc_html(rows: str, *, interest_line: str, total="573.35", minp="100.00"):
-    """最小民生账单 HTML（拆行结构 + Interest 值行可控）。"""
+def _cmbc_html(rows: str, *, interest_line=None, total="573.35", minp="100.00"):
+    """最小民生账单 HTML（拆行结构 + Interest 值行可控）。
+
+    interest_line 默认按真实形态 B 的 6 值位次构造结清态：
+    [应还, 上期余额, 已还, NewCharges, 调整, 利息] = [total, prev, prev, total, 0, 0]
+    （prev_settled=True：已还==上期）。传 None 以外的值可模拟其他形态。"""
+    if interest_line is None:
+        interest_line = f"<td>{total}</td><td>573.35</td><td>573.35</td><td>{total}</td><td>0.00</td><td>0.00</td>"
     return f"""<html><body><table>
     <tr><td></td><td>本期账单日</td><td>Statement Date</td><td>2026/07/16</td><td>本期最后还款日</td><td>Payment Due Date</td></tr>
     <tr><td></td><td>2026/08/05</td><td>账户名称</td><td>Account</td><td>本期应还款金额</td><td>New Balance</td></tr>
     <tr><td></td><td>人民币/美元账户</td><td>RMB/USD Account</td><td>RMB</td><td>{total}</td><td>本期最低还款金额</td></tr>
     <tr><td></td><td>Min.Payment</td><td>RMB</td><td>{minp}</td><td></td><td></td></tr>
+    <tr><td></td><td>本期应还款金额</td><td>NewBalance</td><td>=</td><td>上期账单金额</td><td>BalanceB/F</td></tr>
+    <tr><td></td><td>-</td><td>本期已还金额</td><td>Payment</td><td>+</td><td>本期账单金额</td></tr>
+    <tr><td></td><td>NewCharges</td><td>+</td><td>本期调整金额</td><td>Adjustment</td><td>+</td></tr>
     <tr><td></td><td>循环利息</td><td>Interest</td>{interest_line}</tr>
     <tr><td></td><td>消 费</td><td></td><td></td><td></td><td></td></tr>
     {rows}
@@ -235,12 +244,14 @@ def _cmbc_row(d: str, desc: str, amt: str, l4: str) -> str:
 
 def test_cmbc_single_card_keeps_account_total_unsettled():
     """审核 High 回归：单卡账单（无分卡歧义）即使上期结清状态无法识别，
-    也必须保留账户级应还——已知金额不得丢成 None 再被前端渲染成 0。"""
+    也必须保留账户级应还——已知金额不得丢成 None 再被前端渲染成 0。
+    interest_line 传哨兵 ""（区别于缺省的 6 值结清态）：公式区无值 →
+    prev_settled=None。"""
     from statement_fixtures import build_mime
 
     html = _cmbc_html(
         _cmbc_row("06/17", "示例商户-餐饮", "800.00", "2280"),
-        interest_line="<td></td><td></td>",  # Interest 值缺失 → prev_settled=None
+        interest_line="",  # 公式区无值 → prev_settled=None
         total="800.00", minp="80.00",
     )
     parsed = parse_email(build_mime(html, ADDR["cmbc"], "民生信用卡电子对账单", "s-high"),
@@ -249,6 +260,123 @@ def test_cmbc_single_card_keeps_account_total_unsettled():
     st = parsed.statements[0]
     assert st.total_due == 800.00
     assert st.min_due == 80.00
+    assert st.summary["prev_settled"] is None  # 结清状态确实未知（审核 Low）
+
+
+def test_cmbc_form_b_short_formula_not_padded_by_transactions():
+    """审核 Medium 回归：公式区值数不足（如 2 值）时不得用后续交易金额
+    「补足」到 6 值——旧无边界扫描会把第一笔交易当「已还」误判结清。"""
+    from statement_fixtures import build_mime
+
+    # 公式区 2 值 + 4 笔交易（每笔都有金额）——总金额数够 6 但前 2 个才是公式值
+    rows = "".join(_cmbc_row(f"06/1{i}", f"示例商户-{i}", f"{100 + i}.00", f"300{i}") for i in range(1, 5))
+    html = _cmbc_html(rows, interest_line="<td>573.35</td><td>573.35</td>",
+                      total="573.35", minp="57.34")
+    parsed = parse_email(build_mime(html, ADDR["cmbc"], "民生信用卡电子对账单", "s-short"),
+                         from_address=ADDR["cmbc"])
+    # 值数不足 → prev_settled=None → 多卡逐卡金额置 None（不猜）
+    assert all(s.summary.get("prev_settled") is None for s in parsed.statements)
+    for s in parsed.statements:
+        assert s.total_due is None
+
+
+def test_cmbc_form_b_leading_marketing_interest_ignored():
+    """审核 Medium 回归：公式区之前出现非公式 Interest 字样（营销文案）
+    时，形态 B 锚定必须落在完整公式标签流（BalanceB/F→…→Interest）上，
+    不得锚定营销文案导致取错值序。"""
+    from statement_fixtures import build_mime
+
+    rows = _cmbc_row("06/17", "示例商户-餐饮", "100.00", "1111")
+    html = _cmbc_html(rows, total="80.00", minp="8.00")
+    # 在公式区之前插入含 Interest 的营销文案
+    html = html.replace("<table><body>"[:0] + "<html><body><table>",
+                        '<html><body><div>Interest-free promotion 10.00</div><table>')
+    assert "Interest-free" in html
+    parsed = parse_email(build_mime(html, ADDR["cmbc"], "民生信用卡电子对账单", "s-mkt"),
+                         from_address=ADDR["cmbc"])
+    st = parsed.statements[0]
+    # 公式值取自真公式（[80, 573.35, 573.35, 80, 0, 0]）→ 上期573.35 已还573.35 结清
+    assert st.summary.get("prev_settled") is True
+    assert st.total_due == 80.00  # 单卡直接用账户级应还
+
+
+@pytest.mark.parametrize("seventh_token", ["-7.00", "RMB-7.00", "人民币-7.00"])
+def test_cmbc_form_b_seventh_negative_amount_rejected(seventh_token):
+    """复审 Low 回归：6 值后紧跟第 7 个金额（含负号/RMB/人民币前缀变体）
+    必须拒绝——负号开头会绕过仅检查数字的尾部 lookahead。"""
+    from statement_fixtures import build_mime
+
+    rows = _cmbc_row("06/17", "示例商户-餐饮", "100.00", "1111")
+    # 6 值后紧跟第 7 个金额 token（而非「交易日」等非金额文本）
+    seventh = (f"<td>80.00</td><td>573.35</td><td>573.35</td><td>80.00</td>"
+               f"<td>0.00</td><td>0.00</td><td>{seventh_token}</td>")
+    html = _cmbc_html(rows, interest_line=seventh, total="80.00", minp="8.00")
+    parsed = parse_email(build_mime(html, ADDR["cmbc"], "民生信用卡电子对账单", "s-7th"),
+                         from_address=ADDR["cmbc"])
+    st = parsed.statements[0]
+    assert st.summary.get("prev_settled") is None  # 值数异常 → 不猜
+
+
+def test_cmbc_form_b_partial_decimal_not_matched():
+    """复审 Low 回归：第 6 值为三位小数（如 0.000）时不得把前缀 0.00
+    当成完整值部分匹配——尾部数字边界要求第 6 值结束后不得紧跟数字。"""
+    from statement_fixtures import build_mime
+
+    rows = (_cmbc_row("06/17", "示例商户-餐饮", "50.00", "1111")
+            + _cmbc_row("06/18", "示例商户-购物", "30.00", "2222"))
+    sixth3decimals = "<td>80.00</td><td>573.35</td><td>573.35</td><td>80.00</td><td>0.00</td><td>0.000</td>"
+    html = _cmbc_html(rows, interest_line=sixth3decimals, total="80.00", minp="8.00")
+    parsed = parse_email(build_mime(html, ADDR["cmbc"], "民生信用卡电子对账单", "s-partial"),
+                         from_address=ADDR["cmbc"])
+    # 结构异常（三位小数不是合法金额形态）→ 不猜
+    assert all(s.summary.get("prev_settled") is None for s in parsed.statements)
+    for s in parsed.statements:
+        assert s.total_due is None
+
+
+@pytest.mark.parametrize("seventh_token", ["+7.00", "RMB+7.00"])
+def test_cmbc_form_b_seventh_positive_amount_rejected(seventh_token):
+    """复审 Low 回归：正号第 7 值（parse_money 接受 "+7.00" 形态，非推测
+    输入）同样必须拒绝——金额 token 的符号检查须覆盖正负两向。"""
+    from statement_fixtures import build_mime
+
+    rows = (_cmbc_row("06/17", "示例商户-餐饮", "50.00", "1111")
+            + _cmbc_row("06/18", "示例商户-购物", "30.00", "2222"))
+    seventh = (f"<td>80.00</td><td>573.35</td><td>573.35</td><td>80.00</td>"
+               f"<td>0.00</td><td>0.00</td><td>{seventh_token}</td>")
+    html = _cmbc_html(rows, interest_line=seventh, total="80.00", minp="8.00")
+    parsed = parse_email(build_mime(html, ADDR["cmbc"], "民生信用卡电子对账单", "s-7th-pos"),
+                         from_address=ADDR["cmbc"])
+    assert all(s.summary.get("prev_settled") is None for s in parsed.statements)
+
+
+def test_cmbc_form_b_comma_continuation_not_matched():
+    """复审 Low 回归：逗号数字延续（第 6 值实为「0,00」片段）不得部分
+    匹配——逗号开头的数字延续不在旧数字检查覆盖内。"""
+    from statement_fixtures import build_mime
+
+    rows = (_cmbc_row("06/17", "示例商户-餐饮", "50.00", "1111")
+            + _cmbc_row("06/18", "示例商户-购物", "30.00", "2222"))
+    comma_tail = "<td>80.00</td><td>573.35</td><td>573.35</td><td>80.00</td><td>0.00</td><td>0,00</td>"
+    html = _cmbc_html(rows, interest_line=comma_tail, total="80.00", minp="8.00")
+    parsed = parse_email(build_mime(html, ADDR["cmbc"], "民生信用卡电子对账单", "s-comma"),
+                         from_address=ADDR["cmbc"])
+    assert all(s.summary.get("prev_settled") is None for s in parsed.statements)
+
+
+def test_cmbc_form_b_rmb_prefixed_values():
+    """复审 Medium 回归：形态 B 恢复 RMB 货币前缀兼容——值带 RMB 头
+    （InterestRMB80.00RMB573.35…）同样按 6 值位次解析。"""
+    from statement_fixtures import build_mime
+
+    rows = _cmbc_row("06/17", "示例商户-餐饮", "100.00", "1111")
+    prefixed = "<td>RMB</td><td>80.00</td><td>RMB</td><td>573.35</td><td>RMB</td><td>573.35</td><td>RMB</td><td>80.00</td><td>RMB</td><td>0.00</td><td>RMB</td><td>0.00</td>"
+    html = _cmbc_html(rows, interest_line=prefixed, total="80.00", minp="8.00")
+    parsed = parse_email(build_mime(html, ADDR["cmbc"], "民生信用卡电子对账单", "s-rmb"),
+                         from_address=ADDR["cmbc"])
+    st = parsed.statements[0]
+    assert st.summary.get("prev_settled") is True  # 上期573.35 已还573.35
+    assert st.total_due == 80.00
 
 
 def test_cmbc_multi_card_refund_credit_not_negative_surplus():
@@ -259,7 +387,7 @@ def test_cmbc_multi_card_refund_credit_not_negative_surplus():
 
     rows = (_cmbc_row("06/17", "示例商户-餐饮", "100.00", "1111")
             + _cmbc_row("06/18", "示例商户-退款", "-20.00", "2222"))
-    html = _cmbc_html(rows, interest_line="<td>573.35</td><td>573.35</td>", total="80.00", minp="8.00")
+    html = _cmbc_html(rows, total="80.00", minp="8.00")
     parsed = parse_email(build_mime(html, ADDR["cmbc"], "民生信用卡电子对账单", "s-refund"),
                          from_address=ADDR["cmbc"])
     vals = {s.card_last_four: s.total_due for s in parsed.statements}
@@ -273,16 +401,20 @@ def test_cmbc_multi_card_refund_credit_not_negative_surplus():
 
 
 def test_cmbc_multi_card_unsettled_sets_none_not_zero():
-    """审核 Medium 回归：多卡上期结清状态无法识别（滚动余额）时，逐卡
+    """审核 Medium 回归：多卡上期未结清（滚动余额，已还<上期）时，逐卡
     应还/最低还款都置 None——派生金额没有依据，None 由上层按「未知」呈现，
-    不得把本期新增冒充应还。"""
+    不得把本期新增冒充应还。真实样本（2026-07 邮件）：上期 1664.79 只还
+    1642.18 → 未结清。"""
     from statement_fixtures import build_mime
 
     rows = (_cmbc_row("06/17", "示例商户-餐饮", "100.00", "1111")
             + _cmbc_row("06/18", "示例商户-购物", "50.00", "2222"))
-    html = _cmbc_html(rows, interest_line="<td></td><td></td>", total="80.00", minp="8.00")
+    # 未结清值序：[应还80, 上期1664.79, 已还1642.18, NewCharges80, 0, 0]
+    unsettled = "<td>80.00</td><td>1,664.79</td><td>1,642.18</td><td>80.00</td><td>0.00</td><td>0.00</td>"
+    html = _cmbc_html(rows, interest_line=unsettled, total="80.00", minp="8.00")
     parsed = parse_email(build_mime(html, ADDR["cmbc"], "民生信用卡电子对账单", "s-unsettled"),
                          from_address=ADDR["cmbc"])
+    assert all(s.summary.get("prev_settled") is False for s in parsed.statements)
     for s in parsed.statements:
         assert s.total_due is None
         assert s.min_due is None
@@ -311,7 +443,7 @@ def test_cmbc_min_due_allocation_no_drift():
     from statement_fixtures import build_mime
 
     rows = "".join(_cmbc_row(f"06/1{i}", f"示例商户-{i}", "1.00", f"100{i}") for i in range(1, 4))
-    html = _cmbc_html(rows, interest_line="<td>573.35</td><td>573.35</td>", total="3.00", minp="100.00")
+    html = _cmbc_html(rows, total="3.00", minp="100.00")
     parsed = parse_email(build_mime(html, ADDR["cmbc"], "民生信用卡电子对账单", "s-drift"),
                          from_address=ADDR["cmbc"])
     total_min = sum(s.min_due for s in parsed.statements if s.min_due is not None)
@@ -325,7 +457,7 @@ def test_cmbc_min_due_negative_drift_never_negative_allocation():
     from statement_fixtures import build_mime
 
     rows = "".join(_cmbc_row(f"06/1{i}", f"示例商户-{i}", "0.06", f"200{i}") for i in range(1, 6))
-    html = _cmbc_html(rows, interest_line="<td>573.35</td><td>573.35</td>", total="0.30", minp="0.03")
+    html = _cmbc_html(rows, total="0.30", minp="0.03")
     parsed = parse_email(build_mime(html, ADDR["cmbc"], "民生信用卡电子对账单", "s-negdrift"),
                          from_address=ADDR["cmbc"])
     mins = [s.min_due for s in parsed.statements]
@@ -344,7 +476,7 @@ def test_cmbc_installment_loan_excluded_from_allocation_weight():
     rows = (_cmbc_row("06/17", "现金分期6期商品贷记调整", "20000.00", "1111")
             + _cmbc_row("06/18", "示例商户-消费", "6986.01", "1111")
             + _cmbc_row("06/19", "示例商户-消费", "211.50", "2222"))
-    html = _cmbc_html(rows, interest_line="<td>573.35</td><td>573.35</td>", total="7197.51", minp="719.75")
+    html = _cmbc_html(rows, total="7197.51", minp="719.75")
     parsed = parse_email(build_mime(html, ADDR["cmbc"], "民生信用卡电子对账单", "s-loan"),
                          from_address=ADDR["cmbc"])
     vals = {s.card_last_four: s.total_due for s in parsed.statements}
@@ -363,7 +495,7 @@ def test_cmbc_zero_positive_weight_with_nonzero_total_sets_none():
 
     rows = (_cmbc_row("06/17", "示例支付-还款", "-100.00", "1111")
             + _cmbc_row("06/18", "示例支付-还款", "-50.00", "2222"))
-    html = _cmbc_html(rows, interest_line="<td>573.35</td><td>573.35</td>", total="0.01", minp="0.01")
+    html = _cmbc_html(rows, total="0.01", minp="0.01")
     parsed = parse_email(build_mime(html, ADDR["cmbc"], "民生信用卡电子对账单", "s-zeropos"),
                          from_address=ADDR["cmbc"])
     assert len(parsed.statements) == 2  # 多卡才触发分摊分支
@@ -387,7 +519,7 @@ def test_cmbc_dual_currency_summary_takes_rmb_total():
     from statement_fixtures import build_mime
 
     rows = _cmbc_row("06/17", "示例商户-餐饮", "6004.52", "1111")
-    html = _cmbc_html(rows, interest_line="<td>573.35</td><td>573.35</td>", total="6004.52", minp="5221.23")
+    html = _cmbc_html(rows, total="6004.52", minp="5221.23")
     # 注入 USD 段（双币形态）
     needle = "RMB/USD Account</td><td>RMB</td><td>6004.52</td><td>本期最低还款金额"
     injected = "RMB/USD Account</td><td>RMB</td><td>6004.52</td><td>USD</td><td>16.00</td><td>RMB</td><td>5221.23</td><td>USD</td><td>10.00</td><td>本期最低还款金额"
