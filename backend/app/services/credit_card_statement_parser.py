@@ -86,17 +86,25 @@ class ParsedEmail:
             if not items:
                 return out
             tol = 0.01 * len(items) + 0.001
-            pos = sum(i.amount for i in items if i.amount > 0)
             if key == "cmbc":
                 # 值区与标签区顺序不保证对齐（探索结论）无法逐项勾稽。
                 # 上期未结清时「正数合计 == 应还」不成立（合法业务场景），
                 # 因此仅在解析层确认上期结清（summary.prev_settled）时校验；
                 # 无法确认时跳过（None = 未验证，不算失败也不算通过）。
+                # 应还逐卡化后（生产反馈修正），total_due 是逐卡净额——
+                # 勾稽口径改为「各卡净额之和 == 账户级应还合计」（用户确认
+                # 的校验闭环：两张卡单独金额相加 == 账单总应还）。
                 settled = next((st.summary.get("prev_settled") for st in self.statements if st.summary), None)
-                charges = next((st.total_due for st in self.statements if st.total_due is not None), None)
-                if not settled or charges is None:
+                acct = next((st.summary.get("account_total_due") for st in self.statements if st.summary), None)
+                if not settled or acct is None:
                     return out
-                out["_account"] = {"ok": abs(pos - charges) <= tol, "expected": float(charges), "actual": float(pos), "diff": float(charges - pos)}
+                per_card_sum = sum(st.total_due for st in self.statements if st.total_due is not None)
+                out["_account"] = {
+                    "ok": abs(per_card_sum - acct) <= tol,
+                    "expected": float(acct),
+                    "actual": float(per_card_sum),
+                    "diff": float(acct - per_card_sum),
+                }
             else:  # ccb
                 # 建行账单按卡分列明细。多卡用户（生产实测：三张建行卡同邮件）
                 # 账户级摘要 spend/repay 是全账户合计，且溢缴款分录（如 -3000
@@ -924,11 +932,102 @@ def _parse_cmbc(html: str) -> list[ParsedStatement]:
                 tx_type=classify_tx(desc, float(value), group),
                 installment_note=_installment_note(desc),
             ))
+    # 应还金额逐卡化（生产反馈修正）：账户级 total_due/min_due 是全卡合计，
+    # 原实现原样赋给每张卡——多卡用户两张卡显示相同的（错误）金额。
+    # 民生邮件没有逐卡应还字段，按用户确认口径派生：
+    #   单卡账户（邮件只出现一个尾号）→ 无分卡歧义，直接用账户级金额；
+    #   多卡且上期结清 → 该卡应还 = 本期新增净额（正数交易 + 退款等非还款
+    #   负数；还款分录是对本期消费的清偿，不计入应还构成）。退款产生的负
+    #   净额不单独成「卡级溢缴」（下游对负 total_due 的语义是滚动溢缴、不
+    #   抵扣他卡——会破坏账户闭环），而是先从正净额卡上抵扣，全卡非负；
+    #   多卡且上期未结清/结清状态未知 → 滚动余额无法按本期交易分卡，
+    #   total_due/min_due 置 None（宁可少显示，不把未知渲染成 0 或猜数）；
+    #   账户级合计解析失败 → 派生金额失去闭环校验依据，同样置 None
+    #   （审核 Medium：fail-open 会把未验证的推导金额标成 ok）。
+    # 校验闭环（verify_all）：各卡 total_due 之和 == 账户级 total_due。
+    account_total = total_due
+    if statements and account_total is None:
+        # 汇总正则失配但交易可解析：无账户合计做闭环，逐卡金额不可发布
+        account_total = None
+    card_nets: dict[str, float] = {}
+    for last4, stmt in statements.items():
+        card_nets[last4] = round(sum(
+            i.amount for i in stmt.items
+            if i.amount > 0 or (i.amount < 0 and i.tx_type != "payment")
+        ), 2)
+    # 退款负净额向正净额卡分摊抵扣（保持各卡 ≥0、总和不变，审核 Medium）：
+    # 按「最大正净额先扣」的贪心顺序处理——民生明细本身不提供退款归属规则，
+    # 这是与「之和==账户合计」闭环一致的最小假设。
+    nets = dict(card_nets)
+    debt = -sum(v for v in nets.values() if v < 0)  # 待抵扣的负净额总量（正数）
+    for last4 in sorted((k for k, v in nets.items() if v > 0), key=lambda k: nets[k], reverse=True):
+        if debt <= 0:
+            break
+        take = min(nets[last4], debt)
+        nets[last4] = round(nets[last4] - take, 2)
+        debt = round(debt - take, 2)
+    for last4, stmt in statements.items():
+        nets[last4] = max(nets[last4], 0.0)  # 剩余未抵完的负净额（全卡皆负）归零
+    if len(statements) == 1:
+        # 单卡：无分卡歧义，账户级金额就是该卡的（上期是否结清都成立——
+        # 邮件明确给出了该账户应还；审核 High：不得把已知金额丢成 0）
+        only = next(iter(statements.values()))
+        only.total_due = total_due
+        only.min_due = min_due
+    elif prev_settled and total_due is not None:
+        # 多卡 + 上期结清：净额即分卡应还（已含退款抵扣，全卡非负）
+        for last4, stmt in statements.items():
+            stmt.total_due = nets[last4]
+        _allocate_min_due(statements, nets, min_due)
+    else:
+        # 多卡 + 滚动余额/状态未知/账户合计缺失：无法可靠分卡，不猜
+        for stmt in statements.values():
+            stmt.total_due = None
+            stmt.min_due = None
+    # account_*：原始账户级合计暂存（逐卡化前的值），供 verify_all 的
+    # 「各卡之和 == 账户合计」闭环校验取用。
     for stmt in statements.values():
-        stmt.total_due = total_due if total_due is not None else stmt.total_due
-        stmt.min_due = min_due if min_due is not None else stmt.min_due
-        stmt.summary = {"prev_settled": prev_settled}
+        stmt.summary = {
+            "prev_settled": prev_settled,
+            "card_net": card_nets[stmt.card_last_four],
+            "account_total_due": total_due,
+            "account_min_due": min_due,
+        }
     return list(statements.values())
+
+
+def _allocate_min_due(statements: dict[str, "ParsedStatement"], nets: dict[str, float], min_due) -> None:
+    """最低还款按净额比例分摊到卡（银行实际规则并非如此，仅展示参考）。
+    尾差逐分调整：正差补给净额最大的卡，负差从分摊额最大的卡逐分扣减
+    且任何卡不低于 0（复审 Low：一次性补到单卡会产生负 min_due）——
+    保证各卡之和精确等于账户级最低还款、所有分摊非负。
+    无净额的卡不参与分摊（置 None）。"""
+    if min_due is None:
+        for stmt in statements.values():
+            stmt.min_due = None
+        return
+    pos_total = sum(v for v in nets.values() if v > 0)
+    if not pos_total:
+        for stmt in statements.values():
+            stmt.min_due = None
+        return
+    allocated: dict[str, float] = {}
+    for last4, v in nets.items():
+        allocated[last4] = round(min_due * (v / pos_total), 2) if v > 0 else 0.0
+    # 尾差按分调整（1 分 = 0.01）：float 分摊的累计误差在这里被吃掉
+    drift_cents = round((min_due - sum(allocated.values())) * 100)
+    positives = [k for k in nets if nets[k] > 0]
+    while drift_cents != 0 and positives:
+        # 调整目标：正差补/负差扣「当前分摊额最大」的卡；扣到 0 则换下一张
+        target = max(positives, key=lambda k: allocated[k])
+        step = 0.01 if drift_cents > 0 else -0.01
+        if allocated[target] + step < 0:
+            positives.remove(target)  # 已到 0 不能再扣，换下一张
+            continue
+        allocated[target] = round(allocated[target] + step, 2)
+        drift_cents -= 1 if drift_cents > 0 else -1
+    for last4, stmt in statements.items():
+        stmt.min_due = allocated[last4] if allocated[last4] else None
 
 
 PARSERS = {

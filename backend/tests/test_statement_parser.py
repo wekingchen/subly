@@ -198,10 +198,140 @@ def test_parse_cmbc_fragment_merge_and_groups():
     # 汇总（平铺正则）
     assert a.statement_date == date(2026, 7, 16)
     assert a.due_date == date(2026, 8, 5)
-    assert a.total_due == 573.35
-    # 账户级勾稽
+    # 逐卡应还（生产反馈修正）：账户级合计 573.35 不再原样赋给每张卡
+    # （多卡用户两张卡显示相同错误金额的根因）。上期结清时逐卡应还 =
+    # 该卡本期新增净额（还款分录是清偿不计入），两卡之和 == 账户级合计。
+    assert a.total_due == 116.00   # 2280：只有一笔消费
+    assert b.total_due == 457.35   # 1027：消费 457.35（还款 -573.35 是清偿）
+    assert round(a.total_due + b.total_due, 2) == 573.35  # 与邮件总应还一致
+    # 最低还款按净额比例分摊
+    assert a.min_due + b.min_due == pytest.approx(100.00)
+    # 账户级勾稽（合并所有卡正数交易 vs 账户应还）
     v = parsed.verify_all()["_account"]
     assert v["ok"] is True
+
+
+# ---------- 民生逐卡应还：审核场景回归 ----------
+
+def _cmbc_html(rows: str, *, interest_line: str, total="573.35", minp="100.00"):
+    """最小民生账单 HTML（拆行结构 + Interest 值行可控）。"""
+    return f"""<html><body><table>
+    <tr><td></td><td>本期账单日</td><td>Statement Date</td><td>2026/07/16</td><td>本期最后还款日</td><td>Payment Due Date</td></tr>
+    <tr><td></td><td>2026/08/05</td><td>账户名称</td><td>Account</td><td>本期应还款金额</td><td>New Balance</td></tr>
+    <tr><td></td><td>人民币/美元账户</td><td>RMB/USD Account</td><td>RMB</td><td>{total}</td><td>本期最低还款金额</td></tr>
+    <tr><td></td><td>Min.Payment</td><td>RMB</td><td>{minp}</td><td></td><td></td></tr>
+    <tr><td></td><td>循环利息</td><td>Interest</td>{interest_line}</tr>
+    <tr><td></td><td>消 费</td><td></td><td></td><td></td><td></td></tr>
+    {rows}
+    </table></body></html>"""
+
+
+def _cmbc_row(d: str, desc: str, amt: str, l4: str) -> str:
+    return (f'<tr><td></td><td>{d}</td><td>{d}</td>'
+            f'<td><span><table><tr><td></td><td><div>{desc}</div></td></tr></table></span></td>'
+            f'<td><span><table><tr><td></td><td><div>{amt}</div></td></tr></table></span></td>'
+            f'<td><span><table><tr><td></td><td><div>{l4}</div></td></tr></table></span></td></tr>')
+
+
+def test_cmbc_single_card_keeps_account_total_unsettled():
+    """审核 High 回归：单卡账单（无分卡歧义）即使上期结清状态无法识别，
+    也必须保留账户级应还——已知金额不得丢成 None 再被前端渲染成 0。"""
+    from statement_fixtures import build_mime
+
+    html = _cmbc_html(
+        _cmbc_row("06/17", "示例商户-餐饮", "800.00", "2280"),
+        interest_line="<td></td><td></td>",  # Interest 值缺失 → prev_settled=None
+        total="800.00", minp="80.00",
+    )
+    parsed = parse_email(build_mime(html, ADDR["cmbc"], "民生信用卡电子对账单", "s-high"),
+                         from_address=ADDR["cmbc"])
+    assert len(parsed.statements) == 1
+    st = parsed.statements[0]
+    assert st.total_due == 800.00
+    assert st.min_due == 80.00
+
+
+def test_cmbc_multi_card_refund_credit_not_negative_surplus():
+    """审核 Medium 回归：多卡+退款负净额不产生「卡级负应还」（下游会把它
+    误读成独立溢缴、不抵扣他卡，破坏账户闭环）——退款抵扣到正净额卡上，
+    各卡非负且之和 == 账户级应还（A 消费 100、B 退款 20、账户 80 → A=80、B=0）。"""
+    from statement_fixtures import build_mime
+
+    rows = (_cmbc_row("06/17", "示例商户-餐饮", "100.00", "1111")
+            + _cmbc_row("06/18", "示例商户-退款", "-20.00", "2222"))
+    html = _cmbc_html(rows, interest_line="<td>573.35</td><td>573.35</td>", total="80.00", minp="8.00")
+    parsed = parse_email(build_mime(html, ADDR["cmbc"], "民生信用卡电子对账单", "s-refund"),
+                         from_address=ADDR["cmbc"])
+    vals = {s.card_last_four: s.total_due for s in parsed.statements}
+    assert vals["1111"] == 80.00   # 100 − 20 退款抵扣
+    assert vals["2222"] == 0.0     # 退款卡非负（不是 -20 的假富余）
+    assert round(sum(vals.values()), 2) == 80.00
+    # 最低还款只分摊给正净额卡，不产生负分摊
+    mins = {s.card_last_four: s.min_due for s in parsed.statements}
+    assert mins["1111"] == 8.00
+    assert mins["2222"] is None
+
+
+def test_cmbc_multi_card_unsettled_sets_none_not_zero():
+    """审核 Medium 回归：多卡上期结清状态无法识别（滚动余额）时，逐卡
+    应还/最低还款都置 None——派生金额没有依据，None 由上层按「未知」呈现，
+    不得把本期新增冒充应还。"""
+    from statement_fixtures import build_mime
+
+    rows = (_cmbc_row("06/17", "示例商户-餐饮", "100.00", "1111")
+            + _cmbc_row("06/18", "示例商户-购物", "50.00", "2222"))
+    html = _cmbc_html(rows, interest_line="<td></td><td></td>", total="80.00", minp="8.00")
+    parsed = parse_email(build_mime(html, ADDR["cmbc"], "民生信用卡电子对账单", "s-unsettled"),
+                         from_address=ADDR["cmbc"])
+    for s in parsed.statements:
+        assert s.total_due is None
+        assert s.min_due is None
+
+
+def test_cmbc_account_total_missing_disables_derived_amounts():
+    """审核 Medium 回归：账户级合计正则失配（模板漂移）时，派生逐卡金额
+    失去「之和==账户合计」的闭环校验依据——不得发布（置 None），防止
+    未验证的推导金额被 sync 默认标成 ok 进待还汇总。"""
+    from statement_fixtures import build_mime
+
+    rows = (_cmbc_row("06/17", "示例商户-餐饮", "100.00", "1111")
+            + _cmbc_row("06/18", "示例商户-购物", "50.00", "2222"))
+    # has_total=False：汇总行无 RMB 金额 → account_total_due=None
+    html = _cmbc_html(rows, interest_line="<td>573.35</td><td>573.35</td>").replace(
+        '<td>RMB</td><td>573.35</td>', '<td>RMB</td>')
+    parsed = parse_email(build_mime(html, ADDR["cmbc"], "民生信用卡电子对账单", "s-noacct"),
+                         from_address=ADDR["cmbc"])
+    for s in parsed.statements:
+        assert s.total_due is None
+
+
+def test_cmbc_min_due_allocation_no_drift():
+    """审核 Low 回归：最低还款分摊的独立四舍五入尾差必须补齐——
+    各卡 min_due 之和精确等于账户级最低还款。"""
+    from statement_fixtures import build_mime
+
+    rows = "".join(_cmbc_row(f"06/1{i}", f"示例商户-{i}", "1.00", f"100{i}") for i in range(1, 4))
+    html = _cmbc_html(rows, interest_line="<td>573.35</td><td>573.35</td>", total="3.00", minp="100.00")
+    parsed = parse_email(build_mime(html, ADDR["cmbc"], "民生信用卡电子对账单", "s-drift"),
+                         from_address=ADDR["cmbc"])
+    total_min = sum(s.min_due for s in parsed.statements if s.min_due is not None)
+    assert round(total_min, 2) == 100.00
+
+
+def test_cmbc_min_due_negative_drift_never_negative_allocation():
+    """复审 Low 回归：负尾差（每卡取整偏大）逐分扣减，任何卡分摊不得低于 0，
+    且之和仍精确等于账户级最低还款。构造：5 卡净额各 0.06、账户 min 0.03
+    → 每卡取整 0.01（合计 0.05），drift=-0.02 需扣 2 分且不产生负值。"""
+    from statement_fixtures import build_mime
+
+    rows = "".join(_cmbc_row(f"06/1{i}", f"示例商户-{i}", "0.06", f"200{i}") for i in range(1, 6))
+    html = _cmbc_html(rows, interest_line="<td>573.35</td><td>573.35</td>", total="0.30", minp="0.03")
+    parsed = parse_email(build_mime(html, ADDR["cmbc"], "民生信用卡电子对账单", "s-negdrift"),
+                         from_address=ADDR["cmbc"])
+    mins = [s.min_due for s in parsed.statements]
+    assert all(m is None or m >= 0 for m in mins), f"出现负分摊: {mins}"
+    total_min = sum(m for m in mins if m is not None)
+    assert round(total_min, 2) == 0.03
 
 
 # ---------- 错误路径 ----------
