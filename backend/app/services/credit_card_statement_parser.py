@@ -98,6 +98,18 @@ class ParsedEmail:
                 acct = next((st.summary.get("account_total_due") for st in self.statements if st.summary), None)
                 if not settled or acct is None:
                     return out
+                # 上期结清 + 账户应还非零时逐卡金额必须全部发布——任一卡为
+                # None（全零权重/派生失败）说明分摊依据缺失，直接 mismatch，
+                # 不走金额容差（复审 Medium：容差按笔数扩大，小额应还会被
+                # 「缺值=0」的错误和伪装成 ok）
+                if acct != 0 and any(st.total_due is None for st in self.statements):
+                    out["_account"] = {
+                        "ok": False,
+                        "expected": float(acct),
+                        "actual": float(sum(st.total_due or 0 for st in self.statements)),
+                        "diff": float(acct - sum(st.total_due or 0 for st in self.statements)),
+                    }
+                    return out
                 per_card_sum = sum(st.total_due for st in self.statements if st.total_due is not None)
                 out["_account"] = {
                     "ok": abs(per_card_sum - acct) <= tol,
@@ -346,13 +358,27 @@ def _html_body(msg) -> str | None:
 # ----------------------------------------------------------------------- #
 
 _REPAY_WORDS = ("还款", "自动还款", "一键还款", "自助还款", "转账还款")
+# 民生专用还款词（仅 cmbc=True 生效，不进公共路径——复审 Medium：
+# 「自助转入」在招行/建行等语境可能指转入他行账户的退款性入账）
+_CMBC_REPAY_WORDS = ("自助转入",)
+# 民生真实还款形态无「还款」字样（「支付宝-人名」「富友支付-人名」是给
+# 信用卡还款的转账），负数时按「渠道-人名」保守判 payment 而非 refund——
+# 误判 refund 会错误扣减免年费消费额（审核 Medium：人名/渠道无法穷举，
+# 负数无法确认是退款时保守归 payment，真退款有「退货/退款」字样可依）
+_REFUND_WORDS = ("退款", "退货", "冲抵", "撤销")
 _INSTALLMENT_WORDS = ("分期",)
 _INTEREST_WORDS = ("利息", "循环利息")
 _FEE_WORDS = ("年费", "手续费", "违约金", "滞纳金")
 
 
-def classify_tx(description: str, amount: float, group: str | None = None) -> str:
-    """分型优先级：分组标题 > 描述关键词 > 金额正负（探索结论：负数≠退款）。"""
+def classify_tx(description: str, amount: float, group: str | None = None, *, cmbc: bool = False) -> str:
+    """分型优先级：分组标题 > 描述关键词 > 金额正负（探索结论：负数≠退款）。
+
+    cmbc=True 启用民生专用负数启发式：「支付宝/富友支付-人名」等渠道前缀
+    的负数是给信用卡还款的转账（无「还款」字样），保守归 payment——误判
+    refund 会错误扣减免年费消费额。该规则仅由民生样本确认，不进入公共
+    路径（复审 Medium：其他银行「渠道-商户」的负数退款误判 payment 会
+    破坏勾稽与免年费统计）。"""
     if group:
         g = re.sub(r"\s+", "", group)
         if "还款" in g:
@@ -373,12 +399,19 @@ def classify_tx(description: str, amount: float, group: str | None = None) -> st
     if any(w in text for w in _FEE_WORDS):
         return "fee"
     if amount < 0:
+        if cmbc:
+            if any(w in text for w in _REFUND_WORDS):
+                return "refund"
+            if any(w in text for w in _CMBC_REPAY_WORDS):
+                return "payment"
+            if any(text.startswith(p) for p in ("支付宝", "财付通", "富友支付", "微信支付", "银联", "快钱", "易宝")):
+                return "payment"
         return "refund" if _merchant_like(text) else "payment"
     return "purchase"
 
 
 def _merchant_like(text: str) -> bool:
-    """商户型描述（非还款渠道词）→ 退款；否则更像冲正/其他。"""
+    """商户型描述 → 退款；否则更像冲正/其他（公共规则，各银行通用）。"""
     return bool(text) and not any(w in text for w in ("冲正", "调整"))
 
 
@@ -886,19 +919,30 @@ def _parse_cmbc(html: str) -> list[ParsedStatement]:
         statement_date = parse_date(m[1])
         due_date = parse_date(m[2])
     total_due = min_due = None
+    # 汇总区：非贪婪取 RMB/USDAccount 后的前两个 RMB 金额（应还、最低还款）。
+    # 双币账户（RMB应还 USD美元应还 RMB最低 USD美元最低）与非双币形态下，
+    # 前两个 RMB 值均正确（双币真实样本 6768 复核确认，复审撤回无效的
+    # 「双币修复」——旧正则本就取对）。
     msum = re.search(r"RMB/USDAccount.*?RMB([\d,]+\.\d{2}).*?RMB([\d,]+\.\d{2})", flat)
     if msum:
         total_due = _f(parse_money(msum[1]))
         min_due = _f(parse_money(msum[2]))
-    # 上期结清判定：上期账单金额（Balance B/F 后第一个金额）与「本期已还金额」
-    # 都可解析且相等 → 「正数合计 == 应还」口径成立。取不到时 prev_settled=None。
+    # 上期结清判定（prev_settled）：「已还 ≥ 上期余额」即结清。两种压平形态：
+    # A（值跟标签）：「BalanceB/F<余额>-…Payment<已还>+…Interest<利息>」
+    #   ——生产 2025+ 真实邮件形态，余额/已还各自锚定标签；
+    # B（标签行值行分离）：标签流后值集中出现在 Interest 之后，
+    #   「Interest<余额><已还><本期账单><调整><利息>」——2021-2024 真实
+    #   邮件与 fixture 形态，前两值即 [余额, 已还]。
     prev_settled = None
-    # 真实样本值区序列（Interest 标签之后）：[上期余额, 已还, 本期账单, 调整, 利息, …]
-    # 标签区与值区顺序不保证逐项对齐（探索结论），但前两值「上期余额、已还」的位置
-    # 在真实样本中稳定；「已还 ≥ 上期余额」即上期结清（本期新增不计入该判定）。
     mvals = re.search(
-        r"Interest((?:RMB)?-?[\d,]+\.\d{2})(?:RMB)?(-?[\d,]+\.\d{2})", flat
+        r"BalanceB/F(?:人民币)?(?:RMB)?(-?[\d,]+\.\d{2})"
+        r"-?.*?Payment(?:人民币)?(?:RMB)?(-?[\d,]+\.\d{2})\+",
+        flat,
     )
+    if not mvals:
+        mvals = re.search(
+            r"Interest((?:RMB)?-?[\d,]+\.\d{2})(?:RMB)?(-?[\d,]+\.\d{2})", flat
+        )
     if mvals:
         prev_bal = parse_money(mvals[1])
         prev_pay = parse_money(mvals[2])
@@ -929,58 +973,55 @@ def _parse_cmbc(html: str) -> list[ParsedStatement]:
             stmt.items.append(ParsedItem(
                 trans_date_raw=tr_raw, trans_date=td, posted_date=pd_,
                 description=desc[:255], amount=float(value),
-                tx_type=classify_tx(desc, float(value), group),
+                tx_type=classify_tx(desc, float(value), group, cmbc=True),
                 installment_note=_installment_note(desc),
             ))
     # 应还金额逐卡化（生产反馈修正）：账户级 total_due/min_due 是全卡合计，
     # 原实现原样赋给每张卡——多卡用户两张卡显示相同的（错误）金额。
-    # 民生邮件没有逐卡应还字段，按用户确认口径派生：
+    # 民生邮件没有逐卡应还字段，按用户确认口径派生（90 期真实邮件验证）：
     #   单卡账户（邮件只出现一个尾号）→ 无分卡歧义，直接用账户级金额；
-    #   多卡且上期结清 → 该卡应还 = 本期新增净额（正数交易 + 退款等非还款
-    #   负数；还款分录是对本期消费的清偿，不计入应还构成）。退款产生的负
-    #   净额不单独成「卡级溢缴」（下游对负 total_due 的语义是滚动溢缴、不
-    #   抵扣他卡——会破坏账户闭环），而是先从正净额卡上抵扣，全卡非负；
+    #   多卡且上期结清 → **按有效正数交易占比把账户级应还分摊到卡**。民生
+    #   记账口径：还款/冲抵/退款一律负数、不进「本期账单金额 NewCharges」，
+    #   结清时账户应还 == NewCharges == 明细正数交易合计——描述猜还款/退款
+    #   不可靠（「支付宝-人名」「自助转入 6226…」都是还款，形态无法穷举），
+    #   正数合计是稳定锚点。权重须排除不进 NewCharges 的正数分录（分期放款
+    #   等贷记调整，描述含「贷记调整」，生产实测 2/90 会高估该卡占比、把其他
+    #   卡的应还错移过去，审核 Medium）——排除后正数合计仍与 NewCharges 一致；
     #   多卡且上期未结清/结清状态未知 → 滚动余额无法按本期交易分卡，
     #   total_due/min_due 置 None（宁可少显示，不把未知渲染成 0 或猜数）；
     #   账户级合计解析失败 → 派生金额失去闭环校验依据，同样置 None
-    #   （审核 Medium：fail-open 会把未验证的推导金额标成 ok）。
+    #   （审核 Medium：fail-open 会把未验证的推导金额标成 ok）；
+    #   全账户无正数交易但账户应还非零 → 明细与记账不变量冲突（漏解析或
+    #   模板漂移），逐卡金额置 None 交由 verify_all 标 mismatch（审核 Medium：
+    #   不得任意塞给首卡再靠闭环掩盖）。
     # 校验闭环（verify_all）：各卡 total_due 之和 == 账户级 total_due。
-    account_total = total_due
-    if statements and account_total is None:
-        # 汇总正则失配但交易可解析：无账户合计做闭环，逐卡金额不可发布
-        account_total = None
-    card_nets: dict[str, float] = {}
+    card_pos: dict[str, float] = {}
     for last4, stmt in statements.items():
-        card_nets[last4] = round(sum(
+        card_pos[last4] = sum(
             i.amount for i in stmt.items
-            if i.amount > 0 or (i.amount < 0 and i.tx_type != "payment")
-        ), 2)
-    # 退款负净额向正净额卡分摊抵扣（保持各卡 ≥0、总和不变，审核 Medium）：
-    # 按「最大正净额先扣」的贪心顺序处理——民生明细本身不提供退款归属规则，
-    # 这是与「之和==账户合计」闭环一致的最小假设。
-    nets = dict(card_nets)
-    debt = -sum(v for v in nets.values() if v < 0)  # 待抵扣的负净额总量（正数）
-    for last4 in sorted((k for k, v in nets.items() if v > 0), key=lambda k: nets[k], reverse=True):
-        if debt <= 0:
-            break
-        take = min(nets[last4], debt)
-        nets[last4] = round(nets[last4] - take, 2)
-        debt = round(debt - take, 2)
-    for last4, stmt in statements.items():
-        nets[last4] = max(nets[last4], 0.0)  # 剩余未抵完的负净额（全卡皆负）归零
+            if i.amount > 0 and "贷记调整" not in i.description
+        )
     if len(statements) == 1:
         # 单卡：无分卡歧义，账户级金额就是该卡的（上期是否结清都成立——
         # 邮件明确给出了该账户应还；审核 High：不得把已知金额丢成 0）
         only = next(iter(statements.values()))
         only.total_due = total_due
         only.min_due = min_due
-    elif prev_settled and total_due is not None:
-        # 多卡 + 上期结清：净额即分卡应还（已含退款抵扣，全卡非负）
+    elif prev_settled and total_due is not None and sum(card_pos.values()) > 0:
+        # 多卡 + 上期结清 + 有效正数权重：按占比分摊（尾差补到正数最大的卡），
+        # 各卡非负、之和恒等于账户应还
+        pos_total = sum(card_pos.values())
+        nets = {k: round(total_due * v / pos_total, 2) for k, v in card_pos.items()}
+        drift = round(total_due - sum(nets.values()), 2)
+        if drift:
+            top = max(card_pos, key=lambda k: card_pos[k])
+            nets[top] = round(nets[top] + drift, 2)
         for last4, stmt in statements.items():
             stmt.total_due = nets[last4]
-        _allocate_min_due(statements, nets, min_due)
+        _allocate_min_due(statements, card_pos, min_due)
     else:
-        # 多卡 + 滚动余额/状态未知/账户合计缺失：无法可靠分卡，不猜
+        # 多卡 + 滚动余额/状态未知/账户合计缺失/全零权重（与应还非零冲突）：
+        # 无法可靠分卡，不猜
         for stmt in statements.values():
             stmt.total_due = None
             stmt.min_due = None
@@ -989,34 +1030,34 @@ def _parse_cmbc(html: str) -> list[ParsedStatement]:
     for stmt in statements.values():
         stmt.summary = {
             "prev_settled": prev_settled,
-            "card_net": card_nets[stmt.card_last_four],
+            "card_pos": round(card_pos[stmt.card_last_four], 2),
             "account_total_due": total_due,
             "account_min_due": min_due,
         }
     return list(statements.values())
 
 
-def _allocate_min_due(statements: dict[str, "ParsedStatement"], nets: dict[str, float], min_due) -> None:
-    """最低还款按净额比例分摊到卡（银行实际规则并非如此，仅展示参考）。
-    尾差逐分调整：正差补给净额最大的卡，负差从分摊额最大的卡逐分扣减
+def _allocate_min_due(statements: dict[str, "ParsedStatement"], weights: dict[str, float], min_due) -> None:
+    """最低还款按权重比例分摊到卡（银行实际规则并非如此，仅展示参考）。
+    尾差逐分调整：正差补给权重最大的卡，负差从分摊额最大的卡逐分扣减
     且任何卡不低于 0（复审 Low：一次性补到单卡会产生负 min_due）——
     保证各卡之和精确等于账户级最低还款、所有分摊非负。
-    无净额的卡不参与分摊（置 None）。"""
+    无权重的卡不参与分摊（置 None）。"""
     if min_due is None:
         for stmt in statements.values():
             stmt.min_due = None
         return
-    pos_total = sum(v for v in nets.values() if v > 0)
+    pos_total = sum(v for v in weights.values() if v > 0)
     if not pos_total:
         for stmt in statements.values():
             stmt.min_due = None
         return
     allocated: dict[str, float] = {}
-    for last4, v in nets.items():
+    for last4, v in weights.items():
         allocated[last4] = round(min_due * (v / pos_total), 2) if v > 0 else 0.0
     # 尾差按分调整（1 分 = 0.01）：float 分摊的累计误差在这里被吃掉
     drift_cents = round((min_due - sum(allocated.values())) * 100)
-    positives = [k for k in nets if nets[k] > 0]
+    positives = [k for k in weights if weights[k] > 0]
     while drift_cents != 0 and positives:
         # 调整目标：正差补/负差扣「当前分摊额最大」的卡；扣到 0 则换下一张
         target = max(positives, key=lambda k: allocated[k])

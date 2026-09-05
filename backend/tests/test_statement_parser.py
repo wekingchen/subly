@@ -334,6 +334,96 @@ def test_cmbc_min_due_negative_drift_never_negative_allocation():
     assert round(total_min, 2) == 0.03
 
 
+def test_cmbc_installment_loan_excluded_from_allocation_weight():
+    """审核 Medium 回归：分期放款（贷记调整）不进 NewCharges，分摊权重须
+    排除——否则该卡占比被高估、把其他卡的应还错移过去。真实样本：卡 A
+    正数含 20000 放款、卡 B 消费 211.50、账户应还 7197.51 → A=6986.01、
+    B=211.50（不是 A=7141.54/B=55.97）。"""
+    from statement_fixtures import build_mime
+
+    rows = (_cmbc_row("06/17", "现金分期6期商品贷记调整", "20000.00", "1111")
+            + _cmbc_row("06/18", "示例商户-消费", "6986.01", "1111")
+            + _cmbc_row("06/19", "示例商户-消费", "211.50", "2222"))
+    html = _cmbc_html(rows, interest_line="<td>573.35</td><td>573.35</td>", total="7197.51", minp="719.75")
+    parsed = parse_email(build_mime(html, ADDR["cmbc"], "民生信用卡电子对账单", "s-loan"),
+                         from_address=ADDR["cmbc"])
+    vals = {s.card_last_four: s.total_due for s in parsed.statements}
+    assert vals["1111"] == 6986.01  # 20000 放款不占权重
+    assert vals["2222"] == 211.50
+    assert round(sum(vals.values()), 2) == 7197.51
+
+
+def test_cmbc_zero_positive_weight_with_nonzero_total_sets_none():
+    """审核 Medium 回归：全部明细为负数但账户应还非零（漏解析/模板漂移）→
+    逐卡金额置 None（fail-closed），不得把全额任意塞给首卡再靠闭环掩盖。
+    账户应还取 0.01（小于 0.01×笔数的容差）——旧容差逻辑会把它误判 ok，
+    early-return 必须绕过容差直接 mismatch（复审 Medium：80.00 场景区分
+    不出新旧行为）。"""
+    from statement_fixtures import build_mime
+
+    rows = (_cmbc_row("06/17", "示例支付-还款", "-100.00", "1111")
+            + _cmbc_row("06/18", "示例支付-还款", "-50.00", "2222"))
+    html = _cmbc_html(rows, interest_line="<td>573.35</td><td>573.35</td>", total="0.01", minp="0.01")
+    parsed = parse_email(build_mime(html, ADDR["cmbc"], "民生信用卡电子对账单", "s-zeropos"),
+                         from_address=ADDR["cmbc"])
+    assert len(parsed.statements) == 2  # 多卡才触发分摊分支
+    for s in parsed.statements:
+        assert s.total_due is None
+        assert s.min_due is None
+    # verify_all 必须标 mismatch（绕过金额容差——0.01 < 容差 0.021，旧逻辑
+    # 会算出「缺值和 0 vs 0.01 误差在容差内」错误放行）
+    v = parsed.verify_all().get("_account")
+    assert v is not None and v["ok"] is False
+    assert v["expected"] == 0.01
+    assert v["actual"] == 0.0
+
+
+def test_cmbc_dual_currency_summary_takes_rmb_total():
+    """双币账户汇总形态回归：压平后「RMB应还 USD美元应还 RMB最低 USD美元最低」
+    （真实样本 6768: 6004.52/16.00/5221.23/10.00）——前两个 RMB 值是应还与
+    最低还款，USD 值不得被取用（快扫确认旧正则本就取对，此测试锁定该行为
+    防未来正则改动引入回归）。注入断言用独有片段而非 'USD'（模板自带
+    RMB/USD Account 必含 USD，复审指出原断言无意义）。"""
+    from statement_fixtures import build_mime
+
+    rows = _cmbc_row("06/17", "示例商户-餐饮", "6004.52", "1111")
+    html = _cmbc_html(rows, interest_line="<td>573.35</td><td>573.35</td>", total="6004.52", minp="5221.23")
+    # 注入 USD 段（双币形态）
+    needle = "RMB/USD Account</td><td>RMB</td><td>6004.52</td><td>本期最低还款金额"
+    injected = "RMB/USD Account</td><td>RMB</td><td>6004.52</td><td>USD</td><td>16.00</td><td>RMB</td><td>5221.23</td><td>USD</td><td>10.00</td><td>本期最低还款金额"
+    assert needle in html
+    html = html.replace(needle, injected)
+    assert injected in html  # 注入成功（独有片段）
+    parsed = parse_email(build_mime(html, ADDR["cmbc"], "民生信用卡电子对账单", "s-dual"),
+                         from_address=ADDR["cmbc"])
+    st = parsed.statements[0]
+    assert st.total_due == 6004.52
+    assert st.min_due == 5221.23
+
+
+def test_cmbc_channel_name_transfer_is_payment_not_refund():
+    """审核 Medium 回归：「支付宝/富友支付-人名」负数是给信用卡还款的转账
+    （无「还款」字样），民生路径（cmbc=True）保守判 payment——误判 refund
+    会错误扣减免年费消费额。渠道启发式仅限民生：其他银行同描述负数
+    （渠道-商户退款形态）保持公共规则 refund（复审 Medium）。真退款
+    （含「退」字样）在民生路径也判 refund。"""
+    from app.services.credit_card_statement_parser import classify_tx
+
+    # 民生路径（cmbc=True）：渠道前缀负数保守归 payment
+    assert classify_tx("支付宝-陈果", -1707.26, None, cmbc=True) == "payment"
+    assert classify_tx("富友支付-陈果", -889.28, None, cmbc=True) == "payment"
+    assert classify_tx("自助转入 6226090280463619", -3833.25, None, cmbc=True) == "payment"
+    # 民生路径：真退款仍 refund
+    assert classify_tx("示例商户-退款", -20.00, None, cmbc=True) == "refund"
+    assert classify_tx("退货-示例商户", -30.00, None, cmbc=True) == "refund"
+    # 公共路径（其他银行）：渠道开头负数保持原 refund 分类，不受民生启发式影响
+    assert classify_tx("银联商务-示例商户", -20.00, None) == "refund"
+    assert classify_tx("支付宝商户消费", -20.00, None) == "refund"
+    # 「自助转入」仅民生专用（复审 Medium：不泄漏到公共 _REPAY_WORDS）
+    assert classify_tx("自助转入 6226090280463619", -3833.25) == "refund"
+    assert classify_tx("自助转入 6226090280463619", -3833.25, cmbc=True) == "payment"
+
+
 # ---------- 错误路径 ----------
 
 def test_parse_rejects_unknown_bank():
