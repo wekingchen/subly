@@ -1085,7 +1085,8 @@ async function fetchAccount(acct) {
   }
 }
 
-// 手动解析账单：拉白名单银行账单邮件 → 按卡落库（展示用，不进通知/iCal）
+// 手动解析账单：拉白名单银行账单邮件 → 按卡落库；除还款提醒引用最新未还且勾稽
+// 通过账单的应还金额外，其他账单字段及明细不进通知/iCal
 const syncErrorDetails = ref([])
 const unmatchedDetails = ref([])
 // 错误明细只在「解析账单」操作里展示；其他 IMAP 操作接管反馈时一并清空，

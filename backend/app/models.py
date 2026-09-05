@@ -285,7 +285,8 @@ class CreditCard(Base):
 class CreditCardStatement(Base):
     """单卡单期账单（账单邮件解析产物；一封邮件多卡 → 拆成多条）。
 
-    数据只进展示与备份，不进通知/iCal/任何外部输出。
+    数据只进展示与备份；除最新未还且勾稽通过账单的 total_due 用于还款提醒外，
+    其他字段与交易明细不进通知/iCal/任何外部输出。
     card_id 可空：同尾号多卡无法盲关联（unmatched/ambiguous）。
     """
 

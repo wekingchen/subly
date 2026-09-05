@@ -1,7 +1,7 @@
 """账单邮件同步：IMAP 拉取 → 解析 → 卡片匹配 → 勾稽 → 落库。
 
 来源去重键 = (source_account_id, message_id)；卡匹配用 bank_key + 尾号，
-同尾号多卡标 ambiguous 不盲选。账单数据只进展示与备份，不进通知/iCal。
+同尾号多卡标 ambiguous 不盲选。账单数据只进展示与备份（除还款提醒引用最新未还账单的应还金额外，不进通知/iCal）。
 """
 from __future__ import annotations
 
