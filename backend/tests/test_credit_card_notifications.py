@@ -1,9 +1,10 @@
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 from icalendar import Calendar
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
+from app.credit_card_rules import next_due_date_after
 from app.database import Base
 from app.models import (
     CreditCard,
@@ -19,6 +20,7 @@ from app.services import (
     credit_card_notification_outbox,
     credit_card_reminders,
     notification_transport,
+    scheduler,
 )
 
 
@@ -102,7 +104,16 @@ def test_credit_card_dispatch_uses_stable_delivery_id_and_cancels_changed_rule(
     db = Session()
     try:
         _, card = add_card(db)
-        as_of = date(2026, 8, 29)
+        # 锚定未来：投递复核会取消「还款日已过」的提醒（row.due_date <
+        # 业务今天），硬编码历史日期会随真实时间流逝而失效（2026-09-06
+        # 实锤：due=9/5 被当日过滤取消）。固定业务今天并取其下期还款日，
+        # as_of = 下期还款日 − 7 天 → days_left 恒为 7；monkeypatch
+        # scheduler._local_today 与同一业务日期（审核 Low：CI 主机 UTC 与
+        # 业务时区 Asia/Shanghai 不同天会让「今天」漂移）。
+        business_today = date.today()
+        monkeypatch.setattr(scheduler, "_local_today", lambda: business_today)
+        due = next_due_date_after(business_today + timedelta(days=1), card.due_day)
+        as_of = due - timedelta(days=7)
         credit_card_reminders.run_reminder_scan(as_of)
         captured = {}
         monkeypatch.setattr(
@@ -132,7 +143,9 @@ def test_credit_card_dispatch_uses_stable_delivery_id_and_cancels_changed_rule(
                 credit_card_id=card.id,
                 user_id=card.user_id,
                 business_date=as_of,
-                due_date=date(2026, 9, 5),
+                # 已改规则场景：构造一条「规则变化后不再有效」的 pending，
+                # days_before=7 不在新规则（[]）里 → 投递复核取消
+                due_date=due,
                 days_before=7,
                 channel="telegram",
                 status="pending",
@@ -751,3 +764,72 @@ def test_sanitize_label_edge_cases(tmp_path):
     # 剥离后仅剩标点的卡名同样回退（既有行为保持）
     card3 = _Card("（1234）")
     assert credit_card_reminders.external_card_label(card3) == "信用卡"
+
+
+def test_bark_icon_bank_matching_case_insensitive_and_negative(tmp_path):
+    """审核 Low 回归：银行识别复用 match_bank 同口径——英文别名大小写
+    不敏感（前端徽标能识别 CMB，Bark 提醒也必须识别）；非收录银行/
+    错字负例回退 Subly logo。"""
+
+    class _Card:
+        def __init__(self, bank_name):
+            self.display_name = "卡"
+            self.bank_name = bank_name
+            self.last_four = "1234"
+            self.id = 1
+
+    from app.services.credit_card_reminders import _bark_icon
+
+    public_url = "https://subly.example.com"
+    # 大小写变体命中对应银行徽标
+    assert _bark_icon(_Card("CMB"), public_url) == \
+        "https://subly.example.com/api/icons/library/cmbchina_com"
+    assert _bark_icon(_Card("China CITIC"), public_url) == \
+        "https://subly.example.com/api/icons/library/citicbank_com"
+    # 中文全称/简称命中
+    assert _bark_icon(_Card("中国民生银行"), public_url) == \
+        "https://subly.example.com/api/icons/library/cmbc_com_cn"
+    assert _bark_icon(_Card("中国建行"), public_url) == \
+        "https://subly.example.com/api/icons/library/ccb_com"
+    # CMBC 必须唯一命中民生（复审 Medium：CMB 子串碰撞曾让它随 hash seed
+    # 在招行/民生之间漂移）——精确匹配语义下 CMB≠CMBC
+    assert _bark_icon(_Card("CMBC"), public_url) == \
+        "https://subly.example.com/api/icons/library/cmbc_com_cn"
+    # 负例：未收录/错字/空 → Subly logo 回退（与前端 matchBankBrand 同口径：
+    # 精确匹配+剥前后缀重查，不猜测。「建设殖银行」「PAB储蓄卡」前后端一致回退）
+    for bad in ("建设殖银行", "PAB储蓄卡", "某某银行", ""):
+        assert _bark_icon(_Card(bad), public_url) == \
+            "https://subly.example.com/pwa-192.png", bad
+    # 未配置 APP_PUBLIC_URL → None
+    assert _bark_icon(_Card("招商银行"), None) is None
+
+
+def test_bank_matching_legacy_card_names_still_resolve():
+    """复审 Medium 回归：精确匹配重构不得让存量自然名称（旧版子串匹配
+    曾接受）静默失效——「招商信用卡」「平安信用卡」等升级前可关联账单的
+    bank_name 必须继续解析；同时 CMB/CMBC 唯一性与错字负例保持。"""
+    from app.services.credit_card_reminders import _bark_icon
+    from app.services.match_bank import resolve_bank_key
+
+    public_url = "https://subly.example.com"
+    legacy = {
+        "招商信用卡": "cmb", "招商银行信用卡": "cmb",
+        "平安信用卡": "pab", "民生信用卡": "cmbc",
+        "中信信用卡": "citic", "建设信用卡": "ccb",
+    }
+    for name, expected_key in legacy.items():
+        assert resolve_bank_key(name) == expected_key, name
+
+    class _Card:
+        def __init__(self, bank_name):
+            self.display_name = "卡"
+            self.bank_name = bank_name
+            self.last_four = "1234"
+            self.id = 1
+
+    # 图标走对应银行徽标（非 logo 回退，取招商代表）
+    icon = _bark_icon(_Card("招商信用卡"), public_url)
+    assert icon == "https://subly.example.com/api/icons/library/cmbchina_com"
+    # CMB/CMBC 唯一性与负例不回归
+    assert resolve_bank_key("CMB") == "cmb" and resolve_bank_key("CMBC") == "cmbc"
+    assert resolve_bank_key("建设殖银行") is None

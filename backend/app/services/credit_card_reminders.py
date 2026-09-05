@@ -15,6 +15,13 @@ _scan_lock = threading.Lock()
 _CHANNELS = ("telegram", "bark", "webhook")
 
 
+def _app_public_url() -> str | None:
+    """读 APP_PUBLIC_URL 配置（Bark 图标绝对化用）；函数化便于测试 monkeypatch。"""
+    from app.config import settings
+
+    return settings.app_public_url or None
+
+
 def _cn_date(value: date) -> str:
     return f"{value.month} 月 {value.day} 日"
 
@@ -115,14 +122,38 @@ def _amount_phrase(amount: float | None) -> str:
     return f"应还 {_fmt_amount(amount)} 元"
 
 
+def _bark_icon(card: CreditCard, app_public_url: str | None) -> str | None:
+    """Bark 推送图标（用户确认口径）：收录银行的官方徽标（内置图标库，
+    与日历事件/卡片徽标同源）；未收录银行回退 Subly logo。
+    银行识别复用 match_bank.bank_matches_card（与账单关联/前端徽标同口径，
+    审核 Low：不再自建第三套匹配规则）。app_public_url 未配置时返回 None
+    （Bark 显示默认图标，推送不受影响）。"""
+    from app.bank_senders import BANK_SENDER_DOMAINS, BANK_KEYS
+    from app.icon_library import slug_for_domain
+    from app.services import bark
+    from app.services.match_bank import bank_matches_card
+
+    bank_key = next(
+        (k for k in BANK_KEYS if bank_matches_card(card.bank_name, k)), None
+    )
+    icon_path = (
+        f"/api/icons/library/{slug_for_domain(BANK_SENDER_DOMAINS[bank_key]['domains'][0])}"
+        if bank_key else "/pwa-192.png"
+    )
+    return bark.resolve_push_icon_url(icon_path, app_public_url)
+
+
 def _build_payload(
     card: CreditCard, due_date: date, days_before: int, channel: str,
     amount: float | None = None,
+    app_public_url: str | None = None,
 ) -> dict:
     """三通道提醒文案（用户确认口径：银行+卡名、金额、倒计时）。
 
     amount 由调用方查库传入（plan_reminder_candidates）；直接调用本函数的
     测试/工具未查库时为 None → 文案回退「金额以银行账单为准」。
+    app_public_url 供 Bark 图标解析为设备可下载的绝对 URL；未配置时
+    Bark 推送不带图标（显示默认图标，推送不受影响）。
     """
     safe_name = external_card_label(card)
     bank = external_bank_label(card)
@@ -152,7 +183,7 @@ def _build_payload(
             ])
         }
     if channel == "bark":
-        return {"title": title, "body": body}
+        return {"title": title, "body": body, "icon": _bark_icon(card, app_public_url)}
     return {
         "event": {
             "event": "credit_card.repayment.reminder",
@@ -176,8 +207,12 @@ def plan_reminder_candidates(
     user_id: int | None = None,
     credit_card_id: int | None = None,
     channel: str = "all",
+    app_public_url: str | None = None,
 ) -> dict:
-    """确定性规划信用卡提醒；不写库、不联网。"""
+    """确定性规划信用卡提醒；不写库、不联网。
+
+    app_public_url 供 Bark 推送图标解析（银行徽标/Subly logo → 绝对 URL）。
+    """
     stmt = select(CreditCard).order_by(CreditCard.id)
     if user_id is not None:
         stmt = stmt.where(CreditCard.user_id == user_id)
@@ -226,7 +261,10 @@ def plan_reminder_candidates(
                 "days_before": days_left,
                 "channel": selected_channel,
                 "credit_card_name": external_card_label(card),
-                "payload": _build_payload(card, due_date, days_left, selected_channel, amount),
+                "payload": _build_payload(
+                card, due_date, days_left, selected_channel, amount,
+                app_public_url=app_public_url,
+            ),
             })
     return {
         "scanned": len(cards),
@@ -254,7 +292,9 @@ def run_reminder_scan(as_of: date) -> dict:
         }
     db = database.SessionLocal()
     try:
-        planned = plan_reminder_candidates(db, as_of)
+        planned = plan_reminder_candidates(
+            db, as_of, app_public_url=_app_public_url()
+        )
         enqueued = credit_card_notification_outbox.enqueue_candidates(
             db, planned["candidates"]
         )

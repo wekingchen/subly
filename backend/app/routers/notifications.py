@@ -113,6 +113,7 @@ def bark_test(
             group=user.bark_group,
             ttl=ttl,
             url=settings.app_public_url or None,
+            icon=bark.resolve_push_icon_url("/pwa-192.png", settings.app_public_url),
         )
     except Exception as e:  # noqa: BLE001 - 不回显底层细节，仅写日志
         logger.warning("event=bark_test_failed user_id=%s error_type=%s", user.id, type(e).__name__)

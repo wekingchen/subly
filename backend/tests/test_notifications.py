@@ -50,7 +50,8 @@ def test_bark_test_passes_app_public_url_when_configured(monkeypatch):
         # device_key/title/body 是位置参数
         assert captured["args"][1] == "✅ 连接成功！"
         assert captured["url"] == "https://subly.example.com"
-        assert "icon" not in captured
+        # 测试推送带 Subly logo 图标（复审确认口径：无服务图标的推送回退品牌 logo）
+        assert captured["icon"] == "https://subly.example.com/pwa-192.png"
     finally:
         db.close()
         engine.dispose()
@@ -66,8 +67,10 @@ def test_bark_test_omits_url_when_app_public_url_blank(monkeypatch):
 
         notifications.bark_test(BarkTestIn(), user)
 
-        # 空配置时 url=None，bark.send_push 内部不会把 url 放进 payload
+        # 空配置时 url=None、icon=None（logo 也无法绝对化），send_push 内部
+        # 都不会放进 payload
         assert captured["url"] is None
+        assert captured["icon"] is None
     finally:
         db.close()
         engine.dispose()

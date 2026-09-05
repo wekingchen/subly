@@ -9,7 +9,9 @@ from urllib.parse import unquote, urlsplit
 import httpx
 
 DEFAULT_SERVER = "https://api.day.app"
-_LOCAL_ICON_PREFIXES = ("/static/icons/", "/api/icons/library/")
+# 可推送的站内图标路径：上传图标缓存、内置服务库、Subly 品牌 logo（推送
+# 无图标时的回退）。/pwa-192.png 位于前端构建产物根部，随镜像分发。
+_LOCAL_ICON_PREFIXES = ("/static/icons/", "/api/icons/library/", "/pwa-192.png")
 _MAX_ICON_URL_LENGTH = 2048
 _MAX_PATH_DECODE_ROUNDS = 8
 
@@ -73,8 +75,11 @@ def resolve_push_icon_url(icon: str | None, app_public_url: str | None) -> str |
         return None
     if _parse_http_url(value, allow_query=True):
         return value
+    # 目录前缀要求有余量；品牌 logo 是精确文件路径（前缀白名单放完整
+    # 文件名会误放 /pwa-192.png.bad 等任意同前缀路径——审核 Low）
     if not any(
-        value.startswith(prefix) and len(value) > len(prefix)
+        value == prefix if prefix.endswith(".png")
+        else value.startswith(prefix) and len(value) > len(prefix)
         for prefix in _LOCAL_ICON_PREFIXES
     ):
         return None

@@ -26,3 +26,23 @@ describe('matchBankBrand', () => {
     expect(Object.keys(BANK_BRANDS)).toHaveLength(5)
   })
 })
+
+// 与后端 match_bank 存量别名同步（审核 Low：升级兼容名称前后端同口径），
+// 「招商信用卡」等自然名称在前端徽标/日历分组与后端账单关联一致。
+describe('matchBankBrand（存量自然名称兼容）', () => {
+  const legacy = [
+    ['招商信用卡', 'cmb'],
+    ['招商银行信用卡', 'cmb'],
+    ['平安信用卡', 'pab'],
+    ['民生信用卡', 'cmbc'],
+    ['中信信用卡', 'citic'],
+    ['建设信用卡', 'ccb'],
+  ]
+  it.each(legacy)('%s → %s', (name, key) => {
+    expect(matchBankBrand(name)).toMatchObject({ key })
+  })
+  it('错字与未收录仍不猜测', () => {
+    expect(matchBankBrand('建设殖银行')).toBeNull()
+    expect(matchBankBrand('PAB储蓄卡')).toBeNull()
+  })
+})

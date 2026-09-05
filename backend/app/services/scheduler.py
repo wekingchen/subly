@@ -252,12 +252,16 @@ def plan_reminder_candidates(
                     payload = {"text": _build_telegram_text(db, sub, user, days_left)}
                 elif selected_channel == "bark":
                     title, body = _build_bark_text(db, sub, user, days_left)
+                    # 推送图标：订阅自有图标优先；无图标/不可解析时回退
+                    # Subly logo（用户确认口径，便于在锁屏区分来源）
                     payload = {
                         "title": title,
                         "body": body,
                         "url": sub.url,
                         "icon": bark.resolve_push_icon_url(
                             sub.icon, settings.app_public_url
+                        ) or bark.resolve_push_icon_url(
+                            "/pwa-192.png", settings.app_public_url
                         ),
                     }
                 else:

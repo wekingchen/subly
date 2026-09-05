@@ -91,6 +91,21 @@ def test_resolve_push_icon_url_rejects_unsafe_local_paths(icon, public_url):
     assert bark.resolve_push_icon_url(icon, public_url) is None
 
 
+def test_resolve_push_icon_url_accepts_bare_brand_logo_path():
+    """/pwa-192.png 前缀本身即完整文件名（无「剩余路径」），旧行为的
+    「len(value) > len(prefix)」检查会误拒——品牌 logo 回退依赖此路径。"""
+    assert bark.resolve_push_icon_url(
+        "/pwa-192.png", "https://subly.example.com"
+    ) == "https://subly.example.com/pwa-192.png"
+    # 未配置 APP_PUBLIC_URL → 无法绝对化 → None（Bark 显示默认图标）
+    assert bark.resolve_push_icon_url("/pwa-192.png", None) is None
+    assert bark.resolve_push_icon_url("/pwa-192.png", "") is None
+    # 同前缀的任意错误路径被拒（复审 Low：精确匹配防白名单意外放宽），
+    # 订阅提醒的 logo 回退不被坏路径短路
+    for bad in ("/pwa-192.png.bad", "/pwa-192.png/child", "/pwa-192.png?x"):
+        assert bark.resolve_push_icon_url(bad, "https://subly.example.com") is None, bad
+
+
 def test_resolve_push_icon_url_rejects_excessive_nested_encoding():
     nested = "../secret.png"
     for _ in range(12):
