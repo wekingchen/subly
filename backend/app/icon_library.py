@@ -180,6 +180,7 @@ SERVICES = [
     ("Microsoft 365", "microsoft.com", ["software", "cloud"]),
     ("Adobe Creative Cloud", "adobe.com", ["software", "cloud"]),
     ("Notion", "notion.so", "software"),
+    ("Termius", "termius.com", ["software", "vps"]),
     ("1Password", "1password.com", "software"),
     ("Bitwarden", "bitwarden.com", "software"),
     ("JetBrains", "jetbrains.com", "software"),
