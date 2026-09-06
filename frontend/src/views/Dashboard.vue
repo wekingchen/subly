@@ -164,6 +164,35 @@
       </template>
     </AppModal>
 
+    <!-- 逾期订阅列表（已逾期雷达卡点击打开）：就地查看并标记续费 -->
+    <AppModal
+      v-model="showOverdueList"
+      :title="t('dashboard.overdueListTitle', { n: overdueList.length })"
+      width="560px"
+      :close-label="t('common.close')"
+    >
+      <p v-if="!overdueList.length" class="muted">{{ t('dashboard.overdueListEmpty') }}</p>
+      <ul v-else class="overdue-list">
+        <li v-for="s in overdueList" :key="s.id">
+          <button type="button" class="ol-row" :aria-label="s.name" @click="openDetail(s)">
+            <span class="event-signal"></span>
+            <span class="l-name">
+              <ServiceIcon :src="s.icon" :name="s.name" :fallback="emojiOf(s)" class="mini-ico" />
+              <span class="l-txt">{{ s.name }}</span>
+            </span>
+            <span class="l-right">
+              <span class="tag danger">{{ overdueText(s) }}</span>
+              <b class="mono-data">{{ s.amount_in_base == null ? t('reports.rateUnavailable') : fmt(s.amount_in_base) }}</b>
+            </span>
+          </button>
+        </li>
+      </ul>
+      <p class="muted overdue-hint">{{ t('dashboard.overdueListHint') }}</p>
+      <template #footer>
+        <button type="button" class="btn ghost" @click="showOverdueList = false">{{ t('common.close') }}</button>
+      </template>
+    </AppModal>
+
     <RenewSubscriptionModal
       v-if="renewTarget"
       :target="renewTarget"
@@ -203,7 +232,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import api from '../api'
 import AppModal from '../components/AppModal.vue'
@@ -258,15 +287,44 @@ const { toasts, add: toast } = useToasts()
 // 订阅详情弹窗：detailId 指向当前打开的订阅，detailTarget 从刷新后的数据实时取，
 // 避免续费/编辑/删除后详情仍显示旧快照；订阅被删则 detailTarget 变 null 自动收起。
 const detailId = ref(null)
+// 详情从逾期列表进入时的兜底焦点目标（「已逾期」雷达卡，关闭详情后聚焦）
+const detailReturnFocus = ref(null)
 const showDetail = computed({
   get: () => detailId.value !== null,
   set: (v) => { if (!v) detailId.value = null }
 })
 function openDetail(s) {
+  // 从逾期列表进入详情时收起列表弹窗（详情在顶层，关闭后列表不残留遮罩）。
+  // 焦点恢复：详情的 useDialogFocus 记录的原焦点（列表行按钮）会随列表关闭
+  // 从 DOM 移除而无法恢复（审核 Low）——记录「已逾期」雷达卡作为首选焦点；
+  // 续费最后一条/删除会让该卡消失或失焦（复审 Low），再加页面主标题作
+  // 稳定二级兜底。
+  if (showOverdueList.value) {
+    detailReturnFocus.value =
+      document.querySelector('.radar-bar.overdue[tabindex="0"]')
+      || document.querySelector('h1.sr-only')
+    showOverdueList.value = false
+  }
   detailId.value = s.id
+}
+function openOverdueList() {
+  showOverdueList.value = true
 }
 function closeDetail() {
   detailId.value = null
+  // 列表来的详情已关闭：把焦点还给首选兜底（逾期卡）；它已不在 DOM 或
+  // 不可聚焦（如最后一条续费后卡片消失/失焦）时落到二级兜底（页面标题，
+  // 有 tabindex 且始终存在）。所有详情关闭路径（含 detailTarget 失联的
+  // watch 自动关闭）都经此清理 detailReturnFocus（复审 Low）。
+  const fallback = detailReturnFocus.value
+  detailReturnFocus.value = null
+  nextTick(() => {
+    if (fallback && fallback.isConnected && fallback.matches('[tabindex="0"]')) {
+      fallback.focus()
+    } else {
+      document.querySelector('h1.sr-only')?.focus()
+    }
+  })
 }
 function onItemKeydown(e, s) {
   if (e.key === 'Enter' || e.key === ' ') {
@@ -284,7 +342,11 @@ const detailTarget = computed(() => {
   return pool.find((s) => s.id === detailId.value) || null
 })
 // 订阅在操作后被删除/停用导致 detailTarget 失联时，自动关闭弹窗。
-watch(detailTarget, (s) => { if (!s) detailId.value = null })
+// 统一走 closeDetail（审核 Low）：直接置 detailId 会绕过焦点恢复并遗留
+// detailReturnFocus，污染下一次详情关闭的焦点去向。
+watch(detailTarget, (s) => {
+  if (!s && detailId.value !== null) closeDetail()
+})
 
 // 仅最新一批 reload 的结果才写入状态，避免慢请求的旧快照覆盖较新操作结果。
 const reloadGuard = createRequestGuard()
@@ -353,6 +415,10 @@ const budget = computed(() => auth.user?.monthly_budget ?? null)
 const financeIncomplete = computed(() => data.value.financial_completeness?.is_complete === false)
 const missingCurrencies = computed(() => (data.value.financial_completeness?.missing_currencies || []).join('、'))
 const budgetOver = computed(() => budget.value !== null && (data.value.month_spend || 0) > budget.value)
+function overdueText(s) {
+  const d = daysLeft(s)
+  return d === null ? '' : t('dashboard.overdueDays', { n: Math.abs(d) })
+}
 function dueClass(s) {
   const d = daysLeft(s)
   if (d === null) return ''
@@ -360,7 +426,9 @@ function dueClass(s) {
 }
 const radarRaw = computed(() => {
   const base = {
-    overdue: { key: 'overdue', label: t('dashboard.radarOverdue'), count: 0, amount: 0, to: '/reports' },
+    // 已逾期卡点击打开逾期列表弹窗（用户口径：就地查看并标记续费，
+    // 不再跳报表页）；其余雷达卡保持跳转续费日历
+    overdue: { key: 'overdue', label: t('dashboard.radarOverdue'), count: 0, amount: 0, action: openOverdueList },
     d3: { key: 'd3', label: t('dashboard.radar3'), count: 0, amount: 0, to: '/calendar' },
     d7: { key: 'd7', label: t('dashboard.radar7'), count: 0, amount: 0, to: '/calendar' },
     d30: { key: 'd30', label: t('dashboard.radar30'), count: 0, amount: 0, to: '/calendar' }
@@ -374,6 +442,16 @@ const radarRaw = computed(() => {
   }
   return Object.values(base)
 })
+
+// 逾期订阅列表弹窗（用户口径）：数据与雷达同源（buildRenewalRadarEvents
+// 的逾期判定），从 allSubs 实时计算——标记续费后 safeReload 刷新、列表
+// 实时缩短。按逾期天数升序（最久未处理的排前面）。
+const overdueList = computed(() =>
+  buildRenewalRadarEvents(allSubs.value, { includeHidden: true })
+    .filter((s) => (daysLeft(s) ?? 0) < 0)
+    .sort((a, b) => (daysLeft(a) ?? 0) - (daysLeft(b) ?? 0))
+)
+const showOverdueList = ref(false)
 const radarTotal = computed(() => radarRaw.value.reduce((n, b) => n + b.count, 0))
 const radarBars = computed(() => {
   const max = Math.max(1, ...radarRaw.value.map((b) => b.count))
@@ -528,6 +606,14 @@ h3 { margin-top: 0; }
   border-bottom: 1px solid var(--border); font-size: 14px; }
 .line:last-child { border-bottom: none; }
 .event-line { gap: 8px; border-radius: 10px; padding: 8px 6px; }
+/* 逾期列表弹窗：复用 event-line 行结构，整行为按钮 */
+.ol-row { display: flex; justify-content: space-between; align-items: center; width: 100%;
+  gap: 8px; padding: 9px 8px; border: 0; border-radius: 10px; background: none;
+  color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.ol-row:hover { background: color-mix(in srgb, var(--danger) 8%, transparent); }
+.ol-row:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
+.overdue-list { display: flex; flex-direction: column; gap: 2px; margin: 0; padding: 0; list-style: none; }
+.overdue-hint { margin: 12px 0 0; font-size: 12px; }
 .event-line.soon { background: color-mix(in srgb, var(--warning) 8%, transparent); }
 .event-line.overdue { background: color-mix(in srgb, var(--danger) 8%, transparent); }
 .event-signal { width: 8px; height: 8px; border-radius: 999px; background: var(--success); flex-shrink: 0; }

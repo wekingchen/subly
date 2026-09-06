@@ -5,8 +5,14 @@
       v-for="bar in bars"
       :key="bar.key"
       class="radar-bar"
-      :class="[bar.key, { active: bar.count }]"
+      :class="[bar.key, { active: bar.count, clickable: actionable(bar) }]"
       :to="bar.to || undefined"
+      :role="actionable(bar) ? 'button' : undefined"
+      :tabindex="actionable(bar) ? 0 : undefined"
+      :aria-label="actionable(bar) ? bar.label : undefined"
+      @click="onBarActivate(bar, $event)"
+      @keydown.enter="onBarActivate(bar, $event)"
+      @keydown.space="onBarActivate(bar, $event)"
     >
       <span class="rb-count mono-data">{{ bar.count }}</span>
       <span class="rb-label">{{ bar.label }}</span>
@@ -27,6 +33,19 @@
 <script setup>
 import { RouterLink } from 'vue-router'
 import MoneyText from './MoneyText.vue'
+
+// action 卡的可交互条件：有处理器且有内容（count=0 时不呈现伪按钮——
+// 审核 Low：无响应的按钮语义与手形光标会误导鼠标与读屏用户）
+function actionable(bar) {
+  return typeof bar.action === 'function' && bar.count > 0
+}
+// Space 仅在 action 卡上阻止默认滚动（审核 Low：.prevent 无条件执行会
+// 破坏非 action RouterLink 的既有键盘滚动行为）
+function onBarActivate(bar, event) {
+  if (!actionable(bar)) return
+  if (event?.type === 'keydown') event.preventDefault()
+  bar.action()
+}
 
 defineProps({
   bars: { type: Array, default: () => [] },
@@ -52,6 +71,10 @@ defineProps({
   text-decoration: none;
 }
 .rb-count { font-size: 22px; font-weight: 800; letter-spacing: -.03em; line-height: 1; }
+/* action 卡（如「已逾期 → 逾期列表弹窗」）：有内容时呈可点击交互态 */
+.radar-bar.clickable[role="button"] { cursor: pointer; transition: border-color .15s ease, transform .15s ease; }
+.radar-bar.clickable[role="button"]:hover { border-color: var(--primary); transform: translateY(-1px); }
+.radar-bar.clickable[role="button"]:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
 .rb-label, .rb-amt { font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .rb-track { height: 5px; border-radius: 999px; overflow: hidden; background: color-mix(in srgb, var(--border) 62%, transparent); margin-top: 2px; }
 .rb-fill { display: block; height: 100%; border-radius: 999px; }

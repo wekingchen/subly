@@ -71,7 +71,10 @@ const zh = {
     commandCenter: '控制台',
     greeting: '你好，{name} 👋', subtitle: '这是你的订阅总览', catOverview: '分类总览（全部订阅）',
     radarTitle: '续费雷达', radarHero: '已逾期及未来 30 天共有 {n} 个续费信号，预计 {amount}',
-    radarOverdue: '已逾期', radar3: '今天至 3 天', radar7: '4–7 天', radar30: '8–30 天'
+    radarOverdue: '已逾期', radar3: '今天至 3 天', radar7: '4–7 天', radar30: '8–30 天',
+    overdueListTitle: '已逾期订阅（{n}）', overdueListEmpty: '没有已逾期的订阅',
+    overdueListHint: '点击条目查看详情并标记续费；续费后本列表自动更新。',
+    overdueDays: '已逾期 {n} 天'
   },
   sub: {
     add: '添加订阅', edit: '编辑订阅', name: '名称', amount: '金额', currency: '货币',
