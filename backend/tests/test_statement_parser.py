@@ -698,3 +698,72 @@ def test_ccb_credit_limit_split_cells(imap_env=None):
     raw = build_mime(html, ADDR["ccb"], "中国建设银行信用卡电子账单", "ccb-limit-2")
     parsed = parse_email(raw, from_address=ADDR["ccb"])
     assert all(s.credit_limit == 60000.0 for s in parsed.statements)
+
+
+def test_parse_pab_adjustment_refund_reconciliation():
+    """生产反馈回归（2026-09 模板）：平安新增非零「本期调整金额（含退款）」
+    字段时勾稽不得误报 mismatch——退款计入明细负数但不属于还款，负数侧
+    合计对账口径为 payment + |adjustment|。
+    构造：应还 8127.68 = 上期 1597.53 − 已还 1597.53 + NewCharges 8277.41
+    − 调整 149.73；明细 = 消费 8277.41 + 退款 149.73 + 还款 1597.53。"""
+    from statement_fixtures import build_mime
+
+    html = """<html><body>
+    <table><tr><td>本期账单日</td></tr><tr><td>2026-09-13</td></tr>
+    <tr><td>本期还款日</td></tr><tr><td>2026-10-01</td></tr>
+    <tr><td>本期最低应还金额</td><td>&yen; 812.77</td></tr></table>
+    <table><tr>
+      <td>本期应还金额 New Balance</td><td>=</td><td>上期账单金额 Pre Statement</td><td>-</td><td>上期还款金额 Pre Payment</td><td>+</td><td>本期账单金额 New Charges</td>
+    </tr><tr><td></td>
+      <td>&yen; 8,127.68</td><td>&yen; 1,597.53</td><td>&yen; 1,597.53</td><td>&yen; 8,277.41</td><td>&yen; 149.73</td><td>&yen; 0.00</td>
+    </tr></table>
+    <table>
+    <tr><td>交易日期</td><td>记账日期</td><td>交易说明</td><td>人民币金额</td></tr>
+    <tr><td colspan="3">平安示例卡（1151） 主卡</td><td>合计：&yen; 8,127.68</td></tr>
+    <tr><td>2026-09-01</td><td>2026-09-02</td><td>示例商户-消费</td><td>&yen; 8,277.41</td></tr>
+    <tr><td>2026-09-03</td><td>2026-09-03</td><td>示例商户-退款</td><td>&yen; -149.73</td></tr>
+    <tr><td>2026-09-05</td><td>2026-09-05</td><td>一键还款</td><td>&yen; -1,597.53</td></tr>
+    </table>
+    </body></html>"""
+    parsed = parse_email(build_mime(html, ADDR["pab"], "平安信用卡电子账单", "pab-adj"),
+                         from_address=ADDR["pab"])
+    st = parsed.statements[0]
+    assert st.total_due == 8127.68
+    # 旧公式在此场景误报 mismatch（负数合计 1747.26 != payment 1597.53）
+    v = parsed.verify_all()["1151"]
+    assert v["ok"] is True, f"调整（退款）场景勾稽误报: {v}"
+
+
+def test_parse_pab_debit_adjustment_positive_side():
+    """审核 Medium 回归：借记调整（adjustment 为负，恒等式加项）必须计入
+    正数侧——abs() 会把它错归负数侧导致两侧全错但 diff=0。
+    构造：应还 70 = 上期 100 − 已还 100 + NewCharges 50 + 借记调整 20；
+    明细 = 消费 50 + 追加费用 20 + 还款 100。"""
+    from statement_fixtures import build_mime
+
+    html = """<html><body>
+    <table><tr><td>本期账单日</td></tr><tr><td>2026-09-13</td></tr>
+    <tr><td>本期还款日</td></tr><tr><td>2026-10-01</td></tr>
+    <tr><td>本期最低应还金额</td><td>&yen; 7.00</td></tr></table>
+    <table><tr>
+      <td>本期应还金额 New Balance</td><td>=</td><td>上期账单金额 Pre Statement</td><td>-</td><td>上期还款金额 Pre Payment</td><td>+</td><td>本期账单金额 New Charges</td>
+    </tr><tr><td></td>
+      <td>&yen; 70.00</td><td>&yen; 100.00</td><td>&yen; 100.00</td><td>&yen; 50.00</td><td>&yen; -20.00</td><td>&yen; 0.00</td>
+    </tr></table>
+    <table>
+    <tr><td>交易日期</td><td>记账日期</td><td>交易说明</td><td>人民币金额</td></tr>
+    <tr><td colspan="3">平安示例卡（1151） 主卡</td><td>合计：&yen; 70.00</td></tr>
+    <tr><td>2026-09-01</td><td>2026-09-02</td><td>示例商户-消费</td><td>&yen; 50.00</td></tr>
+    <tr><td>2026-09-02</td><td>2026-09-02</td><td>调整-追加费用</td><td>&yen; 20.00</td></tr>
+    <tr><td>2026-09-05</td><td>2026-09-05</td><td>一键还款</td><td>&yen; -100.00</td></tr>
+    </table>
+    </body></html>"""
+    parsed = parse_email(build_mime(html, ADDR["pab"], "平安信用卡电子账单", "pab-debit"),
+                         from_address=ADDR["pab"])
+    st = parsed.statements[0]
+    assert st.total_due == 70.00
+    # 借记调整计入正数侧：pos 期望 50+20=70，负数期望仅还款 100
+    v = parsed.verify_all()["1151"]
+    assert v["ok"] is True, f"借记调整场景勾稽误报: {v}"
+    assert v["expected"] == pytest.approx(170.00)
+    assert v["actual"] == pytest.approx(170.00)

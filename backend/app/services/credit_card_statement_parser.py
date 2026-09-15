@@ -198,14 +198,37 @@ class ParsedEmail:
                 ok = ok and abs(neg - pay_amt) <= tol
             return {"ok": ok, "expected": float(debits + (pay_amt or 0)), "actual": float(pos + neg), "diff": float(debits + (pay_amt or 0) - pos - neg)}
         if self.bank_key == "pab":
+            # 勾稽公式（2026-09 模板实测修正，四期真实账单验证）：
+            #   pos == charges + 借记调整（正向调整，追加费用计入明细正数）
+            #   |neg| == |payment| + 贷记调整（负向调整=退款，计入明细负数）
+            # 平安把退款与还款都记为负数明细（2026-09 模板新增非零「本期调整
+            # 金额（含退款）」= 退款合计；2026-05 样本里支付宝转账还款也无
+            # 「还款」字样被记负数）——负数侧不区分语义、合计对账即可。
+            # 调整值本身带符号：正=贷记调整（退款，恒等式减项）、负=借记调整
+            # （追加费用，恒等式加项）——按方向拆入两侧，方向搞反或符号漏
+            # 处理都会导致两侧全错但 diff=0（审核 Medium）。
             charges = st.summary.get("charges")
             payment = st.summary.get("payment")
+            adjustment = st.summary.get("adjustment") or 0
             if charges is None:
                 return None
-            ok = abs(pos - charges) <= tol
+            # 方向映射（9 月真实样本验证）：恒等式「应还 = 上期 − 已还 +
+            # NewCharges − 调整 + 利息」中调整恒为减项、且报表记为正数
+            # （149.73 = 退款合计）→ 正值调整（退款/冲抵）计入负数侧；
+            # 负值调整（借记追加）在恒等式中等效加项 → 计入正数侧
+            credit_adjustment = max(adjustment, 0)    # 退款/冲抵 → 负数侧
+            debit_adjustment = max(-adjustment, 0)    # 借记追加 → 正数侧
+            ok = abs(pos - (charges + debit_adjustment)) <= tol
+            expected_neg = abs(payment or 0) + credit_adjustment
             if payment is not None:
-                ok = ok and abs(neg - payment) <= tol
-            return {"ok": ok, "expected": float(charges + (payment or 0)), "actual": float(pos + neg), "diff": float(charges + (payment or 0) - pos - neg)}
+                ok = ok and abs(abs(neg) - expected_neg) <= tol
+            expected_pos = float(charges + debit_adjustment)
+            return {
+                "ok": ok,
+                "expected": float(expected_pos + expected_neg),
+                "actual": float(pos + neg),
+                "diff": float((expected_pos - pos) + (expected_neg - neg)),
+            }
         return None
 
 
@@ -778,6 +801,7 @@ def _parse_pab(html: str) -> list[ParsedStatement]:
     # 在行序列上做前后配对。
     pab_total_due = None
     pab_charges = pab_payment = None
+    pab_prev = pab_adjustment = None
     for idx, cells in enumerate(rows):
         if not cells:
             continue
@@ -785,13 +809,17 @@ def _parse_pab(html: str) -> list[ParsedStatement]:
         stripped = re.sub(r"\s+", "", joined)
         if "本期应还金额" in stripped and "=" in stripped and "上期还款金额" in stripped:
             # 公式行后最近的数值行：6 个金额
-            # [本期应还, 上期账单, 上期还款, 本期账单(新增), 调整, 利息]
+            # [本期应还, 上期账单, 上期还款, 本期账单(新增), 调整(含退款), 利息]
+            # 2026-09 起模板新增「本期调整金额（含退款）」非零字段（生产实测：
+            # 9 月账单调整 = 4 笔退款共 149.73），旧版只取 3 值漏掉上期与调整
             for j in range(idx + 1, min(idx + 4, len(rows))):
                 vals = [parse_money(c) for c in rows[j] if c and parse_money(c) is not None]
                 if len(vals) >= 4:
                     pab_total_due = float(vals[0])  # 本期应还金额
-                    pab_charges = float(vals[3])    # 本期账单金额（新增交易）
+                    pab_prev = float(vals[1]) if len(vals) > 1 else None      # 上期账单金额
                     pab_payment = float(vals[2])    # 上期还款金额
+                    pab_charges = float(vals[3])    # 本期账单金额（新增交易）
+                    pab_adjustment = float(vals[4]) if len(vals) > 4 else None  # 本期调整（含退款）
                     break
             continue
         if len(cells) == 1:
@@ -846,7 +874,11 @@ def _parse_pab(html: str) -> list[ParsedStatement]:
         stmt.credit_limit = credit_limit
         stmt.total_due = pab_total_due  # 本期应还金额（此前漏赋值导致前端显示 0）
         stmt.min_due = min_due
-        stmt.summary = {"charges": pab_charges, "payment": pab_payment}
+        stmt.summary = {
+            "charges": pab_charges, "payment": pab_payment,
+            "prev": pab_prev, "adjustment": pab_adjustment,
+            "total_due": pab_total_due,
+        }
     return list(statements.values())
 
 
