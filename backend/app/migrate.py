@@ -23,6 +23,7 @@ _COLUMNS = [
     ("subscriptions", "is_keepalive", "BOOLEAN NOT NULL DEFAULT 0"),
     ("subscriptions", "is_paused", "BOOLEAN NOT NULL DEFAULT 0"),
     ("users", "category_order", "JSON"),
+    ("users", "subscription_order", "JSON"),
     ("users", "monthly_budget", "FLOAT"),
     ("users", "email_verified", "BOOLEAN NOT NULL DEFAULT 1"),
     ("users", "is_approved", "BOOLEAN NOT NULL DEFAULT 1"),
@@ -276,6 +277,64 @@ def run_migrations(engine: Engine) -> None:
                 )
                 raise RuntimeError(
                     "数据库数据迁移失败：无法将旧版 IMAP 配置迁移到 imap_accounts 表"
+                ) from exc
+
+        # 旧版手动拖拽顺序（subscriptions.sort）→ users.subscription_order 一次性
+        # 回填（五审 Medium 3 / 六审 Medium 1-3）：升级后偏好为空会让旧顺序被
+        # 默认日期排序覆盖。判据（六审 Medium 2 修正）：同分类 ≥2 成员且存在
+        # 非零 sort——「全零」才算未拖拽过（拖拽后新增/迁入的成员共享 sort=0，
+        # 互异判据会把合法旧数据永久跳过）。按旧版展示规则 (sort, id) 生成。
+        # 启动期执行：/api/auth/me 首次返回即带偏好（六审 Medium 1），且无并发
+        # 请求竞争（六审 Medium 3）；幂等：仅处理 subscription_order 中尚无
+        # 该分类 key 的用户。
+        if (
+            _table_exists(conn, "users")
+            and _table_exists(conn, "subscriptions")
+            and _column_exists(conn, "users", "subscription_order")
+            and _column_exists(conn, "subscriptions", "category_id")
+            and _column_exists(conn, "subscriptions", "sort")
+        ):
+            try:
+                backfilled = 0
+                users = conn.execute(text("SELECT id, subscription_order FROM users")).all()
+                for uid, raw_order in users:
+                    try:
+                        saved = json.loads(raw_order) if isinstance(raw_order, str) else (raw_order or {})
+                    except (TypeError, ValueError):
+                        saved = {}
+                    if not isinstance(saved, dict):
+                        saved = {}
+                    subs = conn.execute(text(
+                        "SELECT id, category_id, sort FROM subscriptions WHERE user_id = :uid"
+                    ), {"uid": uid}).all()
+                    by_cat: dict[str, list] = {}
+                    for sid, cat_id, sort_v in subs:
+                        key = "none" if cat_id is None else str(cat_id)
+                        by_cat.setdefault(key, []).append((sid, sort_v))
+                    changed = False
+                    for key, members in by_cat.items():
+                        if key in saved or len(members) < 2:
+                            continue
+                        if not any(sort_v for _, sort_v in members):
+                            continue  # 全零 = 未拖拽过，保持默认日期排序
+                        ordered = sorted(members, key=lambda m: (m[1], m[0]))
+                        saved[key] = [m[0] for m in ordered]
+                        changed = True
+                    if changed:
+                        conn.execute(
+                            text("UPDATE users SET subscription_order = :order WHERE id = :uid"),
+                            {"order": json.dumps(saved, ensure_ascii=False), "uid": uid},
+                        )
+                        backfilled += 1
+                if backfilled:
+                    print(f"[migrate] 已回填 {backfilled} 个用户的旧版手动排序偏好")
+            except Exception as exc:  # noqa: BLE001
+                logger.exception(
+                    "event=migration_subscription_order_backfill_failed error_type=%s",
+                    type(exc).__name__,
+                )
+                raise RuntimeError(
+                    "数据库数据迁移失败：无法回填旧版手动排序偏好（subscription_order）"
                 ) from exc
 
 

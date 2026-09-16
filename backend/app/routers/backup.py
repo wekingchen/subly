@@ -197,15 +197,22 @@ def _validated_statements(data: dict) -> list[dict] | None:
     return stmts
 
 
-def _collect_entities(db: Session, user: User) -> dict:
+def _collect_entities(db: Session, user: User) -> tuple[dict, list[Subscription]]:
     """汇总某用户的订阅及其依赖实体（分类/付款方式/捆绑包/自定义货币）。
 
     关键修复：订阅可能挂在「系统预置分类」（is_system=True, user_id=None）下，
     旧逻辑只导出 user_id == 当前用户 的分类，导致这些订阅在恢复时分类丢失。
     这里额外把订阅实际引用到的分类/付款方式（含系统预置的）一并导出，
     恢复端按名称匹配即可正确还原到重新种子化后的系统分类上。
+
+    返回 (entities, subs)：subs 是生成 subscriptions 数组的同一份 ORM 列表
+    （按 id 稳定排序，复审 Medium），供手动排序偏好的 ID→下标转换复用——
+    偏好下标与导出数组必须指向同一份列表，两次独立查询在并发删除或无
+    ORDER BY 时会错位。
     """
-    subs = db.scalars(select(Subscription).where(Subscription.user_id == user.id)).all()
+    subs = db.scalars(
+        select(Subscription).where(Subscription.user_id == user.id).order_by(Subscription.id)
+    ).all()
     statements = db.scalars(
         select(CreditCardStatement)
         .where(CreditCardStatement.user_id == user.id)
@@ -251,7 +258,7 @@ def _collect_entities(db: Session, user: User) -> dict:
     # 账单的备份内卡片 key = 卡片在 credit_cards 数组中的下标（与恢复端一致）
     card_index = {card.id: idx for idx, card in enumerate(credit_cards)}
 
-    return {
+    entities = {
         "categories": [
             {
                 "id": c.id, "name": c.name, "icon": c.icon, "color": c.color,
@@ -281,6 +288,7 @@ def _collect_entities(db: Session, user: User) -> dict:
         ],
         "subscriptions": [_sub_dict(s, history_by_sub.get(s.id, [])) for s in subs],
     }
+    return entities, subs
 
 
 def _parse_date(v):
@@ -401,6 +409,13 @@ def _validate_backup_payload(data: dict) -> None:
     """
     if not isinstance(data, dict):
         raise ValueError("备份格式错误：顶层不是对象")
+    # user 字段（若有）必须是对象或 null（九审 Low 3）：真值非对象（如字符串）
+    # 会让偏好应用分支被 isinstance 检查静默跳过——replace 已删旧数据而偏好
+    # 残留陈旧 ID。缺失/null 归一化为 {}；其余响亮拒绝。
+    if "user" in data:
+        meta = data["user"]
+        if meta is not None and not isinstance(meta, dict):
+            raise ValueError("备份格式错误：user 字段必须是对象或 null")
     # subscriptions 必须存在且为数组：缺失 + replace 会静默清空用户现有订阅
     subs = data.get("subscriptions")
     if subs is None:
@@ -577,10 +592,13 @@ def _restore_entities(
     replace: bool,
     *,
     export_version: int | None = None,
-) -> int:
-    """把一份导出数据恢复到指定用户名下，返回导入的订阅数（不提交事务）。
+) -> tuple[int, dict[int, int], dict[str, str], list[Subscription]]:
+    """把一份导出数据恢复到指定用户名下。
 
-    自定义分类/付款方式/捆绑包按名称匹配现有实体（含系统预置），缺失才新建。
+    返回 (导入订阅数, 导出数组下标 → 新订阅 ID 映射, 旧分类 key → 新分类 key
+    映射, 新建订阅 ORM 列表)。两份映射供恢复手动拖拽排序偏好（subscription_order
+    的订阅 ID 与分类 key 在新实例都会重新分配，审核 Medium）；ORM 列表供旧版
+    备份（无 subscription_order 字段）按 sort 回填手动顺序（七审 Medium 1）。
     """
     subs_in = data.get("subscriptions") or []
     cards_in = _validated_credit_cards(data)
@@ -959,7 +977,107 @@ def _restore_entities(
                 currency=str(r.get("currency") or target_sub.currency),
             ))
 
-    return count
+    # 重映射表：导出数组下标 → 新订阅 ID；旧分类 key → 新分类 key
+    # （供恢复手动排序偏好 subscription_order，审核 Medium）
+    return count, {idx: sub.id for idx, sub in enumerate(new_subs)}, cat_map, new_subs
+
+
+
+def _backfill_order_from_legacy_sort(subs: list[Subscription]) -> dict:
+    """旧版备份的手动顺序推导（七审 Medium 1 / 八审 Medium）：备份不含
+    subscription_order 字段时，恢复出的订阅仍带旧版 sort——按启动迁移相同的
+    规则（同分类 ≥2 成员且存在非零 sort → 按 (sort, id)）推导偏好 dict。
+    纯函数不直接写 user：合并恢复需按 key 并入目标现有偏好而非整体覆盖
+    （八审 Medium）。备份里的 sort 是当时展示顺序的唯一记录，不回填就会
+    永久丢失。"""
+    by_cat: dict[str, list[Subscription]] = {}
+    for s in subs:
+        key = "none" if s.category_id is None else str(s.category_id)
+        by_cat.setdefault(key, []).append(s)
+    saved: dict = {}
+    for key, members in by_cat.items():
+        if len(members) < 2 or not any(m.sort for m in members):
+            continue  # 全零 = 未拖拽过，保持默认日期排序
+        ordered = sorted(members, key=lambda m: (m.sort, m.id))
+        saved[key] = [m.id for m in ordered]
+    return saved
+
+
+def _apply_subscription_order(
+    db: Session,
+    user: User,
+    meta: dict,
+    sub_index_to_id: dict[int, int],
+    cat_key_to_id: dict[str, str] | None = None,
+    replace: bool = False,
+    *,
+    restored_subs: list[Subscription] | None = None,
+) -> None:
+    """恢复用户的手动拖拽排序偏好（subscription_order：分类 key → 有序下标）。
+
+    备份里的两套引用都需要重映射（审核 Medium）：订阅 ID 按恢复时的「导出
+    数组下标 → 新订阅 ID」转换；数字分类 key 按旧分类 ID → 新分类 ID 转换
+    （"none" 保持不变）。指向不存在实体的条目剔除后剩余合法 ID 才写回。
+    仅接受 dict[str, list[int]] 形状（type(idx) is int 排除 bool——八审 Low 2：
+    isinstance 对 True 放行会映射到下标 1 的订阅）。restored_subs 传入本次
+    恢复的订阅 ORM 列表，用于旧版备份（字段缺失而非显式 null）的 legacy
+    sort 回填（七审 Medium 1）。"""
+    has_field = "subscription_order" in meta
+    saved = meta.get("subscription_order")
+    if not has_field:
+        # 旧版备份不含该字段：从恢复出的订阅按旧版 sort 推导手动顺序（该
+        # 备份里 sort 是展示顺序的唯一记录）。replace 覆盖恢复直接采用推导
+        # 结果（全零/单成员 → 无偏好）；合并恢复（八审 Medium）按 key 并入
+        # 目标现有偏好——不丢无关分类，同名分类保留目标现有 ID 顺序、追加
+        # 本次恢复的新成员（与展示端 normalize 的追加语义一致）。
+        if restored_subs is None:
+            if replace:
+                user.subscription_order = None
+            return
+        derived = _backfill_order_from_legacy_sort(restored_subs)
+        if replace:
+            user.subscription_order = derived or None
+            return
+        merged = dict(user.subscription_order or {})
+        for key, ids in derived.items():
+            existing = list(merged.get(key) or [])
+            combined = existing + [sid for sid in ids if sid not in existing]
+            if combined:
+                merged[key] = combined
+        user.subscription_order = merged or None
+        return
+    if not isinstance(saved, dict):
+        # 显式 null/非 dict：该备份明确没有手动顺序。覆盖恢复清空目标偏好；
+        # 合并恢复视为「此次备份没有顺序可合并」，不动目标现有偏好
+        # （八审 Medium：合并语义不得清除目标已有数据）
+        if replace:
+            user.subscription_order = None
+        return
+    cat_map = {str(k): str(v) for k, v in (cat_key_to_id or {}).items()}
+    # replace 恢复会删除并重建订阅：旧偏好里的 ID 全部失效，必须从空开始
+    # 合并（SQLite 可能复用已删 ID，保留旧偏好会错误应用到新订阅——复审 Medium）
+    merged = {} if replace else dict(user.subscription_order or {})
+    for cat_key, indexes in saved.items():
+        if cat_key != "none" and not str(cat_key).isdigit():
+            continue
+        if not isinstance(indexes, list):
+            continue
+        new_key = cat_map.get(cat_key, cat_key) if cat_key != "none" else "none"
+        # type(idx) is int：isinstance 会放行 bool（True==1 映射到下标 1 的
+        # 订阅——八审 Low 2）；越界的陈旧下标仍按既有语义剔除
+        remapped = [sub_index_to_id[idx] for idx in indexes if type(idx) is int and idx in sub_index_to_id]
+        unique = list(dict.fromkeys(remapped))
+        # 始终累加去重（十审 Medium）：备份内多个同名源分类会映射到同一目标
+        # key——replace 时每轮置空会让后一个源 key 覆盖前一个的手动顺序，空
+        # 条目还会误删已累计结果。统一「现有在前 + 新成员去重追加」：replace
+        # 从空 merged 开始（不带恢复前的目标偏好），合并恢复带上目标现有顺序；
+        # 两种模式下备份内部的碰撞语义一致。
+        existing = list(merged.get(new_key) or [])
+        merged[new_key] = existing + [sid for sid in unique if sid not in existing]
+    # 累加后仍为空的 key 清掉（全下标失效的条目不留空数组——空数组语义由
+    # 展示端 normalize 处理，持久化偏好里只保留有内容的 key）
+    merged = {k: v for k, v in merged.items() if v}
+    user.subscription_order = merged or None
 
 
 def _apply_user_preferences(
@@ -1002,6 +1120,7 @@ def _apply_user_preferences(
 @router.get("/export")
 def export_data(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """导出当前用户的全部数据为 JSON。"""
+    entities, orm_subs = _collect_entities(db, user)
     return {
         "export_version": EXPORT_VERSION,
         "app": "Subly",
@@ -1011,8 +1130,13 @@ def export_data(user: User = Depends(get_current_user), db: Session = Depends(ge
             "base_currency": user.base_currency,
             "monthly_budget": user.monthly_budget,
             "theme": user.theme,
+            # 手动顺序里的订阅 ID 转成 subscriptions 数组下标——恢复时新实例
+            # 的订阅 ID 会重新分配，只有下标是稳定引用（审核 Medium）。
+            # 必须用生成导出数组的同一份 ORM 列表（复审 Medium：两次独立
+            # 查询在并发删除或无 ORDER BY 时下标会错位）
+            "subscription_order": _subscription_order_to_indexes(user, orm_subs),
         },
-        **_collect_entities(db, user),
+        **entities,
     }
 
 
@@ -1033,16 +1157,18 @@ def import_data(
         raise HTTPException(400, "备份文件格式不正确：缺少 subscriptions")
 
     try:
-        count = _restore_entities(
+        count, sub_index_to_id, cat_key_to_id, restored_subs = _restore_entities(
             db,
             user,
             data,
             payload.replace,
             export_version=data.get("export_version"),
         )
+        # user 字段已在 _validate_backup_payload 前置校验（对象或 null，九审
+        # Low 3）——这里无条件应用偏好，不再有被 isinstance 跳过的路径
         meta = data.get("user") or {}
-        if isinstance(meta, dict):
-            _apply_user_preferences(db, user, meta)
+        _apply_user_preferences(db, user, meta)
+        _apply_subscription_order(db, user, meta, sub_index_to_id, cat_key_to_id, replace=payload.replace, restored_subs=restored_subs)
     except (ValueError, TypeError, AttributeError) as e:
         db.rollback()
         raise HTTPException(400, f"备份校验失败：{e}")
@@ -1056,8 +1182,34 @@ def import_data(
 # --------------------------------------------------------------------------- #
 # 管理员：整站备份 / 恢复全部成员的数据
 # --------------------------------------------------------------------------- #
-def _user_meta(u: User) -> dict:
-    """整站备份才导出账户信息（含密码哈希，便于完整还原账号）。仅管理员可访问。"""
+def _subscription_order_to_indexes(u: User, subs: list[Subscription]) -> dict | None:
+    """手动顺序偏好导出转换：把有序订阅 ID 列表转成 subscriptions 数组下标。
+
+    恢复时新实例的订阅 ID 会重新分配，只有导出数组下标是稳定引用（审核
+    Medium）。ID 不在当前订阅集合（陈旧引用）的条目剔除。
+    subs 是 ORM 订阅对象列表（审核 Medium：_collect_entities 的 dict 无 id
+    字段，误用会 AttributeError 500）。"""
+    saved = u.subscription_order
+    if not isinstance(saved, dict):
+        return None
+    id_to_index = {s.id: i for i, s in enumerate(subs)}
+    out = {}
+    for key, ids in saved.items():
+        if not isinstance(ids, list):
+            continue
+        indexes = [id_to_index[i] for i in ids if i in id_to_index]
+        if indexes:
+            out[key] = indexes
+    return out or None
+
+
+def _user_meta(u: User, subs: list[Subscription] | None = None) -> dict:
+    """整站备份才导出账户信息（含密码哈希，便于完整还原账号）。仅管理员可访问。
+
+    subs 传入手动排序偏好引用的订阅列表（用于把 ID 转成数组下标）。"""
+    subscription_order = (
+        _subscription_order_to_indexes(u, subs) if subs is not None else None
+    )
     return {
         "username": u.username,
         "email": u.email,
@@ -1070,6 +1222,8 @@ def _user_meta(u: User) -> dict:
         "base_currency": u.base_currency,
         "monthly_budget": u.monthly_budget,
         "category_order": u.category_order,
+        # 已手动拖拽排序的分类 key → 订阅数组下标列表（恢复时按下标 → 新 ID 重映射）
+        "subscription_order": subscription_order,
     }
 
 
@@ -1079,8 +1233,10 @@ def export_all(admin: User = Depends(get_admin_user), db: Session = Depends(get_
     users = db.scalars(select(User).order_by(User.id)).all()
     payload_users = []
     for u in users:
-        block = _collect_entities(db, u)
-        block["user"] = _user_meta(u)
+        # 复用 _collect_entities 返回的同一份 ORM 订阅列表（复审 Medium：
+        # 偏好下标必须与导出数组同源，独立二次查询会错位）
+        block, orm_subs = _collect_entities(db, u)
+        block["user"] = _user_meta(u, orm_subs)
         payload_users.append(block)
     activity.log(
         "backup.export_all", f"管理员导出整站备份（{len(payload_users)} 个用户）", user=admin
@@ -1152,14 +1308,20 @@ def import_all(
                 existing_users[username] = target
                 created_users += 1
 
-            total_subs += _restore_entities(
+            # 审核 Medium：累计各用户的导入数——元组赋值直接覆盖会把
+            # total_subs 变成「最后一个用户」的数量，响应与活动日志失真
+            # 审核 Medium：累计各用户的导入数——元组赋值直接覆盖会把
+            # total_subs 变成「最后一个用户」的数量，响应与活动日志失真
+            imported_count, sub_index_to_id, cat_key_to_id, restored_subs = _restore_entities(
                 db,
                 target,
                 ub,
                 payload.replace,
                 export_version=data.get("export_version"),
             )
+            total_subs += imported_count
             _apply_user_preferences(db, target, meta, label=username)
+            _apply_subscription_order(db, target, meta, sub_index_to_id, cat_key_to_id, replace=payload.replace, restored_subs=restored_subs)
     except (ValueError, TypeError, AttributeError) as e:
         db.rollback()
         raise HTTPException(400, f"备份校验失败：{e}")

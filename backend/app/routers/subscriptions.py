@@ -4,7 +4,9 @@ import time
 from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel
+from typing import Annotated
+
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
@@ -12,7 +14,7 @@ from app import activity, icon_library
 from app.billing import add_cycle, compute_next_renewal, is_subscription_current
 from app.database import get_db
 from app.deps import get_current_user
-from app.models import NotificationLog, NotificationOutbox, RenewalHistory, Subscription, User
+from app.models import Category, NotificationLog, NotificationOutbox, RenewalHistory, Subscription, User
 from app.schemas import SubscriptionIn, SubscriptionOut, SubscriptionUpdate, sanitize_url
 from app.security import verify_password
 from app.services import exchange
@@ -173,6 +175,11 @@ def get_sub(sub_id: int, user: User = Depends(get_current_user), db: Session = D
     return _to_out(db, sub, user.base_currency)
 
 
+def _get_sub_category_key(sub: Subscription) -> str:
+    """订阅的分类 key（数字 id 字符串或 "none"），与前端 getSubscriptionCategoryKey 同语义。"""
+    return "none" if sub.category_id is None else str(sub.category_id)
+
+
 @router.put("/{sub_id}", response_model=SubscriptionOut)
 def update_sub(
     sub_id: int,
@@ -205,14 +212,57 @@ def update_sub(
         and final_end_date < final_start_date
     ):
         raise HTTPException(400, "结束日期不能早于开始日期")
-    for k, v in changes.items():
-        setattr(sub, k, v)
-    if sub.billing_type == "one_time":
-        sub.next_renewal_date = None
-        sub.end_date = None
-        sub.auto_renew = False
-    apply_keepalive_scope(db, sub)
-    db.commit()
+    # 迁移分类时偏好清理需 BEGIN IMMEDIATE 写锁（四审 Medium：普通事务的旧
+    # 快照整对象写回会覆盖并发 reorder 刚保存的其他分类顺序）。changes 的
+    # setattr 必须放进锁内每次尝试（五审 Medium 1：rollback 会撤销锁外写入
+    # 并过期对象——重试不重放 setattr 会静默提交旧数据，API 却返回 200）。
+    migrating = "category_id" in changes and sub.id is not None
+    import time as _time
+
+    for attempt in range(3 if migrating else 1):
+        try:
+            if migrating:
+                db_connection = db.connection()
+                db_connection.exec_driver_sql("BEGIN IMMEDIATE")
+            try:
+                if migrating:
+                    db.expire(user, ["subscription_order"])
+                for k, v in changes.items():
+                    setattr(sub, k, v)
+                if migrating:
+                    # 从旧分类的手动排序偏好中移除该 ID——残留引用与新分类的
+                    # 默认排序冲突。目标分类偏好不自动追加：迁入成员按目标
+                    # 分类的既有语义展示（有手动记录则追加，无则默认日期排序）。
+                    saved = dict(user.subscription_order or {})
+                    changed = False
+                    for key in list(saved.keys()):
+                        ids = saved[key]
+                        if key != _get_sub_category_key(sub) and isinstance(ids, list) and sub.id in ids:
+                            ids = [i for i in ids if i != sub.id]
+                            if ids:
+                                saved[key] = ids
+                            else:
+                                del saved[key]
+                            changed = True
+                    if changed:
+                        user.subscription_order = saved or None
+                if sub.billing_type == "one_time":
+                    sub.next_renewal_date = None
+                    sub.end_date = None
+                    sub.auto_renew = False
+                apply_keepalive_scope(db, sub)
+                db.commit()
+                break
+            except ValueError:
+                db.rollback()
+                raise
+        except ValueError:
+            raise
+        except Exception:
+            db.rollback()
+            if attempt == (2 if migrating else 0):
+                raise
+            _time.sleep(0.05 * (attempt + 1))
     db.refresh(sub)
     return _to_out(db, sub, user.base_currency)
 
@@ -308,8 +358,109 @@ def list_renewals(
 
 
 class ReorderIn(BaseModel):
-    # 同一分类内、按新顺序排列的订阅 id 列表
-    ordered_ids: list[int]
+    # 同一分类内、按新顺序排列的订阅 id 列表。strict=True 拒绝 Pydantic 的
+    # 宽松转换（七审 Low 4：bool→int 会把 [true] 变成 [1] 错误重排）。
+    # 允许空列表：无 category_key 的旧客户端把空列表当无操作成功（审核
+    # Low 4——min_length=1 会用 422 破坏既有行为）；带 category_key 的空列表
+    # 在端点里按 400 拒绝。
+    ordered_ids: list[Annotated[int, Field(strict=True, gt=0)]]
+
+    @field_validator("ordered_ids")
+    @classmethod
+    def validate_ordered_ids(cls, value):
+        if len(set(value)) != len(value):
+            raise ValueError("订阅 ID 重复")
+        return value
+    # 分类 key（"none" 或分类 id 的规范十进制字符串）：用于在同一事务里原子
+    # 合并用户偏好中的手动排序记录（审核 Medium：reorder + 偏好保存拆两个
+    # 请求存在半持久化与并发覆盖）。前导零（"01"）在端点里规范化为实际
+    # 分类 id 的 str 形式，避免保存出前端永远不会匹配的 key。
+    category_key: str | None = None
+
+
+def _validate_reorder_category(db, user: User, category_key: str, ordered_ids: list[int]) -> None:
+    """reorder 语义校验（复审 Low 4 → 三审 Low 3 收口进锁内，AGENTS「失败要响
+    亮」）：key 必须是 "none" 或当前用户可用的已存在分类；每个订阅 ID 必须
+    属于当前用户，且其 category_id 与 key 对应（"none" 对应无分类订阅）。
+    在 BEGIN IMMEDIATE 成功后调用（锁内 expire 重读，消灭「校验→拿锁」
+    TOCTOU：期间分类被删/订阅被迁移的提交会被回滚拒绝）。违反一律
+    ValueError → 400，不再静默成功——静默成功会让调用方本地合并一个服务器
+    不存在的顺序，刷新即回退；合法形状但语义无效的 key 还会永久占用偏好
+    JSON。"""
+    # 锁内重读：expire 必须覆盖校验涉及的所有实体——SQLAlchemy 的
+    # select 也会返回 identity map 里的陈旧对象（实测回归：只 expire user
+    # 时锁内看到的订阅 category_id 仍是迁移前的旧值）
+    db.expire(user, ["subscription_order"])
+    if category_key != "none":
+        if not category_key.isdigit():
+            raise ValueError("分类 key 非法")
+        cat_id = int(category_key)
+        cached_cat = db.get(Category, cat_id)
+        if cached_cat is not None:
+            db.expire(cached_cat)
+        cat = db.scalar(select(Category).where(Category.id == cat_id))
+        if cat is None or (cat.user_id is not None and cat.user_id != user.id):
+            raise ValueError("分类不存在")
+    else:
+        cat = None
+    for sid in ordered_ids:
+        cached_sub = db.get(Subscription, sid)
+        if cached_sub is not None:
+            db.expire(cached_sub)
+        sub = db.scalar(select(Subscription).where(Subscription.id == sid))
+        if not sub or sub.user_id != user.id:
+            raise ValueError(f"订阅 {sid} 不存在")
+        expected = cat.id if cat is not None else None
+        if sub.category_id != expected:
+            raise ValueError("订阅分类与目标分类不一致")
+
+
+def _merge_subscription_order(db, user: User, category_key: str, ordered_ids: list[int]) -> None:
+    """把某分类的手动排序合并进用户偏好 subscription_order（dict：分类 key
+    → 有序订阅 ID 列表）。语义校验在锁内每次尝试时执行（三审 Low 3：
+    TOCTOU 收口），失败按业务拒绝回滚而非锁冲突重试（审核 Low：无约束
+    dict 会保存异常形状导致前端恢复崩溃）。"""
+    if len(set(ordered_ids)) != len(ordered_ids):
+        raise ValueError("订阅 ID 重复")
+    # 并发合并（审核 Medium）：双标签页同时对不同分类拖拽是真实的读-改-写
+    # 竞争——普通事务下两个请求可读到相同旧 JSON 后先后覆盖（无异常、重试
+    # 不触发）。用 BEGIN IMMEDIATE 获取写锁建立互斥：拿到锁的请求独占完成
+    # 「重读偏好 → 语义校验 → 更新 sort → 合并 key → 提交」全流程；拿不到
+    # 锁的请求等 busy_timeout 后重试，每次重试重新执行完整操作（复审 Medium：
+    # 只重试偏好会半持久化；复审 Low：rollback 释放锁，重试必须重新拿锁）。
+    import time as _time
+
+    for attempt in range(3):
+        try:
+            db_connection = db.connection()
+            # 写锁：BEGIN IMMEDIATE 拒绝并发写事务进入，busy_timeout 5s 内等待
+            db_connection.exec_driver_sql("BEGIN IMMEDIATE")
+            try:
+                # 锁内语义校验：expire 强制重读分类/订阅/偏好，锁前提交的
+                # 迁移/删除在此可见（三审 Low 3）
+                _validate_reorder_category(db, user, category_key, ordered_ids)
+                saved = dict(user.subscription_order or {})
+                saved[category_key] = ordered_ids
+                user.subscription_order = saved
+                # 锁内按 sid 重取——校验与写入之间被并发删除的订阅由 db.get
+                # 为 None 跳过（与既有宽容行为一致）
+                for index, sid in enumerate(ordered_ids):
+                    sub = db.get(Subscription, sid)
+                    if sub and sub.user_id == user.id:
+                        sub.sort = index
+                db.commit()
+            except ValueError:
+                # 业务拒绝：回滚且不重试（重试同样失败）
+                db.rollback()
+                raise
+            return
+        except ValueError:
+            raise
+        except Exception:
+            db.rollback()
+            if attempt == 2:
+                raise
+            _time.sleep(0.05 * (attempt + 1))
 
 
 @router.post("/reorder")
@@ -318,17 +469,107 @@ def reorder_subs(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """保存同一分类内订阅的拖拽顺序（按列表下标写入 sort）。"""
-    for index, sid in enumerate(payload.ordered_ids):
-        sub = db.get(Subscription, sid)
-        if sub and sub.user_id == user.id:
-            sub.sort = index
-    db.commit()
+    """保存同一分类内订阅的拖拽顺序（按列表下标写入 sort），并在同一事务
+    中原子合并用户偏好的手动排序记录（供前端恢复拖拽顺序，不被默认日期
+    排序覆盖）。"""
+    if not payload.category_key:
+        # 无 category_key（旧客户端）：从订阅集合推断唯一分类 key 后走同一
+        # merge 事务（七审 Medium 2：只写 sort 会让旧客户端的拖拽与新客户端
+        # 的偏好持久化分叉——新客户端刷新后按旧偏好渲染）。跨分类混合或含
+        # 无效 ID 响亮拒绝（无法可靠推断 key，写回会污染其他分类）；空列表
+        # 保持旧客户端的无操作成功语义。
+        if not payload.ordered_ids:
+            return {"ok": True}
+        try:
+            # 全程在写锁内过滤+推断+合并（九审 Low 2：锁外过滤、锁内校验之间
+            # 的删除窗口会让兼容分支重新 400）。BEGIN IMMEDIATE 后 expire 强制
+            # 重读，锁前提交的删除在此可见：已删除的 ID 跳过（陈旧列表语义），
+            # 他人订阅仍拒绝（越权非陈旧），推断唯一 key 后合并。
+            import time as _time
+
+            for attempt in range(3):
+                try:
+                    db_connection = db.connection()
+                    db_connection.exec_driver_sql("BEGIN IMMEDIATE")
+                    try:
+                        db.expire(user, ["subscription_order"])
+                        own_ids = []
+                        keys = set()
+                        for sid in payload.ordered_ids:
+                            cached = db.get(Subscription, sid)
+                            if cached is not None:
+                                db.expire(cached)
+                            sub = db.scalar(select(Subscription).where(Subscription.id == sid))
+                            if sub is None:
+                                continue  # 已删除：跳过（陈旧列表）
+                            if sub.user_id != user.id:
+                                raise ValueError(f"订阅 {sid} 不存在")
+                            own_ids.append(sid)
+                            keys.add("none" if sub.category_id is None else str(sub.category_id))
+                        if not own_ids:
+                            db.commit()
+                            return {"ok": True}  # 全部已失效：无操作成功（旧语义）
+                        if len(keys) > 1:
+                            raise ValueError("旧版排序接口仅支持同一分类内的订阅")
+                        saved = dict(user.subscription_order or {})
+                        key = keys.pop()
+                        saved[key] = own_ids
+                        user.subscription_order = saved
+                        for index, sid in enumerate(own_ids):
+                            sub = db.get(Subscription, sid)
+                            if sub and sub.user_id == user.id:
+                                sub.sort = index
+                        db.commit()
+                        return {"ok": True}
+                    except ValueError:
+                        db.rollback()
+                        raise
+                except ValueError:
+                    raise
+                except Exception:
+                    db.rollback()
+                    if attempt == 2:
+                        raise
+                    _time.sleep(0.05 * (attempt + 1))
+        except ValueError as e:
+            db.rollback()
+            raise HTTPException(400, str(e))
+        return {"ok": True}
+    if not payload.ordered_ids:
+        raise HTTPException(400, "订阅 ID 列表不能为空")
+    # key 规范化（七审 Low 4）：前导零 "01" 与 "1" 必须落到同一个偏好 key——
+    # 前端从 category_id 生成的是规范十进制形式，"01" 保存后永远不会被匹配。
+    normalized_key = payload.category_key
+    if normalized_key != "none" and normalized_key.isdigit():
+        normalized_key = str(int(normalized_key))
+    try:
+        _merge_subscription_order(db, user, normalized_key, payload.ordered_ids)
+    except ValueError as e:
+        db.rollback()
+        raise HTTPException(400, str(e))
     return {"ok": True}
 
 
 class DeleteIn(BaseModel):
     password: str
+
+
+def _purge_subscription_from_order(saved: dict, sub_id: int) -> tuple[dict, bool]:
+    """从偏好 dict 中清除指定订阅 ID 的纯逻辑（三审 Medium：purge 与 DELETE
+    必须在同一写锁事务内，函数改为无副作用便于锁内复用与单测）。
+    返回 (清理后的 dict, 是否有变化)；清理后为空的 key 一并移除——空 key
+    会让该分类永久进入手动排序路径。"""
+    changed = False
+    for key in list(saved.keys()):
+        ids = saved[key]
+        if isinstance(ids, list) and sub_id in ids:
+            ids = [i for i in ids if i != sub_id]
+            if ids:
+                saved[key] = ids
+            else:
+                del saved[key]
+            changed = True
+    return saved, changed
 
 
 @router.delete("/{sub_id}")
@@ -345,11 +586,34 @@ def delete_sub(
     if not sub or sub.user_id != user.id:
         raise HTTPException(404, "订阅不存在")
     name = sub.name
-    # SQLite 默认未开 PRAGMA foreign_keys，显式清理关联审计与队列，避免 ID 复用污染。
-    db.execute(delete(NotificationLog).where(NotificationLog.subscription_id == sub_id))
-    db.execute(delete(NotificationOutbox).where(NotificationOutbox.subscription_id == sub_id))
-    db.execute(delete(RenewalHistory).where(RenewalHistory.subscription_id == sub_id))
-    db.delete(sub)
-    db.commit()
+    # 单一写锁事务原子完成「重读偏好 → purge → 删除关联 → 删除订阅」（三审
+    # Medium：purge 与 DELETE 拆两个事务存在并发窗口——等待中的 reorder 可在
+    # purge 提交后、DELETE 前抢到写锁把该 ID 写回偏好，ID 复用后新订阅继承
+    # 旧位置）。锁内无条件 expire 重读，不依据会话缓存提前返回。pysqlite 在
+    # 首条 DELETE 前会隐式开事务导致 BEGIN IMMEDIATE 失败，因此锁必须最先拿。
+    import time as _time
+
+    for attempt in range(3):
+        try:
+            db_connection = db.connection()
+            db_connection.exec_driver_sql("BEGIN IMMEDIATE")
+            db.expire(user, ["subscription_order"])
+            saved, changed = _purge_subscription_from_order(
+                dict(user.subscription_order or {}), sub_id
+            )
+            if changed:
+                user.subscription_order = saved or None
+            # SQLite 默认未开 PRAGMA foreign_keys，显式清理关联审计与队列，避免 ID 复用污染。
+            db.execute(delete(NotificationLog).where(NotificationLog.subscription_id == sub_id))
+            db.execute(delete(NotificationOutbox).where(NotificationOutbox.subscription_id == sub_id))
+            db.execute(delete(RenewalHistory).where(RenewalHistory.subscription_id == sub_id))
+            db.delete(sub)
+            db.commit()
+            break
+        except Exception:
+            db.rollback()
+            if attempt == 2:
+                raise
+            _time.sleep(0.05 * (attempt + 1))
     activity.log("subscription.delete", f"删除订阅「{name}」", user=user, level="warn")
     return {"ok": True}

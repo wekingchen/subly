@@ -339,7 +339,8 @@ def test_feed_token_is_excluded_from_user_backup():
         )
         db.commit()
 
-        rendered = json.dumps(backup._collect_entities(db, user), ensure_ascii=False)
+        entities, _subs = backup._collect_entities(db, user)
+        rendered = json.dumps(entities, ensure_ascii=False)
 
         assert "calendar_feed" not in rendered
         assert "token_hash" not in rendered

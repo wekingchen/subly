@@ -250,7 +250,7 @@ def test_backup_v4_statement_roundtrip_with_card_mapping(sync_env):
     ic.imaplib.IMAP4_SSL = FakeClient
     client.post(f"/api/imap/accounts/{account.id}/sync-statements")
 
-    exported = _collect_entities(db, user)
+    exported, _subs = _collect_entities(db, user)
     assert exported["credit_card_statements"][0]["card_key"] == 0  # 数组下标而非 DB id
     assert exported["credit_card_statements"][0]["source_email"] == account.email
 

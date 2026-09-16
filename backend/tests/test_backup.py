@@ -1,6 +1,7 @@
 from datetime import date, datetime
 
 import pytest
+from fastapi import HTTPException
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
@@ -124,7 +125,7 @@ def test_collect_entities_includes_system_dependencies_used_by_subscriptions():
         ))
         db.commit()
 
-        exported = backup._collect_entities(db, user)
+        exported, _ = backup._collect_entities(db, user)
         assert [c["name"] for c in exported["categories"]] == ["系统分类"]
         assert [p["name"] for p in exported["payment_methods"]] == ["系统付款"]
         assert [c["code"] for c in exported["currencies"]] == ["ABC"]
@@ -153,7 +154,7 @@ def test_collect_entities_excludes_other_users_private_entities():
         ))
         db.commit()
 
-        exported = backup._collect_entities(db, alice)
+        exported, _ = backup._collect_entities(db, alice)
         names_c = [c["name"] for c in exported["categories"]]
         names_p = [p["name"] for p in exported["payment_methods"]]
         assert "bob私有分类" not in names_c  # 不打包他人私有分类
@@ -213,7 +214,7 @@ def test_restore_entities_reuses_named_entities_and_replaces_old_subscriptions(m
             ],
         }
 
-        assert backup._restore_entities(db, user, payload, replace=True) == 2
+        assert backup._restore_entities(db, user, payload, replace=True)[0] == 2
         db.commit()
 
         names = [s.name for s in db.scalars(select(Subscription).where(Subscription.user_id == user.id)).all()]
@@ -257,7 +258,7 @@ def test_restore_entities_keeps_keepalive_only_for_carrier_categories(monkeypatc
             ],
         }
 
-        assert backup._restore_entities(db, user, payload, replace=False) == 4
+        assert backup._restore_entities(db, user, payload, replace=False)[0] == 4
         db.commit()
 
         keepalive = db.scalar(select(Subscription).where(Subscription.name == "保号卡"))
@@ -290,7 +291,7 @@ def test_restore_entities_prefers_user_owned_entities_when_names_collide():
             "subscriptions": [{"name": "重名实体订阅", "category_id": 1, "payment_method_id": 2}],
         }
 
-        assert backup._restore_entities(db, user, payload, replace=False) == 1
+        assert backup._restore_entities(db, user, payload, replace=False)[0] == 1
         db.commit()
         sub = db.scalar(select(Subscription).where(Subscription.name == "重名实体订阅"))
         assert sub.category_id == user_cat.id
@@ -314,7 +315,7 @@ def test_restore_entities_keeps_existing_subscriptions_when_not_replacing():
         ))
         db.commit()
 
-        count = backup._restore_entities(db, user, {"subscriptions": [{"name": "新增订阅"}]}, replace=False)
+        count = backup._restore_entities(db, user, {"subscriptions": [{"name": "新增订阅"}]}, replace=False)[0]
         db.commit()
 
         assert count == 1
@@ -417,7 +418,7 @@ def test_collect_entities_exports_renewal_history_nested_in_subscription():
         ])
         db.commit()
 
-        exported = backup._collect_entities(db, user)
+        exported, _ = backup._collect_entities(db, user)
         hist = exported["subscriptions"][0]["renewal_history"]
         assert len(hist) == 2
         assert hist[0]["next_renewal_date"] == "2024-02-29"
@@ -569,7 +570,7 @@ def test_backup_roundtrips_is_paused_field():
         ))
         db.commit()
 
-        exported = backup._collect_entities(db, user)
+        exported, _ = backup._collect_entities(db, user)
         assert exported["subscriptions"][0]["is_paused"] is True
 
         # 恢复到新用户
@@ -717,7 +718,7 @@ def test_backup_roundtrips_end_date_and_normalizes_one_time():
             ]
         )
         db.commit()
-        exported = backup._collect_entities(db, user)
+        exported, _ = backup._collect_entities(db, user)
 
         other = add_user(db, "bob")
         backup._restore_entities(db, other, exported, replace=False)
@@ -828,7 +829,7 @@ def test_backup_roundtrips_manual_currency_rate_and_accepts_old_backup(monkeypat
         )
         db.commit()
 
-        exported = backup._collect_entities(db, user)
+        exported, _ = backup._collect_entities(db, user)
         currency_data = exported["currencies"][0]
         assert currency_data["rate_to_base"] == pytest.approx(3.5)
         assert currency_data["rate_base"] == "USD"
@@ -1260,7 +1261,7 @@ def test_backup_roundtrips_statement_repaid_flag():
             message_id="bk-repaid",
         )
 
-        exported = backup._collect_entities(db, user)
+        exported, _ = backup._collect_entities(db, user)
         assert exported["credit_card_statements"][0]["is_repaid"] is True
         assert exported["credit_card_statements"][0]["repaid_at"] is not None
 
@@ -1328,6 +1329,453 @@ def test_backup_rejects_invalid_statement_repaid_at():
                     "repaid_at": "not-a-timestamp",
                 }]
             }, replace=False)
+    finally:
+        db.close()
+        engine.dispose()
+
+
+# ---------- subscription_order 偏好（手动拖拽排序）的导出/恢复 ----------
+
+def test_subscription_order_backup_roundtrip_remaps_ids(monkeypatch):
+    """审核 Medium 回归：手动拖拽排序偏好（subscription_order）的完整导出
+    → 恢复往返。源/目标订阅 ID 与分类 ID 均发生变化时：
+    - 订阅 ID 按「导出数组下标 → 新订阅 ID」重映射；
+    - 数字分类 key 按「旧分类 ID → 新分类 ID」重映射（cat_map）；
+    - "none" 保持不变。"""
+    import json as _json
+
+    monkeypatch.setattr(backup, "compute_next_renewal", lambda start, cycle, count: date(2030, 5, 1))
+    db, engine = make_db()
+    try:
+        user = add_user(db, username="roundtrip")
+        cat_old = Category(user_id=None, name="旧分类", is_system=True)
+        db.add(cat_old)
+        db.flush()
+        sub_far = Subscription(user_id=user.id, name="远", amount=1, currency="CNY",
+                               category_id=cat_old.id, start_date=date(2024, 1, 1),
+                               next_renewal_date=date(2024, 3, 1))
+        sub_near = Subscription(user_id=user.id, name="近", amount=2, currency="CNY",
+                                category_id=cat_old.id, start_date=date(2024, 1, 1),
+                                next_renewal_date=date(2024, 2, 1))
+        db.add_all([sub_far, sub_near])
+        db.flush()  # 先落库拿到真实 ID，偏好必须引用已存在的 ID（陈旧 ID 导出时被剔除）
+        user.subscription_order = {str(cat_old.id): [sub_near.id, sub_far.id], "none": [sub_far.id]}
+        db.commit()
+
+        # 导出（export_data 的 user 块 + 实体）——subscription_order 已转为下标
+        exported = backup.export_data(user, db)
+        user_meta = exported["user"]
+        assert user_meta["subscription_order"] == {str(cat_old.id): [1, 0], "none": [0]}
+
+        # 恢复到全新用户（新实例 ID 全部变化）
+        target = add_user(db, username="target")
+        monkeypatch.setattr(backup, "compute_next_renewal", lambda start, cycle, count: date(2030, 5, 1))
+        meta = _json.loads(_json.dumps(user_meta))  # 模拟 JSON 往返
+        count, index_to_id, cat_map, _subs = backup._restore_entities(db, target, exported, replace=False)
+        backup._apply_subscription_order(db, target, meta, index_to_id, cat_map)
+        db.commit()
+
+        # 新订阅按导出下标对应：新用户第一只 = 远（index 0），第二只 = 近（index 1）
+        restored = sorted(db.scalars(
+            select(Subscription).where(Subscription.user_id == target.id)
+        ).all(), key=lambda s: s.id)
+        new_far, new_near = restored[0], restored[1]
+        # 恢复后的手动顺序：新分类 key 下 [近.id, 远.id]（原偏好 [近, 远]）
+        new_cat_key = str(new_far.category_id)
+        assert target.subscription_order == {new_cat_key: [new_near.id, new_far.id], "none": [new_far.id]}
+        assert count == 2
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_subscription_order_replace_import_clears_stale_preference(monkeypatch):
+    """审核 Medium 回归：replace 恢复从空偏好开始合并——目标账户旧偏好
+    （引用旧订阅）被清除，SQLite 复用已删 ID 时不会错误应用旧顺序；
+    旧版备份不含 subscription_order 字段时同样清空。"""
+    db, engine = make_db()
+    try:
+        target = add_user(db, username="target")
+        # 目标已有旧手动顺序（引用即将被 replace 删除的订阅）
+        old_sub = Subscription(user_id=target.id, name="旧", amount=1, currency="CNY",
+                               start_date=date(2024, 1, 1), next_renewal_date=date(2024, 2, 1))
+        db.add(old_sub)
+        target.subscription_order = {"none": [old_sub.id]}
+        db.commit()
+
+        monkeypatch.setattr(backup, "compute_next_renewal", lambda start, cycle, count: date(2030, 5, 1))
+        # 新备份不含 subscription_order 字段（旧版备份形态）
+        payload = {"subscriptions": [{"name": "新订阅", "amount": 5, "currency": "CNY",
+                                      "start_date": "2026-01-01"}]}
+        backup._restore_entities(db, target, payload, replace=True)
+        backup._apply_user_preferences(db, target, {})
+        backup._apply_subscription_order(db, target, {}, {0: old_sub.id}, None, replace=True)
+        db.commit()
+
+        db.expire_all()
+        assert target.subscription_order is None  # 旧偏好已清空
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_subscription_order_import_skips_stale_indexes(monkeypatch):
+    """恢复时指向不存在下标的条目剔除、合法下标保留、去重——脏偏好不破坏恢复。"""
+    monkeypatch.setattr(backup, "compute_next_renewal", lambda start, cycle, count: date(2030, 5, 1))
+    db, engine = make_db()
+    try:
+        target = add_user(db, username="target")
+        meta = {"subscription_order": {"none": [0, 99, 0, 1]}}  # 99 越界、0 重复
+        payload = {"subscriptions": [
+            {"name": "S1", "amount": 1, "currency": "CNY", "start_date": "2026-01-01"},
+            {"name": "S2", "amount": 2, "currency": "CNY", "start_date": "2026-01-01"},
+        ]}
+        count, index_to_id, cat_map, _subs = backup._restore_entities(db, target, payload, replace=False)
+        backup._apply_subscription_order(db, target, meta, index_to_id, cat_map)
+        db.commit()
+        assert target.subscription_order == {"none": [1, 2]}  # 仅合法下标、去重
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_import_all_accumulates_subscription_count_across_users(monkeypatch):
+    """审核 Medium 3 回归：整站恢复多用户时 imported 必须是各用户之和——
+    元组赋值直接覆盖 total_subs 会把响应/活动日志变成「最后一个用户」的数量。"""
+    monkeypatch.setattr(backup, "compute_next_renewal", lambda start, cycle, count: date(2030, 5, 1))
+    logged = []
+    monkeypatch.setattr(backup.activity, "log", lambda *a, **kw: logged.append(kw.get("message") or (a[1] if len(a) > 1 else "")))
+    db, engine = make_db()
+    try:
+        admin = add_user(db, username="admin")
+        admin.is_admin = True
+        db.commit()
+
+        def block(username, n):
+            return {
+                "user": {"username": username, "email": f"{username}@example.com"},
+                "subscriptions": [
+                    {"name": f"{username}-S{i}", "amount": 1, "currency": "CNY", "start_date": "2026-01-01"}
+                    for i in range(n)
+                ],
+            }
+
+        result = backup.import_all(
+            backup.ImportAllIn(data={"users": [block("alice", 3), block("bob", 5)]}),
+            admin=admin,
+            db=db,
+        )
+        assert result["imported"] == 8, f"应为 3+5=8，实际 {result['imported']}"
+        assert result["created_users"] == 2
+        assert result["users"] == 2
+        # 活动日志同样报告累计值
+        assert any("8" in str(m) for m in logged), f"日志应含累计 8：{logged}"
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_legacy_backup_restore_backfills_order_from_sort(monkeypatch):
+    """七审 Medium 1 回归：旧版备份不含 subscription_order 字段时，恢复必须
+    从备份里的 sort 回填手动顺序——否则升级前的拖拽顺序在恢复后永久丢失。
+    显式 null 表示「确实没有手动顺序」，清空而非回填（新备份里的残留 sort
+    不构成偏好）。"""
+    monkeypatch.setattr(backup, "compute_next_renewal", lambda start, cycle, count: date(2030, 5, 1))
+    db, engine = make_db()
+    try:
+        target = add_user(db, username="target")
+        cat_a = Category(user_id=None, name="系统A", is_system=True)
+        db.add(cat_a)
+        db.flush()
+        # 旧版备份：同分类两个成员，sort=[0,1]（用户拖成「远期在前」）
+        legacy = {
+            "categories": [{"id": cat_a.id, "name": "系统A", "is_system": True}],
+            "subscriptions": [
+                {"name": "远期", "amount": 1, "currency": "CNY", "category_id": cat_a.id,
+                 "start_date": "2026-01-01", "next_renewal_date": "2026-03-01", "sort": 0},
+                {"name": "近期", "amount": 1, "currency": "CNY", "category_id": cat_a.id,
+                 "start_date": "2026-01-01", "next_renewal_date": "2026-02-01", "sort": 1},
+                {"name": "未拖甲", "amount": 1, "currency": "CNY",
+                 "start_date": "2026-01-01", "next_renewal_date": "2026-02-01", "sort": 0},
+                {"name": "未拖乙", "amount": 1, "currency": "CNY",
+                 "start_date": "2026-01-01", "next_renewal_date": "2026-03-01", "sort": 0},
+            ],
+        }
+        count, index_to_id, cat_map, restored = backup._restore_entities(
+            db, target, legacy, replace=True
+        )
+        backup._apply_subscription_order(
+            db, target, {}, index_to_id, cat_map, replace=True, restored_subs=restored
+        )
+        db.commit()
+        db.expire_all()
+
+        fresh = db.get(User, target.id)
+        order = fresh.subscription_order or {}
+        restored_by_name = {s.name: s.id for s in restored}
+        # 拖拽过的分类按旧 sort 回填（远期在前）
+        assert order[str(cat_a.id)] == [restored_by_name["远期"], restored_by_name["近期"]]
+        # 全零未拖拽的分类不写 key
+        assert "none" not in order
+
+        # 显式 null：清空而非回填
+        explicit_null = {
+            "subscriptions": [
+                {"name": "X", "amount": 1, "currency": "CNY",
+                 "start_date": "2026-01-01", "next_renewal_date": "2026-02-01", "sort": 5},
+                {"name": "Y", "amount": 1, "currency": "CNY",
+                 "start_date": "2026-01-01", "next_renewal_date": "2026-03-01", "sort": 2},
+            ]
+        }
+        count2, idx2, cat_map2, restored2 = backup._restore_entities(
+            db, target, explicit_null, replace=True
+        )
+        backup._apply_subscription_order(
+            db, target, {"subscription_order": None}, idx2, cat_map2, replace=True,
+            restored_subs=restored2,
+        )
+        db.commit()
+        db.expire_all()
+        assert db.get(User, target.id).subscription_order is None
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_merge_restore_preserves_existing_subscription_order(monkeypatch):
+    """八审 Medium 回归：replace=False 合并恢复不得清除/覆盖目标已有偏好——
+    无关分类保留、显式 null 不清空、同名分类保留目标现有顺序并追加新成员。"""
+    monkeypatch.setattr(backup, "compute_next_renewal", lambda start, cycle, count: date(2030, 5, 1))
+    db, engine = make_db()
+    try:
+        target = add_user(db, username="target")
+        cat_keep = Category(user_id=target.id, name="保留类", is_system=False)
+        cat_a = Category(user_id=target.id, name="导入类A", is_system=False)
+        db.add_all([cat_keep, cat_a])
+        db.flush()
+        keep_sub = Subscription(user_id=target.id, name="已有成员", amount=1, currency="CNY",
+                                category_id=cat_keep.id, start_date=date(2024, 1, 1),
+                                next_renewal_date=date(2024, 2, 1))
+        exist_a = Subscription(user_id=target.id, name="A类已有", amount=1, currency="CNY",
+                               category_id=cat_a.id, start_date=date(2024, 1, 1),
+                               next_renewal_date=date(2024, 2, 1))
+        db.add_all([keep_sub, exist_a])
+        db.flush()  # 先落库拿真实 ID，偏好必须引用已存在 ID
+        target.subscription_order = {str(cat_keep.id): [keep_sub.id], str(cat_a.id): [exist_a.id]}
+        db.commit()
+
+        # 旧版备份（无 subscription_order 字段，含非零 sort）合并恢复到分类 A
+        legacy = {
+            "categories": [{"id": cat_a.id, "name": "导入类A", "is_system": False}],
+            "subscriptions": [
+                {"name": "旧远", "amount": 1, "currency": "CNY", "category_id": cat_a.id,
+                 "start_date": "2026-01-01", "next_renewal_date": "2026-03-01", "sort": 0},
+                {"name": "旧近", "amount": 1, "currency": "CNY", "category_id": cat_a.id,
+                 "start_date": "2026-01-01", "next_renewal_date": "2026-02-01", "sort": 1},
+            ],
+        }
+        _, index_to_id, cat_map, restored = backup._restore_entities(db, target, legacy, replace=False)
+        backup._apply_subscription_order(db, target, {}, index_to_id, cat_map, replace=False, restored_subs=restored)
+        db.commit()
+        db.expire_all()
+
+        fresh = db.get(User, target.id)
+        order = fresh.subscription_order or {}
+        restored_by_name = {s.name: s.id for s in restored}
+        # 无关分类的既有偏好保留
+        assert order[str(cat_keep.id)] == [keep_sub.id]
+        # 同名分类：目标现有顺序在前，备份推导的新成员按旧序追加（去重）
+        assert order[str(cat_a.id)] == [exist_a.id, restored_by_name["旧远"], restored_by_name["旧近"]]
+
+        # 显式 null 的当前备份合并恢复：不清空目标偏好
+        current_null = {"subscriptions": [
+            {"name": "多一个", "amount": 1, "currency": "CNY", "start_date": "2026-01-01"}
+        ]}
+        _, idx2, cmap2, restored2 = backup._restore_entities(db, target, current_null, replace=False)
+        backup._apply_subscription_order(db, target, {"subscription_order": None}, idx2, cmap2, replace=False, restored_subs=restored2)
+        db.commit()
+        db.expire_all()
+        order2 = db.get(User, target.id).subscription_order or {}
+        assert order2[str(cat_keep.id)] == [keep_sub.id]  # 未被清空
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_backup_order_rejects_boolean_indexes(monkeypatch):
+    """八审 Low 2 回归：备份偏好里的布尔下标（True==1）不得映射到下标 1 的
+    订阅——type(idx) is int 严格排除，布尔条目按既有越界语义剔除。"""
+    monkeypatch.setattr(backup, "compute_next_renewal", lambda start, cycle, count: date(2030, 5, 1))
+    db, engine = make_db()
+    try:
+        target = add_user(db, username="target")
+        payload = {"subscriptions": [
+            {"name": "S0", "amount": 1, "currency": "CNY", "start_date": "2026-01-01"},
+            {"name": "S1", "amount": 1, "currency": "CNY", "start_date": "2026-01-01"},
+        ]}
+        _, index_to_id, _, restored = backup._restore_entities(db, target, payload, replace=False)
+        # {"none": [true]}：若 isinstance 放行，True 会映射到下标 1（S1）
+        backup._apply_subscription_order(
+            db, target, {"subscription_order": {"none": [True]}}, index_to_id, {}, replace=True,
+            restored_subs=restored,
+        )
+        db.commit()
+        db.expire_all()
+        assert db.get(User, target.id).subscription_order is None  # 布尔被剔除，无合法条目
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_merge_restore_current_format_preserves_existing_order(monkeypatch):
+    """九审 Medium 回归：当前格式备份（含合法 subscription_order）的合并恢复
+    也不得覆盖同名分类的目标现有顺序——目标现有 ID 在前、导入成员去重追加；
+    覆盖恢复（replace=True）仍直接采用备份顺序。"""
+    monkeypatch.setattr(backup, "compute_next_renewal", lambda start, cycle, count: date(2030, 5, 1))
+    db, engine = make_db()
+    try:
+        target = add_user(db, username="target")
+        cat_a = Category(user_id=target.id, name="A", is_system=False)
+        db.add(cat_a)
+        db.flush()
+        t1 = Subscription(user_id=target.id, name="T1", amount=1, currency="CNY",
+                          category_id=cat_a.id, start_date=date(2024, 1, 1), next_renewal_date=date(2024, 2, 1))
+        t2 = Subscription(user_id=target.id, name="T2", amount=1, currency="CNY",
+                          category_id=cat_a.id, start_date=date(2024, 1, 1), next_renewal_date=date(2024, 3, 1))
+        db.add_all([t1, t2])
+        db.flush()
+        target.subscription_order = {str(cat_a.id): [t2.id, t1.id]}  # 目标手动顺序
+        db.commit()
+
+        # 当前格式备份：同名分类 A（源 id 999）下 S1、S2（下标 0/1），
+        # 偏好 key 为源分类 id："999": [0, 1]
+        current = {
+            "categories": [{"id": 999, "name": "A", "is_system": False}],
+            "subscriptions": [
+                {"name": "S1", "amount": 1, "currency": "CNY", "category_id": 999,
+                 "start_date": "2026-01-01", "next_renewal_date": "2026-02-01"},
+                {"name": "S2", "amount": 1, "currency": "CNY", "category_id": 999,
+                 "start_date": "2026-01-01", "next_renewal_date": "2026-03-01"},
+            ],
+        }
+        _, index_to_id, cat_map, restored = backup._restore_entities(db, target, current, replace=False)
+        backup._apply_subscription_order(
+            db, target, {"subscription_order": {"999": [0, 1]}}, index_to_id, cat_map,
+            replace=False,
+        )
+        db.commit()
+        db.expire_all()
+
+        order = db.get(User, target.id).subscription_order or {}
+        restored_by_name = {s.name: s.id for s in restored}
+        # 目标现有 [T2, T1] 在前，导入 [S1, S2] 去重追加——目标手动顺序保留
+        assert order[str(cat_a.id)] == [t2.id, t1.id, restored_by_name["S1"], restored_by_name["S2"]]
+
+        # 覆盖恢复：直接采用备份顺序（同名分类重映射到新建分类，key 跟随
+        # 新分类 id）
+        _, idx2, cmap2, restored2 = backup._restore_entities(db, target, current, replace=True)
+        backup._apply_subscription_order(
+            db, target, {"subscription_order": {"999": [1, 0]}}, idx2, cmap2, replace=True,
+        )
+        db.commit()
+        db.expire_all()
+        order2 = db.get(User, target.id).subscription_order or {}
+        new_cat_key = str(restored2[0].category_id)
+        assert order2[new_cat_key] == [restored2[1].id, restored2[0].id]  # 备份顺序 [S2, S1]
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_import_rejects_non_dict_user_field_before_deletion(monkeypatch):
+    """九审 Low 3 回归：replace 导入的 user 字段为真值非对象（如字符串）必须
+    在任何删除前 400 拒绝——否则实体已替换而偏好应用被 isinstance 静默跳过，
+    旧偏好残留陈旧 ID（SQLite 复用后新订阅继承旧位置）。"""
+    monkeypatch.setattr(backup, "compute_next_renewal", lambda start, cycle, count: date(2030, 5, 1))
+    db, engine = make_db()
+    try:
+        user = add_user(db, username="alice")
+        s1 = Subscription(user_id=user.id, name="原有", amount=1, currency="CNY",
+                          start_date=date(2024, 1, 1), next_renewal_date=date(2024, 2, 1))
+        db.add(s1)
+        db.commit()
+        user.subscription_order = {"none": [s1.id]}
+        db.commit()
+
+        bad_payload = {"user": "corrupt", "subscriptions": [
+            {"name": "新的", "amount": 1, "currency": "CNY", "start_date": "2026-01-01"}
+        ]}
+        with pytest.raises(HTTPException) as rejected:
+            backup.import_data(
+                backup.ImportIn(data=bad_payload, replace=True), user, db
+            )
+        assert rejected.value.status_code == 400
+
+        db.expire_all()
+        # 原订阅与偏好保持不变（删除发生在校验前，未执行）
+        assert db.get(Subscription, s1.id) is not None
+        assert db.get(User, user.id).subscription_order == {"none": [s1.id]}
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_replace_restore_accumulates_same_name_source_categories(monkeypatch):
+    """十审 Medium 回归：备份内两个同名源分类（导出允许重名）映射到同一目标
+    key 时，覆盖恢复必须累加两者顺序而非后者覆盖前者；后续 key 全失效不得
+    删除已累计结果。"""
+    monkeypatch.setattr(backup, "compute_next_renewal", lambda start, cycle, count: date(2030, 5, 1))
+    db, engine = make_db()
+    try:
+        target = add_user(db, username="target")
+        # 备份内两个同名分类（源 id 800/801），各带两个订阅
+        current = {
+            "categories": [
+                {"id": 800, "name": "重名分类", "is_system": False},
+                {"id": 801, "name": "重名分类", "is_system": False},
+            ],
+            "subscriptions": [
+                {"name": "A1", "amount": 1, "currency": "CNY", "category_id": 800,
+                 "start_date": "2026-01-01", "next_renewal_date": "2026-02-01"},
+                {"name": "A2", "amount": 1, "currency": "CNY", "category_id": 800,
+                 "start_date": "2026-01-01", "next_renewal_date": "2026-03-01"},
+                {"name": "B1", "amount": 1, "currency": "CNY", "category_id": 801,
+                 "start_date": "2026-01-01", "next_renewal_date": "2026-02-01"},
+                {"name": "B2", "amount": 1, "currency": "CNY", "category_id": 801,
+                 "start_date": "2026-01-01", "next_renewal_date": "2026-03-01"},
+            ],
+        }
+        _, idx, cmap, restored = backup._restore_entities(db, target, current, replace=True)
+        by_name = {s.name: s.id for s in restored}
+        # 两个源 key 都映射到同一目标 key（同名按名称复用/新建同一分类）
+        assert len(set(cmap.values())) == 1
+        backup._apply_subscription_order(
+            db, target,
+            {"subscription_order": {"800": [0, 1], "801": [2, 3]}},
+            idx, cmap, replace=True,
+        )
+        db.commit()
+        db.expire_all()
+        order = db.get(User, target.id).subscription_order or {}
+        target_key = next(iter(order))
+        # 两个源分类的顺序按序累加：A1, A2, B1, B2（无覆盖丢失）
+        assert order[target_key] == [
+            by_name["A1"], by_name["A2"], by_name["B1"], by_name["B2"]
+        ]
+
+        # 后续 key 全失效（布尔下标被剔除）：不删除已累计的合法结果
+        _, idx2, cmap2, restored2 = backup._restore_entities(db, target, current, replace=True)
+        backup._apply_subscription_order(
+            db, target,
+            {"subscription_order": {"800": [0, 1], "801": [True]}},
+            idx2, cmap2, replace=True,
+        )
+        db.commit()
+        db.expire_all()
+        order2 = db.get(User, target.id).subscription_order or {}
+        assert len(order2) == 1 and next(iter(order2.values())) == [
+            s.id for s in restored2 if s.name in ("A1", "A2")
+        ]
     finally:
         db.close()
         engine.dispose()

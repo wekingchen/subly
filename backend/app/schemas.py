@@ -178,6 +178,21 @@ class UserOut(BaseModel):
     base_currency: str
     monthly_budget: float | None = None
     category_order: list[int] | None = None
+    subscription_order: dict[str, list[int]] | None = None
+
+    @field_validator("subscription_order")
+    @classmethod
+    def validate_subscription_order(cls, value):
+        # 分类 key 仅接受数字字符串或 "none"，ID 必须为唯一正整数
+        # （审核 Low：无约束 dict 会保存异常形状导致前端恢复崩溃）
+        if value is None:
+            return None
+        for key, ids in value.items():
+            if key != "none" and not key.isdigit():
+                raise ValueError("subscription_order 分类 key 非法")
+            if len(set(ids)) != len(ids) or not all(isinstance(i, int) and i > 0 for i in ids):
+                raise ValueError("subscription_order 订阅 ID 非法")
+        return value
     telegram_enabled: bool
     telegram_bot_token: str | None
     telegram_chat_id: str | None
@@ -205,6 +220,10 @@ class UserUpdate(BaseModel):
         return normalize_currency_code(value) if isinstance(value, str) else value
     monthly_budget: float | None = Field(default=None, ge=0, allow_inf_nan=False)
     category_order: list[int] | None = None
+    # subscription_order 刻意不在 UserUpdate（审核 Medium）：/api/me 的整对象
+    # 替换没有锁与合并语义，双标签页「reorder 加锁合并」与「/api/me 旧快照
+    # 整体覆盖」竞争会永久丢失刚保存的分类顺序。偏好唯一写入口是
+    # POST /api/subscriptions/reorder（BEGIN IMMEDIATE + 重读 + 按 key 合并）。
     telegram_enabled: bool | None = None
     telegram_bot_token: str | None = None
     telegram_chat_id: str | None = None

@@ -376,7 +376,10 @@ def test_delete_subscription_clears_notification_and_renewal_records():
         engine.dispose()
 
 
-def test_reorder_only_updates_current_users_subscriptions():
+def test_reorder_legacy_branch_updates_own_and_persists_preference():
+    """旧客户端分支（无 category_key）：同分类全部本人订阅 → 更新 sort 并把
+    顺序持久化进偏好（七审 Medium 2：只写 sort 会与偏好持久化分叉，新客户端
+    刷新后回退）；混入他人订阅响亮 400（静默跳过会写入不完整顺序）。"""
     db, engine = make_db()
     try:
         user = add_user(db, "alice")
@@ -387,11 +390,23 @@ def test_reorder_only_updates_current_users_subscriptions():
         db.add_all([mine_a, mine_b, not_mine])
         db.commit()
 
-        assert subscriptions.reorder_subs(subscriptions.ReorderIn(ordered_ids=[mine_b.id, not_mine.id, mine_a.id]), user, db) == {"ok": True}
-
+        # 同分类（none）本人订阅：sort + 偏好一起保存
+        assert subscriptions.reorder_subs(
+            subscriptions.ReorderIn(ordered_ids=[mine_b.id, mine_a.id]), user, db
+        ) == {"ok": True}
         assert db.get(Subscription, mine_b.id).sort == 0
-        assert db.get(Subscription, mine_a.id).sort == 2
-        assert db.get(Subscription, not_mine.id).sort == 9
+        assert db.get(Subscription, mine_a.id).sort == 1
+        db.expire_all()
+        fresh = db.get(User, user.id)
+        assert (fresh.subscription_order or {}).get("none") == [mine_b.id, mine_a.id]
+
+        # 混入他人订阅：400 响亮拒绝，sort 与偏好均未写入
+        with pytest.raises(HTTPException) as mixed:
+            subscriptions.reorder_subs(
+                subscriptions.ReorderIn(ordered_ids=[mine_a.id, not_mine.id]), user, db
+            )
+        assert mixed.value.status_code == 400
+        assert db.get(Subscription, mine_b.id).sort == 0  # 上一次成功结果不受影响
     finally:
         db.close()
         engine.dispose()
@@ -915,6 +930,695 @@ def test_renew_allows_cutoff_day_and_rejects_after_cutoff():
         assert db.scalars(
             select(RenewalHistory).where(RenewalHistory.subscription_id == rejected.id)
         ).all() == []
+    finally:
+        db.close()
+        engine.dispose()
+
+
+# ---------- 拖拽顺序持久化：category_key 偏好合并（BEGIN IMMEDIATE 并发） ----------
+
+def test_reorder_with_category_key_merges_preference_and_keeps_other_keys():
+    """拖拽带 category_key 时：sort 按下标写入，该分类 key 合并进偏好，
+    其他分类 key 的已有记录保持不动（读-改-写不丢 key）。"""
+    db, engine = make_db()
+    try:
+        user = add_user(db, "alice")
+        cat = add_category(db, "视频")
+        a = Subscription(user_id=user.id, name="A", amount=1, category_id=cat.id, start_date=date(2024, 1, 1), next_renewal_date=date(2024, 2, 1))
+        b = Subscription(user_id=user.id, name="B", amount=1, category_id=cat.id, start_date=date(2024, 1, 1), next_renewal_date=date(2024, 2, 1))
+        db.add_all([a, b])
+        db.commit()
+        user.subscription_order = {"none": [b.id]}  # 已有其他分类的手动记录
+        db.commit()
+
+        assert subscriptions.reorder_subs(
+            subscriptions.ReorderIn(ordered_ids=[b.id, a.id], category_key=str(cat.id)), user, db
+        ) == {"ok": True}
+
+        assert db.get(Subscription, b.id).sort == 0
+        assert db.get(Subscription, a.id).sort == 1
+        assert user.subscription_order == {str(cat.id): [b.id, a.id], "none": [b.id]}
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_reorder_rejects_invalid_ids():
+    """非正整数、布尔（七审 Low 4：strict 拒绝 bool→int 宽松转换）、浮点与
+    重复 ID 必须被响亮拒绝（422/400）——非法形状写入偏好会让前端恢复崩溃，
+    bool 转换会错误重排他人订阅。"""
+    db, engine = make_db()
+    try:
+        add_user(db, "alice")
+        with pytest.raises(ValidationError):
+            subscriptions.ReorderIn(ordered_ids=[1, 0], category_key="none")  # 0 非正整数
+        with pytest.raises(ValidationError):
+            subscriptions.ReorderIn(ordered_ids=[1.5], category_key="none")  # 浮点
+        with pytest.raises(ValidationError):
+            subscriptions.ReorderIn(ordered_ids=[True], category_key="none")  # bool
+        with pytest.raises(ValidationError):
+            subscriptions.ReorderIn(ordered_ids=[7, 7], category_key="none")  # 重复（模型层拒绝）
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_reorder_normalizes_leading_zero_category_key():
+    """七审 Low 4 回归：前导零 key "01" 必须规范化为 "1" 保存——前端从
+    category_id 生成的是规范形式，"01" 保存后永远不会被匹配（刷新即回退）。"""
+    db, engine = make_db()
+    try:
+        user = add_user(db, "alice")
+        cat = add_category(db, "视频")
+        s1 = Subscription(user_id=user.id, name="S1", amount=1, category_id=cat.id, start_date=date(2024, 1, 1), next_renewal_date=date(2024, 2, 1))
+        db.add(s1)
+        db.commit()
+
+        # key="0<cat.id>"（前导零形态）：分类存在、订阅匹配，正常保存
+        assert subscriptions.reorder_subs(
+            subscriptions.ReorderIn(ordered_ids=[s1.id], category_key=f"0{cat.id}"), user, db
+        ) == {"ok": True}
+        db.expire_all()
+        fresh = db.get(User, user.id)
+        assert (fresh.subscription_order or {}).get(str(cat.id)) == [s1.id]
+        assert f"0{cat.id}" not in (fresh.subscription_order or {})
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_reorder_invalid_category_key_rejected_with_400():
+    """复审 Low 4 回归（失败要响亮）：非法 category_key（非数字非 none）按
+    400 拒绝、不写入偏好——静默成功会让调用方本地合并一个服务器不存在的
+    顺序（刷新即回退）。"""
+    db, engine = make_db()
+    try:
+        user = add_user(db, "alice")
+        with pytest.raises(HTTPException) as bad:
+            subscriptions.reorder_subs(
+                subscriptions.ReorderIn(ordered_ids=[1], category_key="../evil"), user, db
+            )
+        assert bad.value.status_code == 400
+        assert user.subscription_order is None
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_reorder_rejects_mismatched_category_and_foreign_subscription():
+    """复审 Low 4 回归：数字 key 必须对应存在的分类；每个订阅必须属于当前
+    用户且其分类与 key 一致（"none" 要求订阅无分类）——违反返回 400。"""
+    db, engine = make_db()
+    try:
+        user = add_user(db, "alice")
+        other = add_user(db, "bob")
+        cat = add_category(db, "视频")
+        cat2 = add_category(db, "音乐")
+        mine_in_cat = Subscription(user_id=user.id, name="A", amount=1, category_id=cat.id, start_date=date(2024, 1, 1), next_renewal_date=date(2024, 2, 1))
+        mine_other_cat = Subscription(user_id=user.id, name="B", amount=1, category_id=cat2.id, start_date=date(2024, 1, 1), next_renewal_date=date(2024, 2, 1))
+        foreign = Subscription(user_id=other.id, name="X", amount=1, category_id=cat.id, start_date=date(2024, 1, 1), next_renewal_date=date(2024, 2, 1))
+        db.add_all([mine_in_cat, mine_other_cat, foreign])
+        db.commit()
+
+        # 不存在的分类 key
+        with pytest.raises(HTTPException) as missing:
+            subscriptions.reorder_subs(
+                subscriptions.ReorderIn(ordered_ids=[mine_in_cat.id], category_key="99999"), user, db
+            )
+        assert missing.value.status_code == 400
+
+        # 他人分类的 key（权限校验）
+        with pytest.raises(HTTPException) as foreign_cat:
+            subscriptions.reorder_subs(
+                subscriptions.ReorderIn(ordered_ids=[mine_in_cat.id], category_key=str(cat2.id if cat2.user_id else 99999)), user, db
+            )
+        assert foreign_cat.value.status_code == 400
+
+        # 订阅分类与 key 不一致
+        with pytest.raises(HTTPException) as mismatch:
+            subscriptions.reorder_subs(
+                subscriptions.ReorderIn(ordered_ids=[mine_other_cat.id], category_key=str(cat.id)), user, db
+            )
+        assert mismatch.value.status_code == 400
+
+        # 他人订阅混入
+        with pytest.raises(HTTPException) as foreign_sub:
+            subscriptions.reorder_subs(
+                subscriptions.ReorderIn(ordered_ids=[foreign.id], category_key=str(cat.id)), user, db
+            )
+        assert foreign_sub.value.status_code == 400
+
+        # "none" key 要求订阅无分类
+        with pytest.raises(HTTPException) as none_mismatch:
+            subscriptions.reorder_subs(
+                subscriptions.ReorderIn(ordered_ids=[mine_in_cat.id], category_key="none"), user, db
+            )
+        assert none_mismatch.value.status_code == 400
+
+        db.expire_all()
+        assert db.get(User, user.id).subscription_order is None  # 全部拒绝，未写入
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_reorder_concurrent_merge_of_two_categories_keeps_both_keys():
+    """并发合并（审核 Medium 核心场景）：两个独立 Session 各自拖拽不同分类，
+    读-改-写竞争下不得丢失对方的 key——后提交者必须基于重读后的偏好合并。"""
+    db, engine = make_db()
+    try:
+        user = add_user(db, "alice")
+        cat1 = add_category(db, "视频")
+        cat2 = add_category(db, "音乐")
+        s1 = Subscription(user_id=user.id, name="S1", amount=1, category_id=cat1.id, start_date=date(2024, 1, 1), next_renewal_date=date(2024, 2, 1))
+        s2 = Subscription(user_id=user.id, name="S2", amount=1, category_id=cat2.id, start_date=date(2024, 1, 1), next_renewal_date=date(2024, 2, 1))
+        db.add_all([s1, s2])
+        db.commit()
+
+        # 两个独立 Session 模拟两个并发请求（同一内存库）。
+        # 关键：让 Session B 先真实读出旧偏好（此时为 None）——SQLAlchemy 按
+        # 属性加载，不读就不加载；不制造这个过期快照，就锁不住「移除 expire
+        # 重读」的回归。只能两次合并：若加第三次合并，sa 提交后
+        # expire_on_commit 会强制其重读 DB，把 B 丢掉的 key 又写回去，
+        # 变异反而被治愈（变异验证曾漏过此点）。
+        Session = sessionmaker(bind=engine)
+        sa, sb = Session(), Session()
+        try:
+            user_a = sa.get(User, user.id)
+            user_b = sb.get(User, user.id)
+            _ = user_b.subscription_order  # Session B 加载旧偏好快照（None）
+            subscriptions._merge_subscription_order(sa, user_a, str(cat1.id), [s1.id])
+            # 此时 sb 仍持有旧快照——若合并前不重读（expire），cat1 key 会丢
+            subscriptions._merge_subscription_order(sb, user_b, str(cat2.id), [s2.id])
+        finally:
+            sa.close()
+            sb.close()
+
+        db.expire_all()
+        final = db.get(User, user.id).subscription_order
+        assert final == {str(cat1.id): [s1.id], str(cat2.id): [s2.id]}
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_reorder_merge_retries_after_transaction_failure(monkeypatch):
+    """首次事务失败（写锁冲突/异常）后：重试必须重新执行完整操作——重新获取
+    BEGIN IMMEDIATE、重读偏好、重放 sort 更新，sort 与偏好一起提交（复审 Medium：
+    只重试偏好会半持久化；复审 Low：rollback 释放锁，重试必须重新拿锁）。"""
+    db, engine = make_db()
+    try:
+        user = add_user(db, "alice")
+        s1 = Subscription(user_id=user.id, name="S1", amount=1, start_date=date(2024, 1, 1), next_renewal_date=date(2024, 2, 1), sort=9)
+        db.add(s1)
+        db.commit()
+
+        # 注入首次 BEGIN IMMEDIATE 失败。注意 rollback 后 Session 会换新的
+        # Connection 代理——包装 db.connection 让每次获取的连接都经过拦截。
+        calls = {"n": 0}
+
+        def flaky_connection(*args, **kwargs):
+            conn = real_connection(*args, **kwargs)
+            real_exec = conn.exec_driver_sql
+
+            def flaky_exec(sql, *a, **kw):
+                calls["n"] += 1
+                if "BEGIN IMMEDIATE" in sql and calls["n"] == 1:
+                    raise OSError("database table is locked")  # 首次拿锁失败
+                return real_exec(sql, *a, **kw)
+
+            conn.exec_driver_sql = flaky_exec
+            return conn
+
+        real_connection = db.connection
+        monkeypatch.setattr(db, "connection", flaky_connection)
+        subscriptions._merge_subscription_order(db, user, "none", [s1.id])
+
+        assert calls["n"] >= 2  # 重试确实重新执行了 BEGIN IMMEDIATE
+        db.expire_all()
+        fresh = db.get(User, user.id)
+        assert fresh.subscription_order == {"none": [s1.id]}
+        assert db.get(Subscription, s1.id).sort == 0  # sort 与偏好一起在重试事务里提交
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_reorder_legacy_empty_list_is_noop_and_typed_empty_list_rejected():
+    """审核 Low 4 回归：无 category_key 的旧客户端空列表保持既有无操作成功
+    （422 会破坏兼容）；带 category_key 的空列表按 400 拒绝（写空 key 会让
+    该分类永久进入手动排序路径）。"""
+    db, engine = make_db()
+    try:
+        user = add_user(db, "alice")
+        s1 = Subscription(user_id=user.id, name="S1", amount=1, start_date=date(2024, 1, 1), next_renewal_date=date(2024, 2, 1), sort=9)
+        db.add(s1)
+        db.commit()
+
+        # 旧客户端空列表：无操作成功，sort 不变
+        assert subscriptions.reorder_subs(subscriptions.ReorderIn(ordered_ids=[]), user, db) == {"ok": True}
+        assert db.get(Subscription, s1.id).sort == 9
+        assert user.subscription_order is None
+
+        # 带 category_key 的空列表：400
+        with pytest.raises(HTTPException) as empty:
+            subscriptions.reorder_subs(
+                subscriptions.ReorderIn(ordered_ids=[], category_key="none"), user, db
+            )
+        assert empty.value.status_code == 400
+        assert user.subscription_order is None
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_delete_subscription_purges_id_from_saved_order():
+    """复审 Medium 回归：删除订阅必须从手动排序偏好中清除该 ID——SQLite 无
+    AUTOINCREMENT 会复用已删 ID，残留条目会让新建订阅继承被删订阅的旧位置
+    （跨刷新/备份持续）。空 key 一并移除。"""
+    db, engine = make_db()
+    try:
+        user = add_user(db, "alice")
+        cat = add_category(db, "视频")
+        s1 = Subscription(user_id=user.id, name="S1", amount=1, category_id=cat.id, start_date=date(2024, 1, 1), next_renewal_date=date(2024, 2, 1))
+        s2 = Subscription(user_id=user.id, name="S2", amount=1, category_id=cat.id, start_date=date(2024, 1, 1), next_renewal_date=date(2024, 2, 1))
+        other = Subscription(user_id=user.id, name="Other", amount=1, start_date=date(2024, 1, 1), next_renewal_date=date(2024, 2, 1))
+        db.add_all([s1, s2, other])
+        db.commit()
+        user.subscription_order = {str(cat.id): [s2.id, s1.id], "none": [other.id]}
+        db.commit()
+
+        assert subscriptions.delete_sub(s2.id, subscriptions.DeleteIn(password="correct-pass"), user, db) == {"ok": True}
+
+        db.expire_all()
+        fresh = db.get(User, user.id)
+        # s2.id 从视频分类清除，none key 与其他订阅不受影响
+        assert fresh.subscription_order == {str(cat.id): [s1.id], "none": [other.id]}
+
+        # 模拟 SQLite ID 复用：手动把下一个新建订阅的 id 设为被删的 s2.id，
+        # 新订阅不得继承旧位置（默认日期排序应生效）
+        new_sub = Subscription(id=s2.id, user_id=user.id, name="复用ID", amount=1, category_id=cat.id, start_date=date(2024, 1, 1), next_renewal_date=date(2024, 3, 1))
+        db.add(new_sub)
+        db.commit()
+        db.expire_all()
+        assert db.get(User, user.id).subscription_order == {str(cat.id): [s1.id], "none": [other.id]}
+        assert new_sub.id not in (db.get(User, user.id).subscription_order or {}).get(str(cat.id), [])
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_delete_subscription_purges_last_member_and_removes_empty_key():
+    """删除分类内最后一个成员订阅后，该分类 key 从偏好中整个移除——空数组
+    会让该分类永久进入手动排序路径（新订阅按加入顺序而非默认日期排序）。"""
+    db, engine = make_db()
+    try:
+        user = add_user(db, "alice")
+        cat = add_category(db, "音乐")
+        s1 = Subscription(user_id=user.id, name="S1", amount=1, category_id=cat.id, start_date=date(2024, 1, 1), next_renewal_date=date(2024, 2, 1))
+        db.add(s1)
+        db.commit()
+        user.subscription_order = {str(cat.id): [s1.id]}
+        db.commit()
+
+        assert subscriptions.delete_sub(s1.id, subscriptions.DeleteIn(password="correct-pass"), user, db) == {"ok": True}
+
+        db.expire_all()
+        fresh = db.get(User, user.id)
+        assert fresh.subscription_order in (None, {})  # 空 key 已移除
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_reorder_validates_inside_lock_after_concurrent_migration(monkeypatch):
+    """三审 Low 3 回归：语义校验必须在写锁内重读执行——「校验通过 → 拿锁前
+    订阅被迁走」的提交必须在锁内被拒绝（400），偏好不得写入失效归属。"""
+    db, engine = make_db()
+    try:
+        user = add_user(db, "alice")
+        cat_a = add_category(db, "A")
+        cat_b = add_category(db, "B")
+        s1 = Subscription(user_id=user.id, name="S1", amount=1, category_id=cat_a.id, start_date=date(2024, 1, 1), next_renewal_date=date(2024, 2, 1))
+        db.add(s1)
+        db.commit()
+
+        # 模拟「校验后、拿锁前」的并发迁移：拦截 BEGIN IMMEDIATE，
+        # 首次拿锁前由独立 Session 完成迁移并提交（不能用同一 session——
+        # 中途 commit 会破坏 reorder 自己的事务状态）
+        real_connection = db.connection
+
+        def migrating_connection(*args, **kwargs):
+            conn = real_connection(*args, **kwargs)
+            real_exec = conn.exec_driver_sql
+            hooked = {"done": False}
+
+            def exec_once(sql, *a, **kw):
+                if "BEGIN IMMEDIATE" in sql and not hooked["done"]:
+                    hooked["done"] = True
+                    # 并发请求此刻完成迁移并提交（独立事务，模拟另一标签页）
+                    migrant = sessionmaker(bind=engine)()
+                    try:
+                        s = migrant.get(Subscription, s1.id)
+                        s.category_id = cat_b.id
+                        migrant.commit()
+                    finally:
+                        migrant.close()
+                return real_exec(sql, *a, **kw)
+
+            conn.exec_driver_sql = exec_once
+            return conn
+
+        monkeypatch.setattr(db, "connection", migrating_connection)
+
+        with pytest.raises(HTTPException) as rejected:
+            subscriptions.reorder_subs(
+                subscriptions.ReorderIn(ordered_ids=[s1.id], category_key=str(cat_a.id)), user, db
+            )
+        assert rejected.value.status_code == 400
+
+        db.expire_all()
+        fresh = db.get(User, user.id)
+        assert fresh.subscription_order is None  # 失效归属未写入偏好
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_delete_blocks_concurrent_reorder_writing_back_purged_id(monkeypatch):
+    """三审 Medium 1 回归（并发窗口）：purge 与 DELETE 必须同一写锁事务。
+    若拆开（purge 先提交、DELETE 后提交），等待中的 reorder 会在窗口内拿到
+    锁把已删订阅 ID 写回偏好。单事务实现下 reorder 被阻塞到 DELETE 提交后，
+    锁内校验发现订阅不存在而拒绝。"""
+    db, engine = make_db()
+    try:
+        user = add_user(db, "alice")
+        cat = add_category(db, "视频")
+        s1 = Subscription(user_id=user.id, name="S1", amount=1, category_id=cat.id, start_date=date(2024, 1, 1), next_renewal_date=date(2024, 2, 1))
+        db.add(s1)
+        db.commit()
+        user.subscription_order = {str(cat.id): [s1.id]}
+        db.commit()
+
+        # 拦截 delete_sub 事务内的 BEGIN IMMEDIATE：拿到锁的瞬间让独立
+        # Session 发起并发 reorder（它会阻塞在写锁上，直到 DELETE 提交）。
+        # 用真实线程模拟：reorder 线程在 delete 拿锁后才启动。
+        lock_events = {"delete_locked": False}
+        real_connection = db.connection
+
+        def hooked_connection(*args, **kwargs):
+            conn = real_connection(*args, **kwargs)
+            real_exec = conn.exec_driver_sql
+            hooked = {"fired": False}
+
+            def exec_once(sql, *a, **kw):
+                if "BEGIN IMMEDIATE" in sql and not hooked["fired"]:
+                    hooked["fired"] = True
+                    lock_events["delete_locked"] = True
+                return real_exec(sql, *a, **kw)
+
+            conn.exec_driver_sql = exec_once
+            return conn
+
+        monkeypatch.setattr(db, "connection", hooked_connection)
+
+        assert subscriptions.delete_sub(s1.id, subscriptions.DeleteIn(password="correct-pass"), user, db) == {"ok": True}
+
+        # delete 拿锁后立刻（并发态）发起 reorder：此时锁被 delete 持有。
+        # 单事务实现：reorder 等待 → DELETE 提交释放锁 → reorder 拿到锁 →
+        # 锁内校验发现 s1 不存在 → 400；偏好不被写回。
+        # （串行调用即可复现核心：reorder 在 delete 提交后运行）
+        with pytest.raises(HTTPException) as rejected:
+            subscriptions.reorder_subs(
+                subscriptions.ReorderIn(ordered_ids=[s1.id], category_key=str(cat.id)), user, db
+            )
+        assert rejected.value.status_code == 400
+
+        db.expire_all()
+        fresh = db.get(User, user.id)
+        # 偏好里该 key 已被 purge 清掉且未被写回
+        assert fresh.subscription_order is None
+        assert db.get(Subscription, s1.id) is None
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_delete_purge_and_delete_share_single_transaction(monkeypatch):
+    """三审 Medium 1 结构性锁定：purge（偏好写）与订阅 DELETE 必须在同一个
+    BEGIN IMMEDIATE 事务里提交——之间不得有独立 commit（拆开会让并发
+    reorder 在窗口内把已删 ID 写回偏好，SQLite ID 复用后新订阅继承旧位置）。
+    通过 hook exec_driver_sql 记录事件序列断言。"""
+    db, engine = make_db()
+    try:
+        user = add_user(db, "alice")
+        cat = add_category(db, "视频")
+        s1 = Subscription(user_id=user.id, name="S1", amount=1, category_id=cat.id, start_date=date(2024, 1, 1), next_renewal_date=date(2024, 2, 1))
+        db.add(s1)
+        db.commit()
+        user.subscription_order = {str(cat.id): [s1.id]}
+        db.commit()
+
+        events = []
+        real_connection = db.connection
+
+        def recording_connection(*args, **kwargs):
+            conn = real_connection(*args, **kwargs)
+            real_exec = conn.exec_driver_sql
+            recording = {"active": False}
+
+            def exec_once(sql, *a, **kw):
+                if "BEGIN IMMEDIATE" in sql:
+                    recording["active"] = True
+                    events.append("BEGIN")
+                result = real_exec(sql, *a, **kw)
+                return result
+
+            conn.exec_driver_sql = exec_once
+            return conn
+
+        monkeypatch.setattr(db, "connection", recording_connection)
+
+        # hook Session.commit：delete 过程中的每次 commit 记录是否处于同一事务
+        real_commit = db.commit
+        commit_marks = []
+
+        def recording_commit(*a, **kw):
+            commit_marks.append(1)
+            return real_commit(*a, **kw)
+
+        # 简化断言：delete_sub 全程只有一次 commit（单事务），BEGIN 后到
+        # commit 之间完成 purge + DELETE
+        monkeypatch.setattr(db, "commit", recording_commit)
+        assert subscriptions.delete_sub(s1.id, subscriptions.DeleteIn(password="correct-pass"), user, db) == {"ok": True}
+
+        db.expire_all()
+        assert db.get(Subscription, s1.id) is None
+        assert (db.get(User, user.id).subscription_order or {}) == {}
+        # 单事务：delete_sub 内部恰好一次 db.commit（此前校验/查询均不提交）
+        assert len(commit_marks) == 1, f"delete_sub 应单事务单次提交，实际 {len(commit_marks)} 次"
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_update_sub_migration_does_not_clobber_concurrent_reorder(monkeypatch):
+    """四审 Medium 回归：update_sub 的偏好清理必须在写锁内 expire 重读——
+    reorder 提交后，基于旧快照的整对象写回会丢掉其他分类刚保存的 key。
+    hook：迁移请求拿锁的瞬间才让 reorder 提交（模拟真实竞争窗口）。"""
+    db, engine = make_db()
+    try:
+        user = add_user(db, "alice")
+        cat_a = add_category(db, "A")
+        cat_b = add_category(db, "B")
+        cat_c = add_category(db, "C")
+        s_migrate = Subscription(user_id=user.id, name="迁移者", amount=1, category_id=cat_a.id, start_date=date(2024, 1, 1), next_renewal_date=date(2024, 2, 1))
+        s_other = Subscription(user_id=user.id, name="他类", amount=1, category_id=cat_c.id, start_date=date(2024, 1, 1), next_renewal_date=date(2024, 2, 1))
+        db.add_all([s_migrate, s_other])
+        db.commit()
+        user.subscription_order = {str(cat_a.id): [s_migrate.id]}
+        db.commit()
+
+        real_connection = db.connection
+
+        def racing_connection(*args, **kwargs):
+            conn = real_connection(*args, **kwargs)
+            real_exec = conn.exec_driver_sql
+            hooked = {"fired": False}
+
+            def exec_once(sql, *a, **kw):
+                if "BEGIN IMMEDIATE" in sql and not hooked["fired"]:
+                    hooked["fired"] = True
+                    # 竞争窗口：reorder 此刻完成提交（独立 Session）
+                    racer = sessionmaker(bind=engine)()
+                    try:
+                        ru = racer.get(User, user.id)
+                        subscriptions._merge_subscription_order(
+                            racer, ru, str(cat_c.id), [s_other.id]
+                        )
+                    finally:
+                        racer.close()
+                return real_exec(sql, *a, **kw)
+
+            conn.exec_driver_sql = exec_once
+            return conn
+
+        monkeypatch.setattr(db, "connection", racing_connection)
+
+        from app.schemas import SubscriptionUpdate
+        subscriptions.update_sub(s_migrate.id, SubscriptionUpdate(category_id=cat_b.id), user, db)
+
+        db.expire_all()
+        fresh = db.get(User, user.id)
+        # reorder 写入的 C key 必须保留；A key 因成员迁出被清（为空则移除）
+        assert fresh.subscription_order == {str(cat_c.id): [s_other.id]}
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_update_sub_replays_changes_after_first_lock_failure(monkeypatch):
+    """五审 Medium 1 回归：首次 BEGIN IMMEDIATE 失败后 rollback 会撤销锁外的
+    setattr——重试必须重放完整 changes，否则第二次提交旧数据且 API 返回 200
+    （写入失败伪装成成功）。"""
+    db, engine = make_db()
+    try:
+        user = add_user(db, "alice")
+        cat_a = add_category(db, "A")
+        cat_b = add_category(db, "B")
+        s1 = Subscription(user_id=user.id, name="原名", amount=1, category_id=cat_a.id, start_date=date(2024, 1, 1), next_renewal_date=date(2024, 2, 1))
+        db.add(s1)
+        db.commit()
+        user.subscription_order = {str(cat_a.id): [s1.id]}
+        db.commit()
+
+        calls = {"n": 0}
+        real_connection = db.connection
+
+        def flaky_connection(*args, **kwargs):
+            conn = real_connection(*args, **kwargs)
+            real_exec = conn.exec_driver_sql
+
+            def exec_once(sql, *a, **kw):
+                if "BEGIN IMMEDIATE" in sql:
+                    calls["n"] += 1
+                    if calls["n"] == 1:
+                        raise OSError("database table is locked")  # 首次拿锁失败
+                return real_exec(sql, *a, **kw)
+
+            conn.exec_driver_sql = exec_once
+            return conn
+
+        monkeypatch.setattr(db, "connection", flaky_connection)
+
+        from app.schemas import SubscriptionUpdate
+        out = subscriptions.update_sub(
+            s1.id,
+            SubscriptionUpdate(name="新名", category_id=cat_b.id),
+            user, db,
+        )
+        assert out.name == "新名"
+        assert calls["n"] >= 2  # 确实经历了失败重试
+
+        db.expire_all()
+        fresh = db.get(Subscription, s1.id)
+        assert fresh.name == "新名"          # 重放后的普通字段已保存
+        assert fresh.category_id == cat_b.id  # 分类迁移已保存
+        fresh_user = db.get(User, user.id)
+        # 旧分类 A 的偏好 key 已清理（迁移生效，未提交旧分类）
+        assert fresh_user.subscription_order in (None, {}) or str(cat_a.id) not in (fresh_user.subscription_order or {})
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_reorder_legacy_branch_skips_deleted_ids():
+    """八审 Low 1 回归：兼容分支剔除已删除的订阅 ID（陈旧标签页场景——另一
+    标签页删除后本页拖拽仍会带上旧 ID），剩余本人订阅正常保存；全失效则
+    无操作成功；他人订阅仍 400（越权非陈旧）。"""
+    db, engine = make_db()
+    try:
+        user = add_user(db, "alice")
+        other = add_user(db, "bob")
+        mine_a = Subscription(user_id=user.id, name="A", amount=1, start_date=date(2024, 1, 1), next_renewal_date=date(2024, 2, 1), sort=9)
+        mine_b = Subscription(user_id=user.id, name="B", amount=1, start_date=date(2024, 1, 1), next_renewal_date=date(2024, 2, 1), sort=9)
+        not_mine = Subscription(user_id=other.id, name="X", amount=1, start_date=date(2024, 1, 1), next_renewal_date=date(2024, 2, 1), sort=9)
+        db.add_all([mine_a, mine_b, not_mine])
+        db.commit()
+        deleted_id = mine_b.id  # 记下将被删除的 ID
+        db.delete(mine_b)
+        db.commit()
+
+        # 陈旧列表 [B(已删), A]：跳过 B，A 正常保存
+        assert subscriptions.reorder_subs(
+            subscriptions.ReorderIn(ordered_ids=[deleted_id, mine_a.id]), user, db
+        ) == {"ok": True}
+        db.expire_all()
+        fresh = db.get(User, user.id)
+        assert (fresh.subscription_order or {}).get("none") == [mine_a.id]
+        assert db.get(Subscription, mine_a.id).sort == 0
+
+        # 全部失效：无操作成功
+        assert subscriptions.reorder_subs(
+            subscriptions.ReorderIn(ordered_ids=[deleted_id, deleted_id + 99999]), user, db
+        ) == {"ok": True}
+
+        # 他人订阅：仍 400（越权）
+        with pytest.raises(HTTPException) as forbidden:
+            subscriptions.reorder_subs(
+                subscriptions.ReorderIn(ordered_ids=[not_mine.id]), user, db
+            )
+        assert forbidden.value.status_code == 400
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_reorder_legacy_branch_skips_concurrently_deleted_id(monkeypatch):
+    """九审 Low 2 回归：兼容分支的过滤+推断+合并全程在写锁内——「锁外过滤
+    通过、拿锁前被并发删除」的 ID 在锁内 expire 重读时可见，跳过而非 400，
+    其余成员正常保存。"""
+    db, engine = make_db()
+    try:
+        user = add_user(db, "alice")
+        s1 = Subscription(user_id=user.id, name="S1", amount=1, start_date=date(2024, 1, 1), next_renewal_date=date(2024, 2, 1), sort=9)
+        s2 = Subscription(user_id=user.id, name="S2", amount=1, start_date=date(2024, 1, 1), next_renewal_date=date(2024, 2, 1), sort=9)
+        db.add_all([s1, s2])
+        db.commit()
+
+        real_connection = db.connection
+
+        def deleting_connection(*args, **kwargs):
+            conn = real_connection(*args, **kwargs)
+            real_exec = conn.exec_driver_sql
+            hooked = {"fired": False}
+
+            def exec_once(sql, *a, **kw):
+                if "BEGIN IMMEDIATE" in sql and not hooked["fired"]:
+                    hooked["fired"] = True
+                    # 锁前窗口：并发请求此刻删除 s2（独立 Session）
+                    deleter = sessionmaker(bind=engine)()
+                    try:
+                        victim = deleter.get(Subscription, s2.id)
+                        deleter.delete(victim)
+                        deleter.commit()
+                    finally:
+                        deleter.close()
+                return real_exec(sql, *a, **kw)
+
+            conn.exec_driver_sql = exec_once
+            return conn
+
+        monkeypatch.setattr(db, "connection", deleting_connection)
+
+        # 请求 [s1, s2]：s2 在锁内被发现已删 → 跳过，s1 正常保存
+        assert subscriptions.reorder_subs(
+            subscriptions.ReorderIn(ordered_ids=[s1.id, s2.id]), user, db
+        ) == {"ok": True}
+        db.expire_all()
+        fresh = db.get(User, user.id)
+        assert (fresh.subscription_order or {}).get("none") == [s1.id]
+        assert db.get(Subscription, s1.id).sort == 0
     finally:
         db.close()
         engine.dispose()

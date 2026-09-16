@@ -627,6 +627,9 @@ async function importData(e) {
     if (importReplace.value && !window.confirm(t('backup.replaceConfirm'))) return
     const json = JSON.parse(await file.text())
     const { data } = await api.post('/api/backup/import', { data: json, replace: importReplace.value })
+    // 恢复可能改写 subscription_order（七审 Low 3）：重新拉取用户资料，
+    // 避免订阅页继续用导入前的本地缓存渲染顺序
+    await auth.fetchMe().catch(() => { /* 资料刷新失败不影响导入成功语义 */ })
     backupOk.value = true
     backupMsg.value = t('backup.importOk', { n: data.imported })
   } catch (err) {
@@ -675,6 +678,8 @@ async function importAll(e) {
     if (!window.confirm(t(importAllReplace.value ? 'backupAll.replaceConfirm' : 'backupAll.importConfirm'))) return
     const json = JSON.parse(await file.text())
     const { data } = await api.post('/api/backup/import-all', { data: json, replace: importAllReplace.value })
+    // 整站恢复可能覆盖管理员自身的偏好（含 subscription_order）：同样刷新
+    await auth.fetchMe().catch(() => { /* 资料刷新失败不影响导入成功语义 */ })
     backupAllOk.value = true
     backupAllMsg.value = t('backupAll.importOk', { users: data.users, created: data.created_users, n: data.imported })
   } catch (err) {

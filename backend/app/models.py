@@ -42,6 +42,7 @@ class User(Base):
     monthly_budget: Mapped[float | None] = mapped_column(Float, nullable=True)   # 月度预算（基准货币），用于超支预警
     # 订阅管理页的分类显示顺序（分类 id 列表，按用户拖拽保存）
     category_order: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    subscription_order: Mapped[dict | None] = mapped_column(JSON, nullable=True)  # 已手动拖拽排序的分类 key → 有序 ID 列表
 
     # Telegram 通知设置（网页可配）
     telegram_enabled: Mapped[bool] = mapped_column(Boolean, default=False)

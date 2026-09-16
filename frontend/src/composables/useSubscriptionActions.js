@@ -1,6 +1,7 @@
 import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import api from '../api'
+import { useAuth } from '../stores/auth'
 import { addCycleDate, parseLocalDate, toISODate } from '../utils/date'
 
 /**
@@ -90,6 +91,9 @@ export function useSubscriptionActions({ reload, toast, onBundleCreated: handleB
     delErr.value = ''
     try {
       await api.delete(`/api/subscriptions/${target.id}`, { data: { password: delPwd.value } })
+      // 同步本地偏好缓存（四审 Low）：服务端已从 subscription_order 清除该 ID，
+      // 本地残留会在 SQLite 复用主键时让新订阅继承被删记录的旧位置
+      useAuth().purgeFromSubscriptionOrder({ purgeSubIds: [target.id] })
       if (delTarget.value === target) closeDelete()
       toast(t('sub.delete'))
       await safeReload()
@@ -110,7 +114,12 @@ export function useSubscriptionActions({ reload, toast, onBundleCreated: handleB
     showForm.value = false
     formTarget.value = null
   }
-  function onFormSaved() {
+  function onFormSaved(migration = null) {
+    // 编辑保存触发的分类迁移：同步本地偏好缓存（四审 Low）——服务端已从
+    // 旧分类 key 清除该订阅 ID，本地残留会让展示顺序与实际错位
+    if (migration?.id && migration.categoryBefore !== migration.categoryAfter) {
+      useAuth().purgeFromSubscriptionOrder({ purgeSubIds: [migration.id] })
+    }
     closeForm()
     toast(t('settings.saved'))
     safeReload()

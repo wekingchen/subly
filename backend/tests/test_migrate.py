@@ -322,3 +322,81 @@ def test_schema_migration_skips_missing_table_and_existing_column(monkeypatch):
         assert columns.count("existing") == 1
     finally:
         engine.dispose()
+
+
+def test_legacy_sort_backfill_to_subscription_order(tmp_path, monkeypatch):
+    """五审 Medium 3 / 六审 Medium 1-3 回归：启动期一次性回填旧版 sort 手动
+    顺序到 users.subscription_order——
+    - 拖拽过的分类（存在非零 sort）按 (sort, id) 回填（含拖拽后新增成员的
+      [0,1,0] 重复形态——六审 Medium 2）；
+    - 未拖拽的分类（全零）不迁移，保持默认日期排序；
+    - 已有偏好的 key 跳过（幂等）；
+    - 迁移在启动期完成，/api/auth/me 首次返回即带偏好，无惰性迁移的
+      前端缓存滞后与并发覆盖窗口（六审 Medium 1/3）。"""
+    from sqlalchemy import create_engine, text
+
+    from app.database import Base  # noqa: F401 — 模型导入注册元数据
+    import app.models  # noqa: F401 — 确保表定义全部注册
+    from app import migrate as migrate_mod
+
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    with engine.begin() as conn:
+        conn.execute(text(
+            "INSERT INTO currencies (code, name, symbol, is_custom) "
+            "VALUES ('CNY', '人民币', '¥', 0)"
+        ))
+        conn.execute(text(
+            "INSERT INTO users (username, email, password_hash, base_currency, "
+            "is_admin, is_active, email_verified, is_approved, locale, theme, "
+            "telegram_enabled, bark_enabled, webhook_enabled) VALUES "
+            "('upgraded', 'u@example.com', 'hash', 'CNY', 0, 1, 1, 1, 'zh-CN', 'light', 0, 0, 0)"
+        ))
+        uid = conn.execute(text("SELECT id FROM users WHERE username='upgraded'")).scalar_one()
+        # 分类 A：拖拽过 + 后新增成员（sort=[0,1,0]，六审 Medium 2 的真实形态）
+        conn.execute(text(
+            "INSERT INTO categories (name, icon, is_system, sort) VALUES ('A', '📁', 0, 0)"
+        ))
+        cat_a = conn.execute(text("SELECT id FROM categories WHERE name='A'")).scalar_one()
+        # 分类 B：全零未拖拽
+        conn.execute(text(
+            "INSERT INTO categories (name, icon, is_system, sort) VALUES ('B', '📁', 0, 0)"
+        ))
+        cat_b = conn.execute(text("SELECT id FROM categories WHERE name='B'")).scalar_one()
+        # A：到期远的 sort=0（先拖到前面）、到期近的 sort=1、后来新增的 sort=0
+        conn.execute(text(
+            "INSERT INTO subscriptions (user_id, name, amount, currency, billing_type, "
+            "cycle, cycle_count, start_date, next_renewal_date, category_id, sort, "
+            "is_keepalive, is_active, is_paused, auto_renew, show_in_calendar, remind_days_before) VALUES "
+            f"({uid}, '到期远', 1, 'CNY', 'recurring', 'month', 1, '2024-01-01', '2024-03-01', {cat_a}, 0, 0, 1, 0, 1, 1, 7), "
+            f"({uid}, '到期近', 1, 'CNY', 'recurring', 'month', 1, '2024-01-01', '2024-02-01', {cat_a}, 1, 0, 1, 0, 1, 1, 7), "
+            f"({uid}, '后来新增', 1, 'CNY', 'recurring', 'month', 1, '2024-01-01', '2024-04-01', {cat_a}, 0, 0, 1, 0, 1, 1, 7), "
+            f"({uid}, '未拖甲', 1, 'CNY', 'recurring', 'month', 1, '2024-01-01', '2024-02-01', {cat_b}, 0, 0, 1, 0, 1, 1, 7), "
+            f"({uid}, '未拖乙', 1, 'CNY', 'recurring', 'month', 1, '2024-01-01', '2024-03-01', {cat_b}, 0, 0, 1, 0, 1, 1, 7)"
+        ))
+
+    migrate_mod.run_migrations(engine)
+
+    with engine.begin() as conn:
+        raw = conn.execute(text(
+            "SELECT subscription_order FROM users WHERE username='upgraded'"
+        )).scalar_one()
+        order = migrate_mod.json.loads(raw)
+        subs = dict(conn.execute(text(
+            "SELECT name, id FROM subscriptions"
+        )).all())
+        # A 分类按旧 sort 序回填：到期远(0) → 后来新增(0, id 更大) → 到期近(1)
+        assert order[str(cat_a)] == [
+            subs["到期远"], subs["后来新增"], subs["到期近"]
+        ]
+        # B 分类全零不迁移
+        assert str(cat_b) not in order
+
+        # 幂等：再次运行不变
+    migrate_mod.run_migrations(engine)
+    with engine.begin() as conn:
+        raw2 = conn.execute(text(
+            "SELECT subscription_order FROM users WHERE username='upgraded'"
+        )).scalar_one()
+        assert migrate_mod.json.loads(raw2) == order
+    engine.dispose()

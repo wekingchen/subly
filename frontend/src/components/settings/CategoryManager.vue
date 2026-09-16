@@ -69,6 +69,7 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import api from '../../api'
 import { useConfirm } from '../../composables/useConfirm'
+import { useAuth } from '../../stores/auth'
 import AppModal from '../AppModal.vue'
 
 const emit = defineEmits(['changed'])
@@ -133,6 +134,8 @@ function requestDelete(item) {
     danger: true,
     onConfirm: async () => {
       const { data } = await api.delete(`/api/categories/${item.id}`)
+      // 同步本地偏好缓存（四审 Low）：服务端已移除该分类的 subscription_order key
+      useAuth().purgeFromSubscriptionOrder({ purgeCatKeys: [String(item.id)] })
       ok.value = true
       message.value = t('settings.referenceDeleted', { n: data.unlinked_subscriptions || 0 })
       await load()

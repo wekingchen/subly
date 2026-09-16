@@ -146,7 +146,7 @@ import { useToasts } from '../composables/useToasts'
 import { amountOf, hasBaseEquivalent } from '../utils/money'
 import { useDataRequest } from '../utils/dataRequest'
 import { filterSubscriptions, hasSubscriptionFilters } from '../utils/subscriptionFiltering'
-import { buildGroupedSubscriptions, buildSubscriptionOrderState, categoryOrderToPersistedIds, getCategoryMeta, getSubscriptionCategoryKey, moveCategoryByOffset, moveCategoryToTarget, moveValueByOffset, moveValueToTarget, UNCATEGORIZED_KEY } from '../utils/subscriptionOrdering'
+import { buildGroupedSubscriptions, buildSubscriptionOrderState, categoryOrderToPersistedIds, getCategoryMeta, getSubscriptionCategoryKey, moveCategoryByOffset, moveCategoryToTarget, moveValueByOffset, moveValueToTarget, normalizeSavedSubscriptionOrder, UNCATEGORIZED_KEY } from '../utils/subscriptionOrdering'
 
 const { t } = useI18n()
 const auth = useAuth()
@@ -273,6 +273,16 @@ function rebuild() {
   const next = buildSubscriptionOrderState(subs.value, categories.value, auth.user?.category_order || [])
   Object.keys(orderMap).forEach((k) => delete orderMap[k])
   Object.entries(next.orderMap).forEach(([key, ids]) => { orderMap[key] = ids })
+  // 用户已手动拖拽排序的分类：恢复持久化的有序 ID 列表（覆盖默认日期排序；
+  // 成员新增/删除仍按持久化顺序并追加/移除缺失 ID——审核 Medium）。
+  // 规范化只作用于本次展示的 orderMap（审核 Medium 2：不再经 /api/me 整对象
+  // 写回——那里没有锁与合并语义，旧快照会覆盖另一标签页刚 reorder 保存的
+  // key。残留的失效 ID 在该分类下次拖拽 reorder 时由后端按 key 整体替换，
+  // 自然清除）。
+  const { applied } = normalizeSavedSubscriptionOrder(
+    auth.user?.subscription_order, orderMap
+  )
+  for (const [key, ids] of Object.entries(applied)) orderMap[key] = ids
   catOrder.value = next.catOrder
 }
 
@@ -310,7 +320,12 @@ async function moveSub(catKey, id, dir) {
   const arr = moveValueByOffset(current, id, dir)
   if (arr === current) return
   orderMap[catKey] = arr
-  try { await api.post('/api/subscriptions/reorder', { ordered_ids: arr }) } catch { /* ignore */ }
+  // reorder 在同一事务里更新订阅 sort 并合并用户偏好的手动排序记录
+  // （审核 Medium：两个独立请求存在半持久化与并发覆盖）
+  try {
+    await api.post('/api/subscriptions/reorder', { ordered_ids: arr, category_key: String(catKey) })
+    auth.rememberManualOrder(catKey, arr)
+  } catch { /* ignore */ }
 }
 
 function onCatDragStart(key, e) {
@@ -364,7 +379,10 @@ async function onCardDrop(catKey, id, e) {
   if (arr === current) return clearDrag()
   orderMap[catKey] = arr
   clearDrag()
-  try { await api.post('/api/subscriptions/reorder', { ordered_ids: arr }) } catch { /* ignore */ }
+  try {
+    await api.post('/api/subscriptions/reorder', { ordered_ids: arr, category_key: String(catKey) })
+    auth.rememberManualOrder(catKey, arr)
+  } catch { /* ignore */ }
 }
 
 async function load() {

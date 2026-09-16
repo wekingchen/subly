@@ -18,7 +18,16 @@ export function buildSubscriptionOrderState(subscriptions, categories, savedCate
     ;(byCat[key] ||= []).push(subscription)
   }
   for (const key of Object.keys(byCat)) {
-    byCat[key].sort((a, b) => (a.sort - b.sort) || (a.id - b.id))
+    // 默认按剩余订阅时间由近及远：到期日越早越靠前（用户确认口径）；
+    // 无到期日的（一次性买断已结束/缺日期）沉底，组内保持原相对顺序
+    byCat[key].sort((a, b) => {
+      const da = a.next_renewal_date || ''
+      const db = b.next_renewal_date || ''
+      if (!da && !db) return (a.sort - b.sort) || (a.id - b.id)
+      if (!da) return 1
+      if (!db) return -1
+      return da < db ? -1 : da > db ? 1 : (a.sort - b.sort) || (a.id - b.id)
+    })
     orderMap[key] = byCat[key].map((subscription) => subscription.id)
   }
 
@@ -50,6 +59,43 @@ export function buildGroupedSubscriptions(subscriptions, orderMap, catOrder, cat
       const items = orderMap[key].map((id) => subscriptions.find((subscription) => subscription.id === id)).filter(Boolean)
       return { key, icon: meta.icon, name: meta.name, items }
     })
+}
+
+// 用户已手动拖拽排序的分类 key 集合（持久化于用户偏好 subscription_order）。
+// 这些分类的展示顺序直接采用 orderMap 中已持久化的 ID 顺序（即订阅上的
+// sort 字段序），不再被「按剩余订阅时间」的默认排序覆盖（审核 Medium：
+// 分类成员新增/删除/迁移会改变 sort 序列形态，无法从 sort 值推断手动状态，
+// 必须显式持久化）。
+export function getManuallyOrderedKeys(savedSubscriptionOrder) {
+  return new Set(Object.keys(savedSubscriptionOrder || {}))
+}
+
+// 规范化持久化的手动排序偏好（复审 Low）：过滤已失效的订阅 ID、追加新成员
+// 到末尾、跳过已空/已迁出的分类（不写 key——空数组会让该分类永久进入
+// 「持久化顺序」路径，之后新订阅按加入顺序排列而非默认日期排序）。
+// 纯函数：不修改入参。返回 { normalized, orderChanged, applied }：
+// - normalized: 规范化后的偏好对象（orderChanged 时整体写回用户偏好）
+// - orderChanged: 与传入偏好是否有差异（成员一进一出时长度相同但内容已变，
+//   必须内容比较而非只比长度）
+// - applied: key → 规范化后的有序 ID 列表（调用方写回 orderMap 恢复拖拽顺序）
+export function normalizeSavedSubscriptionOrder(savedSubOrder, orderMap) {
+  const normalized = {}
+  const applied = {}
+  let orderChanged = false
+  for (const [key, ids] of Object.entries(savedSubOrder || {})) {
+    if (!Array.isArray(ids)) continue // 历史脏数据防御
+    const current = orderMap[key] || []
+    if (!current.length) {
+      orderChanged = true // 已是空数组 key 也规范化省略（复审 Low）
+      continue
+    }
+    const cleaned = ids.filter((id) => current.includes(id))
+    for (const id of current) if (!cleaned.includes(id)) cleaned.push(id)
+    normalized[key] = cleaned
+    applied[key] = cleaned
+    if (JSON.stringify(cleaned) !== JSON.stringify(ids)) orderChanged = true
+  }
+  return { normalized, orderChanged, applied }
 }
 
 export function moveValueByOffset(list, value, offset) {

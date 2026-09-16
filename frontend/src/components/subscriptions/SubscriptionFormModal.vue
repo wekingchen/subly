@@ -452,7 +452,12 @@ async function save() {
     const payload = buildSubscriptionPayload(form.value)
     if (payload.id) await api.put(`/api/subscriptions/${payload.id}`, payload)
     else await api.post('/api/subscriptions', payload)
-    emit('saved')
+    // 携带迁移前后分类（四审 Low）：保存成功后调用方据此同步本地偏好缓存
+    emit('saved', {
+      id: payload.id || null,
+      categoryBefore: props.subscription?.category_id ?? null,
+      categoryAfter: payload.category_id ?? null
+    })
   } catch (e) {
     formErr.value = e.response?.data?.detail || '保存失败，请稍后重试'
   } finally {
