@@ -1258,6 +1258,7 @@ def test_backup_roundtrips_statement_repaid_flag():
         _make_statement(
             db, user, is_repaid=True,
             repaid_at=datetime(2026, 9, 1, 12, 0, 0),
+            repaid_amount=100.0,  # 归一化不变量：还清 = total_due（三审 Medium 2 校验要求）
             message_id="bk-repaid",
         )
 
@@ -1776,6 +1777,190 @@ def test_replace_restore_accumulates_same_name_source_categories(monkeypatch):
         assert len(order2) == 1 and next(iter(order2.values())) == [
             s.id for s in restored2 if s.name in ("A1", "A2")
         ]
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_statement_repaid_amount_backup_roundtrip_and_validation(monkeypatch):
+    """部分还款金额随备份 v4 往返；旧版备份缺字段按 0 恢复；
+    非法值（负数/布尔/超还应还）响亮拒绝。"""
+    monkeypatch.setattr(backup, "compute_next_renewal", lambda start, cycle, count: date(2030, 5, 1))
+    db, engine = make_db()
+    try:
+        user = add_user(db, username="alice")
+        stmt_data = [
+            {"bank_key": "cmb", "card_last_four": "1234", "message_id": "m1",
+             "total_due": 1000.0, "is_repaid": False, "repaid_amount": 400.0},
+            {"bank_key": "cmb", "card_last_four": "1234", "message_id": "m2",
+             "total_due": 500.0, "is_repaid": True},
+        ]
+        # 账单恢复嵌套在「备份含 credit_cards 数组」分支内（v4 备份总是带卡），
+        # 测试必须带上卡片数组才触发账单恢复路径
+        exported_entities = {
+            "credit_cards": [{"display_name": "金卡", "bank_name": "招商银行",
+                              "last_four": "1234", "statement_day": 5, "due_day": 25,
+                              "remind_days_before": [3], "credit_limit": None,
+                              "is_active": True, "show_in_calendar": True}],
+            "credit_card_statements": stmt_data,
+            "subscriptions": [],
+        }
+        _, index_map, cat_map, _subs = backup._restore_entities(db, user, exported_entities, replace=False)
+        # 还款标记与金额随导入恢复（credit_card_statements 独立于用户偏好流程）
+        db.commit()
+        restored = db.scalars(
+            select(CreditCardStatement).where(CreditCardStatement.user_id == user.id)
+        ).all()
+        by_msg = {s.message_id: s for s in restored}
+        assert by_msg["m1"].repaid_amount == 400.0
+        assert by_msg["m1"].is_repaid is False
+        assert by_msg["m2"].is_repaid is True
+        # 复审 Low 5：已还清 + 缺 repaid_amount → 按归一化不变量派生为 total_due
+        # （固定 0 会让恢复后的已还账单显示「仍全额待还」）
+        assert by_msg["m2"].repaid_amount == 500.0
+
+        # 非法值：负数 / 布尔 —— 类型校验响亮拒绝
+        for bad in (-1, True):
+            payload = {"credit_cards": [{"display_name": "金卡", "bank_name": "招商银行",
+                                          "last_four": "1234", "statement_day": 5, "due_day": 25,
+                                          "remind_days_before": [3], "credit_limit": None,
+                                          "is_active": True, "show_in_calendar": True}],
+                       "credit_card_statements": [
+                {"bank_key": "cmb", "card_last_four": "1234", "message_id": f"m-bad-{bad}",
+                 "total_due": 1000.0, "is_repaid": False, "repaid_amount": bad}
+            ]}
+            with pytest.raises((ValueError, TypeError), match="repaid_amount 非法"):
+                backup._restore_entities(db, user, payload, replace=False)
+            db.rollback()
+        # 未还清超还应还 —— 交叉校验响亮拒绝（消息区分于类型错误）
+        payload = {"credit_cards": [{"display_name": "金卡", "bank_name": "招商银行",
+                                      "last_four": "1234", "statement_day": 5, "due_day": 25,
+                                      "remind_days_before": [3], "credit_limit": None,
+                                      "is_active": True, "show_in_calendar": True}],
+                   "credit_card_statements": [
+            {"bank_key": "cmb", "card_last_four": "1234", "message_id": "m-over",
+             "total_due": 1000.0, "is_repaid": False, "repaid_amount": 2000}
+        ]}
+        with pytest.raises((ValueError, TypeError), match="超过应还金额"):
+            backup._restore_entities(db, user, payload, replace=False)
+        db.rollback()
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_surplus_statement_backup_roundtrip_unmarked(monkeypatch):
+    """审核 Medium 1 回归：未标记的负数富余账单（repaid_amount=0、
+    total_due=-200）是合法状态——导出→恢复不被 repaid_amount 校验拒绝。"""
+    monkeypatch.setattr(backup, "compute_next_renewal", lambda start, cycle, count: date(2030, 5, 1))
+    db, engine = make_db()
+    try:
+        user = add_user(db, username="alice")
+        payload = {
+            "credit_cards": [{"display_name": "金卡", "bank_name": "招商银行",
+                              "last_four": "1234", "statement_day": 5, "due_day": 25,
+                              "remind_days_before": [3], "credit_limit": None,
+                              "is_active": True, "show_in_calendar": True}],
+            "credit_card_statements": [
+                {"bank_key": "cmb", "card_last_four": "1234", "message_id": "m-surplus",
+                 "total_due": -200.0, "is_repaid": False, "repaid_amount": 0.0}
+            ],
+            "subscriptions": [],
+        }
+        backup._validate_backup_payload(payload)
+        backup._restore_entities(db, user, payload, replace=False)
+        db.commit()
+        stmt = db.scalars(select(CreditCardStatement)).one()
+        assert stmt.total_due == -200.0
+        assert stmt.repaid_amount == 0.0
+        assert stmt.is_repaid is False
+
+        # 手改备份给富余账单塞正还款额 → 拒绝（无正待还却登记了已还）
+        payload["credit_card_statements"][0]["repaid_amount"] = 50.0
+        with pytest.raises((ValueError, TypeError), match="应为 0"):
+            backup._validate_backup_payload(payload)
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_backup_repaid_cross_invariant_rejections(monkeypatch):
+    """三审 Medium 2 回归：repaid_amount 与 is_repaid 的交叉不变量——
+    已还清但金额不符 / 未还但金额恰等于应还，恢复端必须响亮拒绝。"""
+    monkeypatch.setattr(backup, "compute_next_renewal", lambda start, cycle, count: date(2030, 5, 1))
+    db, engine = make_db()
+    try:
+        add_user(db, username="alice")
+        base = {
+            "credit_cards": [{"display_name": "金卡", "bank_name": "招商银行",
+                              "last_four": "1234", "statement_day": 5, "due_day": 25,
+                              "remind_days_before": [3], "credit_limit": None,
+                              "is_active": True, "show_in_calendar": True}],
+            "subscriptions": [],
+        }
+
+        def stmt_payload(is_repaid, repaid, total=1000.0, msg="m-x"):
+            return {**base, "credit_card_statements": [
+                {"bank_key": "cmb", "card_last_four": "1234", "message_id": msg,
+                 "total_due": total, "is_repaid": is_repaid, "repaid_amount": repaid}
+            ]}
+
+        # 已还清但金额不足（100 ≠ 1000）——欠款被已还状态隐藏
+        with pytest.raises((ValueError, TypeError), match="与已还状态不一致"):
+            backup._validate_backup_payload(stmt_payload(True, 100.0))
+        # 已还清但金额超额（1200 ≠ 1000）
+        with pytest.raises((ValueError, TypeError), match="与已还状态不一致"):
+            backup._validate_backup_payload(stmt_payload(True, 1200.0))
+        # 未还但金额恰等于应还（剩余为零却仍未还的矛盾态）
+        with pytest.raises((ValueError, TypeError), match="不得超过应还金额"):
+            backup._validate_backup_payload(stmt_payload(False, 1000.0))
+        # 已还清的富余账单（负应还）：repaid_amount 必须 0
+        with pytest.raises((ValueError, TypeError), match="与已还状态不一致"):
+            backup._validate_backup_payload(stmt_payload(True, 50.0, total=-200.0))
+        # 合法形态不受影响：已还清精确归一化 / 未还部分还款
+        backup._validate_backup_payload(stmt_payload(True, 1000.0, msg="ok-1"))
+        backup._validate_backup_payload(stmt_payload(False, 400.0, msg="ok-2"))
+        backup._validate_backup_payload(stmt_payload(True, 0.0, total=-200.0, msg="ok-3"))
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_backup_rejects_sub_cent_repaid_amount():
+    """六审 Low 6 回归：亚分/三位小数的 repaid_amount 经备份导入必须拒绝——
+    round 伪装会让 0.001 通过并原样写入，与 API 写入端不一致。"""
+    db, engine = make_db()
+    try:
+        add_user(db, username="alice")
+        for bad in (0.001, 1.005, 400.999):
+            payload = {
+                "credit_cards": [{"display_name": "金卡", "bank_name": "招商银行",
+                                  "last_four": "1234", "statement_day": 5, "due_day": 25,
+                                  "remind_days_before": [3], "credit_limit": None,
+                                  "is_active": True, "show_in_calendar": True}],
+                "credit_card_statements": [
+                    {"bank_key": "cmb", "card_last_four": "1234",
+                     "message_id": f"m-prec-{bad}", "total_due": 1000.0,
+                     "is_repaid": False, "repaid_amount": bad}
+                ],
+                "subscriptions": [],
+            }
+            with pytest.raises((ValueError, TypeError), match="最多两位小数"):
+                backup._validate_backup_payload(payload)
+            db.rollback()
+        # 合法两位小数不受影响
+        ok_payload = {
+            "credit_cards": [{"display_name": "金卡", "bank_name": "招商银行",
+                              "last_four": "1234", "statement_day": 5, "due_day": 25,
+                              "remind_days_before": [3], "credit_limit": None,
+                              "is_active": True, "show_in_calendar": True}],
+            "credit_card_statements": [
+                {"bank_key": "cmb", "card_last_four": "1234", "message_id": "m-ok",
+                 "total_due": 1000.0, "is_repaid": False, "repaid_amount": 400.55}
+            ],
+            "subscriptions": [],
+        }
+        backup._validate_backup_payload(ok_payload)
     finally:
         db.close()
         engine.dispose()

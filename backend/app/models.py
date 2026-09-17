@@ -324,6 +324,11 @@ class CreditCardStatement(Base):
     # 用户手动标记已还款（卡片上操作）；待还总额剔除已标记的账单
     is_repaid: Mapped[bool] = mapped_column(Boolean, default=False)
     repaid_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # 部分还款累计已还金额（多次还清）：不变量——
+    # is_repaid=True ⟺ repaid_amount == coalesce(total_due, 0)（还清态，归一化写入）
+    # is_repaid=False ⟹ 0 ≤ repaid_amount < total_due（部分还款态；total_due NULL 时恒 0）
+    # repaid_at 只在翻 True 时置值（语义 = 还清时间）；取消标记时清零（错录逃生门）
+    repaid_amount: Mapped[float] = mapped_column(Float, default=0.0)
     parsed_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 

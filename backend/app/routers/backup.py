@@ -142,6 +142,8 @@ def _statement_dict(s: CreditCardStatement, card_index: dict[int, int]) -> dict:
         # 还款标记：用户手动标记，跨备份保留（待还总额据此剔除）
         "is_repaid": s.is_repaid,
         "repaid_at": s.repaid_at,
+        # 部分还款累计已还（多次还清；取消标记清零）
+        "repaid_amount": s.repaid_amount,
         # 备份内来源局部 key：源邮箱地址（不含凭据）；恢复端映射到同邮箱账户
         "source_email": s.source_account.email if s.source_account else None,
         "items": [
@@ -186,6 +188,46 @@ def _validated_statements(data: dict) -> list[dict] | None:
         if repaid_at is not None and not isinstance(repaid_at, datetime):
             if not isinstance(repaid_at, str) or _parse_datetime(repaid_at) is None:
                 raise ValueError(f"备份 credit_card_statements 第 {index} 项 repaid_at 非法")
+        # 部分还款累计已还：必须是有限非负数（非 bool），且与 is_repaid 满足
+        # 交叉不变量（三审 Medium 2——恢复矛盾态会让真实欠款被「已还清」隐藏，
+        # 或剩余为零却仍未还）：
+        # - is_repaid=True ⟹ repaid_amount == max(total_due, 0)（分精确相等；
+        #   负数富余账单还清态恒 0）
+        # - is_repaid=False ⟹ 0 ≤ repaid_amount < total_due（正应还时）；
+        #   应还 NULL/负/零时必须为 0
+        # 旧版备份缺字段仍按派生逻辑兼容（恢复端推导，不走此校验）
+        if "repaid_amount" in s:
+            ra = s["repaid_amount"]
+            if isinstance(ra, bool) or not isinstance(ra, (int, float)) or ra != ra or ra in (float("inf"), float("-inf")) or ra < 0:
+                raise ValueError(f"备份 credit_card_statements 第 {index} 项 repaid_amount 非法")
+            # 分精度校验（六审 Low 6）：0.001 等亚分/三位小数经 round 会伪装成
+            # 合法值写入，与 API 写入端（拒绝三位小数）不一致
+            from decimal import Decimal
+            try:
+                ra_decimal = Decimal(repr(ra))
+            except Exception:
+                raise ValueError(f"备份 credit_card_statements 第 {index} 项 repaid_amount 非法")
+            if not (isinstance(ra_decimal.as_tuple().exponent, int) and ra_decimal.as_tuple().exponent >= -2):
+                raise ValueError(f"备份 credit_card_statements 第 {index} 项 repaid_amount 最多两位小数")
+            total = s.get("total_due")
+            is_repaid = s.get("is_repaid", False)
+            total_cents = round(total * 100) if total is not None else None
+            ra_cents = round(ra * 100)
+            if is_repaid:
+                expected = max(total_cents or 0, 0)
+                if ra_cents != expected:
+                    raise ValueError(
+                        f"备份 credit_card_statements 第 {index} 项 repaid_amount 与已还状态不一致"
+                    )
+            else:
+                if total_cents is not None and total_cents > 0 and ra_cents >= total_cents:
+                    raise ValueError(
+                        f"备份 credit_card_statements 第 {index} 项 repaid_amount 未还清时不得超过应还金额"
+                    )
+                if (total_cents is None or total_cents <= 0) and ra_cents != 0:
+                    raise ValueError(
+                        f"备份 credit_card_statements 第 {index} 项 repaid_amount 应为 0（账单无正待还）"
+                    )
         for j, item in enumerate(items or [], start=1):
             if not isinstance(item, dict):
                 raise ValueError(f"备份 credit_card_statements 第 {index} 项 items 第 {j} 条必须是对象")
@@ -880,6 +922,13 @@ def _restore_entities(
                     repaid_at=(
                         s["repaid_at"] if isinstance(s.get("repaid_at"), datetime)
                         else _parse_datetime(s.get("repaid_at"))
+                    ),
+                    # 部分还款累计已还：旧版备份缺字段时按归一化不变量派生
+                    # （已还清 = max(total_due,0)；未还 = 0）——复审 Low 5：
+                    # 固定 0 会让恢复后的已还账单显示「仍全额待还」
+                    repaid_amount=(
+                        float(s["repaid_amount"]) if s.get("repaid_amount") is not None
+                        else (max(float(s["total_due"] or 0.0), 0.0) if s.get("is_repaid") else 0.0)
                     ),
                 )
                 db.add(record)

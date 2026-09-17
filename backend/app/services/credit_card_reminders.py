@@ -7,7 +7,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app import database
-from app.credit_card_rules import next_due_date_after
+from app.credit_card_rules import next_due_date_after, statement_remaining_amount
 from app.models import CreditCard, CreditCardStatement, User
 from app.services import credit_card_notification_outbox, notification_transport
 
@@ -92,9 +92,11 @@ def latest_unrepaid_amount(db: Session, card: CreditCard) -> float | None:
         ).limit(1)
     )
     if dated is not None:
-        return float(dated.total_due) if dated.total_due is not None else None
+        # 部分还款口径：金额 = 剩余待还（total_due − repaid_amount）——
+        # 提醒文案报「还应还多少」，与待还汇总一致
+        return statement_remaining_amount(dated.total_due, dated.repaid_amount)
     # 全部账单双日期皆空：与汇总累加口径完全对齐（复审 Low）——
-    # 聚合同卡全部未还勾稽通过账单的已知金额之和；全部金额未知时返回
+    # 聚合同卡全部未还勾稽通过账单的已知剩余金额之和；全部金额未知时返回
     # None（不能把未知伪装成 0.00 元，复审 Low）
     rows = db.scalars(
         select(CreditCardStatement).where(
@@ -105,7 +107,11 @@ def latest_unrepaid_amount(db: Session, card: CreditCard) -> float | None:
     ).all()
     if not rows:
         return None
-    known = [float(s.total_due) for s in rows if s.total_due is not None]
+    known = [
+        statement_remaining_amount(s.total_due, s.repaid_amount)
+        for s in rows
+        if s.total_due is not None
+    ]
     return round(sum(known), 2) if known else None
 
 

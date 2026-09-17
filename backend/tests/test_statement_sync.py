@@ -589,3 +589,1078 @@ def test_resync_rebuilds_stale_items(sync_env, monkeypatch):
     assert stmt.verify_status == "ok"
     assert stmt.is_repaid is True  # 用户标记保留
     assert stmt.repaid_at is not None
+    # 部分还款金额同样保留（同步层只刷新解析字段，不触碰用户状态）：
+    # 先取消再部分还款，重新同步后累计已还不丢
+    client.patch(f"/api/credit-cards/statements/{stmt.id}/repaid", json={"is_repaid": False})
+    client.post(f"/api/credit-cards/statements/{stmt.id}/repay", json={"amount": 100})
+    assert client.post(f"/api/imap/accounts/{account_id}/sync-statements",
+                       json={"days": 31}).status_code == 200
+    db.expire_all()
+    stmt = db.get(CreditCardStatement, stmt.id)
+    assert stmt.is_repaid is False
+    assert stmt.repaid_amount == 100.0  # 部分还款金额保留
+
+
+def test_resync_with_lower_amount_converges_partial_repay(sync_env, monkeypatch):
+    """复审 Low 6 回归：部分还款（400/1000）后解析器修复使重新解析得到更小
+    金额（300）——保留 repaid_amount 会留下负剩余（汇总误判富余）。确定性
+    收敛：累计已还 ≥ 新应还 → 归一化为已还清（与超额还款语义一致）。"""
+    from statement_fixtures import load_ccb
+
+    client, db, _, account = sync_env
+    client.post("/api/credit-cards", json={
+        "display_name": "建行卡", "bank_name": "建设银行", "last_four": "6714",
+        "statement_day": 27, "due_day": 16, "remind_days_before": [3],
+        "credit_limit": None, "is_active": True, "show_in_calendar": True,
+    })
+    account_id = account.id
+
+    from app.services import imap_client as ic
+
+    def fake_fetch(email, password, provider, days, predicate=None, **kwargs):
+        return [{"uid": b"1", "from_address": "cc@ccb.com", "subject": "账单",
+                 "raw": load_ccb()}]
+
+    monkeypatch.setattr(ic, "fetch_full_mime", fake_fetch)
+    orig_parse = credit_card_statement_sync.parse_email
+
+    def inflated_parse(raw, from_address=""):
+        r = orig_parse(raw, from_address=from_address)
+        st = next(s for s in r.statements if s.card_last_four == "6714")
+        # 模拟旧解析器金额虚高（如账户级应还误复制给该卡）：追加一笔补足
+        # 差额的调整明细使勾稽自洽（verify 保持 ok）
+        st.total_due = 3000.0
+        first = st.items[0]
+        st.items = list(st.items) + [type(first)(
+            trans_date_raw=first.trans_date_raw, trans_date=first.trans_date,
+            posted_date=first.posted_date, description="账户调整",
+            amount=3000.0 - sum(i.amount for i in st.items if i.tx_type != "payment"), tx_amount=None,
+            tx_currency=None, tx_type="purchase", installment_note=None,
+        )]
+        return r
+
+    monkeypatch.setattr(credit_card_statement_sync, "parse_email", inflated_parse)
+    assert client.post(f"/api/imap/accounts/{account_id}/sync-statements",
+                       json={"days": 31}).status_code == 200
+    stmt = db.query(CreditCardStatement).filter_by(card_last_four="6714").one()
+
+    # 部分还款 2600（虚高账面 3000）
+    resp = client.post(f"/api/credit-cards/statements/{stmt.id}/repay", json={"amount": 2600})
+    assert resp.status_code == 200, f"repay failed: {resp.status_code} {resp.text[:200]}"
+
+    db.expire_all()
+    stmt = db.get(CreditCardStatement, stmt.id)
+    assert stmt.repaid_amount == 2600.0 and stmt.is_repaid is False
+
+    # 解析器修复：重新解析得到正确金额（1658.72，明细勾稽自然成立）——
+    # 累计 2600 ≥ 1658.72，必须收敛为已还清（不留负剩余被误判富余）
+    monkeypatch.setattr(credit_card_statement_sync, "parse_email", orig_parse)
+    assert client.post(f"/api/imap/accounts/{account_id}/sync-statements",
+                       json={"days": 31}).status_code == 200
+    db.expire_all()
+    stmt = db.get(CreditCardStatement, stmt.id)
+    assert stmt.is_repaid is True, "累计已还 ≥ 新应还应收敛为已还清（不留负剩余）"
+    assert stmt.repaid_amount == stmt.total_due  # 归一化
+
+
+def test_resync_amount_increase_downgrades_cleared_statement(sync_env, monkeypatch):
+    """三审 Medium 1 回归：已还清账单重解析金额变大（原还清 → 银行更正上调）
+    ——不得让新增欠款被已还状态隐藏。正确行为：降级为未还、保留实际已还、
+    清 repaid_at；汇总可见新增欠款。"""
+    from statement_fixtures import load_ccb
+
+    client, db, _, account = sync_env
+    client.post("/api/credit-cards", json={
+        "display_name": "建行卡", "bank_name": "建设银行", "last_four": "6714",
+        "statement_day": 27, "due_day": 16, "remind_days_before": [3],
+        "credit_limit": None, "is_active": True, "show_in_calendar": True,
+    })
+    account_id = account.id
+
+    from app.services import imap_client as ic
+
+    def fake_fetch(email, password, provider, days, predicate=None, **kwargs):
+        return [{"uid": b"1", "from_address": "cc@ccb.com", "subject": "账单",
+                 "raw": load_ccb()}]
+
+    monkeypatch.setattr(ic, "fetch_full_mime", fake_fetch)
+    orig_parse = credit_card_statement_sync.parse_email
+
+    def inflated_parse(raw, from_address=""):
+        r = orig_parse(raw, from_address=from_address)
+        st = next(s for s in r.statements if s.card_last_four == "6714")
+        # 勾稽自洽的金额上调：追加一笔补足净额差额的 purchase 明细
+        st.total_due = 3000.0
+        first = st.items[0]
+        st.items = list(st.items) + [type(first)(
+            trans_date_raw=first.trans_date_raw, trans_date=first.trans_date,
+            posted_date=first.posted_date, description="账单更正补录",
+            amount=3000.0 - sum(i.amount for i in st.items if i.tx_type != "payment"),
+            tx_amount=None, tx_currency=None, tx_type="purchase", installment_note=None,
+        )]
+        return r
+
+    monkeypatch.setattr(credit_card_statement_sync, "parse_email", orig_parse)
+    assert client.post(f"/api/imap/accounts/{account_id}/sync-statements",
+                       json={"days": 31}).status_code == 200
+    stmt = db.query(CreditCardStatement).filter_by(card_last_four="6714").one()
+
+    # 用户全部还清
+    original_due = stmt.total_due
+    resp = client.post(f"/api/credit-cards/statements/{stmt.id}/repay", json={"amount": original_due})
+    assert resp.status_code == 200, resp.text[:200]
+    db.expire_all()
+    stmt = db.get(CreditCardStatement, stmt.id)
+    assert stmt.is_repaid is True
+
+    # 银行更正账单：金额上调（重解析）
+    monkeypatch.setattr(credit_card_statement_sync, "parse_email", inflated_parse)
+    assert client.post(f"/api/imap/accounts/{account_id}/sync-statements",
+                       json={"days": 31}).status_code == 200
+    db.expire_all()
+    stmt = db.get(CreditCardStatement, stmt.id)
+    # 必须降级为未还清（新欠款可见），保留实际已还，清还清时间
+    assert stmt.is_repaid is False, "金额上调后不得继续用已还状态隐藏新欠款"
+    assert stmt.repaid_amount == original_due
+    assert stmt.repaid_at is None
+
+    # 汇总可见新增欠款（滚动余额口径：该卡最新账单剩余 = 3000 - 已还；
+    # fixture 中另一张卡 5468 unmatched 进孤立组——断言本卡 per_card）
+    summary = client.get("/api/credit-cards/outstanding/summary").json()
+    entry = next(e for e in summary["per_card"] if e["card_id"] is not None)
+    assert entry["total_due"] == round(3000.0 - original_due, 2)
+
+
+def test_resync_keeps_unmarked_surplus_statement_unmarked(sync_env, monkeypatch):
+    """四审 Medium 2 回归：未标记的负数富余账单（total_due=-200、repaid=0）
+    重复解析不得被「0 >= -200」误判成已还清——用户从未操作过它；同样保护
+    total_due=0 的账单。只有真实正数已还覆盖新应还才收敛。"""
+    from statement_fixtures import load_ccb
+
+    client, db, _, account = sync_env
+    client.post("/api/credit-cards", json={
+        "display_name": "建行卡", "bank_name": "建设银行", "last_four": "6714",
+        "statement_day": 27, "due_day": 16, "remind_days_before": [3],
+        "credit_limit": None, "is_active": True, "show_in_calendar": True,
+    })
+    account_id = account.id
+
+    from app.services import imap_client as ic
+
+    def fake_fetch(email, password, provider, days, predicate=None, **kwargs):
+        return [{"uid": b"1", "from_address": "cc@ccb.com", "subject": "账单",
+                 "raw": load_ccb()}]
+
+    monkeypatch.setattr(ic, "fetch_full_mime", fake_fetch)
+    orig_parse = credit_card_statement_sync.parse_email
+
+    def surplus_parse(raw, from_address=""):
+        r = orig_parse(raw, from_address=from_address)
+        st = next(s for s in r.statements if s.card_last_four == "6714")
+        st.total_due = -200.0
+        return r
+
+    monkeypatch.setattr(credit_card_statement_sync, "parse_email", surplus_parse)
+    assert client.post(f"/api/imap/accounts/{account_id}/sync-statements",
+                       json={"days": 31}).status_code == 200
+    stmt = db.query(CreditCardStatement).filter_by(card_last_four="6714").one()
+
+    # 首次落库：未标记富余
+    assert stmt.is_repaid is False and stmt.repaid_amount == 0.0
+
+    # 重复解析同一封邮件（模拟用户再点「解析账单」）
+    assert client.post(f"/api/imap/accounts/{account_id}/sync-statements",
+                       json={"days": 31}).status_code == 200
+    db.expire_all()
+    stmt = db.get(CreditCardStatement, stmt.id)
+    assert stmt.is_repaid is False, "未操作的富余账单不得被自动标记已还清"
+    assert stmt.repaid_amount == 0.0
+
+
+def test_resync_cleared_statement_to_null_amount_keeps_restorable_state(sync_env, monkeypatch):
+    """四审 Medium 4 回归：已还清账单重解析为金额未知（total_due=NULL）——
+    保留旧可信 total_due 不覆盖（否则 is_repaid=True + repaid_amount=1000 +
+    total_due=None 违反备份交叉不变量，应用产出无法恢复的备份）。"""
+    from statement_fixtures import load_ccb
+
+    client, db, _, account = sync_env
+    client.post("/api/credit-cards", json={
+        "display_name": "建行卡", "bank_name": "建设银行", "last_four": "6714",
+        "statement_day": 27, "due_day": 16, "remind_days_before": [3],
+        "credit_limit": None, "is_active": True, "show_in_calendar": True,
+    })
+    account_id = account.id
+
+    from app.services import imap_client as ic
+
+    def fake_fetch(email, password, provider, days, predicate=None, **kwargs):
+        return [{"uid": b"1", "from_address": "cc@ccb.com", "subject": "账单",
+                 "raw": load_ccb()}]
+
+    monkeypatch.setattr(ic, "fetch_full_mime", fake_fetch)
+    orig_parse = credit_card_statement_sync.parse_email
+
+    def null_amount_parse(raw, from_address=""):
+        r = orig_parse(raw, from_address=from_address)
+        st = next(s for s in r.statements if s.card_last_four == "6714")
+        st.total_due = None  # 银行模板变化：总额未提取到
+        return r
+
+    monkeypatch.setattr(credit_card_statement_sync, "parse_email", orig_parse)
+    assert client.post(f"/api/imap/accounts/{account_id}/sync-statements",
+                       json={"days": 31}).status_code == 200
+    stmt = db.query(CreditCardStatement).filter_by(card_last_four="6714").one()
+    original_total = stmt.total_due
+
+    # 用户还清
+    client.post(f"/api/credit-cards/statements/{stmt.id}/repay", json={"amount": original_total})
+    db.expire_all()
+    stmt = db.get(CreditCardStatement, stmt.id)
+    assert stmt.is_repaid is True
+
+    # 重解析金额未知化
+    monkeypatch.setattr(credit_card_statement_sync, "parse_email", null_amount_parse)
+    assert client.post(f"/api/imap/accounts/{account_id}/sync-statements",
+                       json={"days": 31}).status_code == 200
+    db.expire_all()
+    stmt = db.get(CreditCardStatement, stmt.id)
+    # 旧可信 total_due 保留（不覆盖为 None），还清状态与金额保持一致
+    assert stmt.total_due == original_total
+    assert stmt.is_repaid is True
+    assert stmt.repaid_amount == original_total
+
+    # 备份往返：导出可恢复（交叉不变量满足）
+    from app.routers import backup as backup_router
+    from app.models import User as _U
+    owner = db.get(_U, stmt.user_id)
+    entities, _subs = backup_router._collect_entities(db, owner)
+    exported = {"export_version": 4, "user": {"username": owner.username}, **entities}
+    backup_router._validate_backup_payload(exported)  # 不得抛「与已还状态不一致」
+
+
+def test_resync_mismatch_keeps_repayment_tuple_intact(sync_env, monkeypatch):
+    """五审 Medium 1 回归：部分还款后重解析因模板漂移得到 mismatch 金额——
+    mismatch 金额不可信，还款四元组（total_due/repaid_amount/is_repaid/
+    repaid_at）必须全部保留旧值；导出备份仍可通过恢复校验。"""
+    from statement_fixtures import load_ccb
+
+    client, db, _, account = sync_env
+    client.post("/api/credit-cards", json={
+        "display_name": "建行卡", "bank_name": "建设银行", "last_four": "6714",
+        "statement_day": 27, "due_day": 16, "remind_days_before": [3],
+        "credit_limit": None, "is_active": True, "show_in_calendar": True,
+    })
+    account_id = account.id
+
+    from app.services import imap_client as ic
+
+    def fake_fetch(email, password, provider, days, predicate=None, **kwargs):
+        return [{"uid": b"1", "from_address": "cc@ccb.com", "subject": "账单",
+                 "raw": load_ccb()}]
+
+    monkeypatch.setattr(ic, "fetch_full_mime", fake_fetch)
+    orig_parse = credit_card_statement_sync.parse_email
+
+    def inflated_parse(raw, from_address=""):
+        # 模板漂移：金额与明细净额不符 → verify=mismatch
+        r = orig_parse(raw, from_address=from_address)
+        st = next(s for s in r.statements if s.card_last_four == "6714")
+        st.total_due = 300.0
+        return r
+
+    monkeypatch.setattr(credit_card_statement_sync, "parse_email", orig_parse)
+    assert client.post(f"/api/imap/accounts/{account_id}/sync-statements",
+                       json={"days": 31}).status_code == 200
+    stmt = db.query(CreditCardStatement).filter_by(card_last_four="6714").one()
+
+    client.post(f"/api/credit-cards/statements/{stmt.id}/repay", json={"amount": 400})
+    db.expire_all()
+    stmt = db.get(CreditCardStatement, stmt.id)
+    snapshot = (stmt.total_due, stmt.repaid_amount, stmt.is_repaid, stmt.repaid_at)
+
+    # 重解析 mismatch
+    monkeypatch.setattr(credit_card_statement_sync, "parse_email", inflated_parse)
+    assert client.post(f"/api/imap/accounts/{account_id}/sync-statements",
+                       json={"days": 31}).status_code == 200
+    db.expire_all()
+    stmt = db.get(CreditCardStatement, stmt.id)
+    assert (stmt.total_due, stmt.repaid_amount, stmt.is_repaid, stmt.repaid_at) == snapshot, (
+        "mismatch 重解析不得改动还款四元组"
+    )
+    assert stmt.verify_status == "mismatch"  # mismatch 本身如实展示
+
+    # 导出备份仍可通过恢复校验（无负剩余矛盾态）
+    from app.routers import backup as backup_router
+    from app.models import User as _U
+    owner = db.get(_U, stmt.user_id)
+    entities, _subs = backup_router._collect_entities(db, owner)
+    exported = {"export_version": 4, "user": {"username": owner.username}, **entities}
+    backup_router._validate_backup_payload(exported)
+
+
+def test_downgrade_does_not_rollback_boundary_below_later_cleared(sync_env, monkeypatch):
+    """五审 Medium 3 回归：8月账单先还清（界线=8/16）→ 更晚的 9月账单还清
+    （界线=9/16）→ 8月账单重解析金额上调被 sync 降级为未还——界线重算不得
+    低于 9月已还账单可证明的还款日（盲目回退让已还的 9月复活）。走真实
+    sync 降级路径（fixture 邮件即 8月账单）。"""
+    from statement_fixtures import load_ccb
+    from app.models import CreditCardStatement, CreditCard
+    from datetime import date, timedelta
+
+    client, db, _, account = sync_env
+    client.post("/api/credit-cards", json={
+        "display_name": "建行卡", "bank_name": "建设银行", "last_four": "6714",
+        "statement_day": 27, "due_day": 16, "remind_days_before": [3],
+        "credit_limit": None, "is_active": True, "show_in_calendar": True,
+    })
+    account_id = account.id
+
+    from app.services import imap_client as ic
+    orig_parse = credit_card_statement_sync.parse_email
+    card = db.query(CreditCard).filter_by(last_four="6714").one()
+    today = date.today()
+    aug_due = date(today.year, 8, 16)
+    sep_due = date(today.year, 9, 16)
+
+    # 更晚的 9月已还账单（独立邮件 m-sep，还清后可证明 9/16 已还）
+    sep = CreditCardStatement(
+        user_id=card.user_id, card_id=card.id, bank_key="ccb",
+        card_last_four="6714", match_status="matched", due_date=sep_due,
+        total_due=800.0, statement_date=sep_due - timedelta(days=11),
+        source_account_id=account.id, message_id="m-sep",
+        verify_status="ok", is_repaid=True, repaid_amount=800.0,
+    )
+    db.add(sep)
+    db.commit()
+
+    # 第一次同步：fixture 邮件（=8月账单，due=8/16 需 monkeypatch 改日期）
+    def inflated_aug(raw, from_address=""):
+        r = orig_parse(raw, from_address=from_address)
+        st = next(s for s in r.statements if s.card_last_four == "6714")
+        st.due_date = aug_due
+        st.statement_date = aug_due - timedelta(days=11)
+        return r
+
+    def fetch_fixture(email, password, provider, days, predicate=None, **kwargs):
+        return [{"uid": b"1", "from_address": "cc@ccb.com", "subject": "账单",
+                 "raw": load_ccb()}]
+
+    monkeypatch.setattr(ic, "fetch_full_mime", fetch_fixture)
+    monkeypatch.setattr(credit_card_statement_sync, "parse_email", inflated_aug)
+    assert client.post(f"/api/imap/accounts/{account_id}/sync-statements",
+                       json={"days": 90}).status_code == 200
+    aug = db.query(CreditCardStatement).filter_by(
+        card_last_four="6714", message_id="ccb-fix-1").one()
+    # 用户全额还清 8月账单（原始 total_due）→ 界线推进到 8/16
+    client.post(f"/api/credit-cards/statements/{aug.id}/repay",
+                json={"amount": aug.total_due})
+    db.expire_all()
+    card = db.get(CreditCard, card.id)
+    assert card.repaid_through_due == aug_due
+    # 手动补上 9月账单的界线证明（8月后还清的 9月账单把界线推进到 9/16）
+    card.repaid_through_due = sep_due
+    db.commit()
+
+    # 重解析同一邮件：金额上调（勾稽自洽）→ 8月账单降级为未还
+    def inflated_aug_v2(raw, from_address=""):
+        r = inflated_aug(raw, from_address=from_address)
+        st = next(s for s in r.statements if s.card_last_four == "6714")
+        st.total_due = 3000.0
+        first = st.items[0]
+        st.items = list(st.items) + [type(first)(
+            trans_date_raw=first.trans_date_raw, trans_date=first.trans_date,
+            posted_date=first.posted_date, description="账单更正补录",
+            amount=3000.0 - sum(i.amount for i in st.items if i.tx_type != "payment"),
+            tx_amount=None, tx_currency=None, tx_type="purchase", installment_note=None,
+        )]
+        return r
+
+    monkeypatch.setattr(credit_card_statement_sync, "parse_email", inflated_aug_v2)
+    assert client.post(f"/api/imap/accounts/{account_id}/sync-statements",
+                       json={"days": 90}).status_code == 200
+    db.expire_all()
+
+    # 8月账单降级为未还（金额上调、累计已还不足）
+    aug = db.get(CreditCardStatement, aug.id)
+    assert aug.is_repaid is False
+    # 界线重算不得低于 9月已还账单可证明的还款日
+    card = db.get(CreditCard, card.id)
+    assert card.repaid_through_due is not None
+    assert card.repaid_through_due >= sep_due, (
+        f"界线 {card.repaid_through_due} 不得低于 9月已还账单还款日 {sep_due}"
+    )
+    # 9月账单保持已还
+    assert db.get(CreditCardStatement, sep.id).is_repaid is True
+
+
+def test_downgrade_restores_canceled_reminders(sync_env, monkeypatch):
+    """五审 Medium 4 回归：还清后投递前复核把当期提醒置 canceled，重解析
+    金额上调降级为未还——被取消的提醒必须恢复为 pending（唯一键不能永久
+    压住新欠款的提醒），且绝不复活 sent 行。"""
+    from statement_fixtures import load_ccb
+
+    client, db, _, account = sync_env
+    client.post("/api/credit-cards", json={
+        "display_name": "建行卡", "bank_name": "建设银行", "last_four": "6714",
+        "statement_day": 27, "due_day": 16, "remind_days_before": [3],
+        "credit_limit": None, "is_active": True, "show_in_calendar": True,
+    })
+    account_id = account.id
+
+    from app.services import imap_client as ic
+    from app.models import CreditCardNotificationOutbox as _CCNO
+    from app.services.scheduler import utcnow
+    from datetime import timedelta
+
+    orig_parse = credit_card_statement_sync.parse_email
+    card = db.query(CreditCard).filter_by(last_four="6714").one()
+
+    # 第一阶段：正常解析入库（9月账单）
+    def fetch_fixture(email, password, provider, days, predicate=None, **kwargs):
+        return [{"uid": b"1", "from_address": "cc@ccb.com", "subject": "账单",
+                 "raw": load_ccb()}]
+
+    monkeypatch.setattr(ic, "fetch_full_mime", fetch_fixture)
+    assert client.post(f"/api/imap/accounts/{account_id}/sync-statements",
+                       json={"days": 90}).status_code == 200
+    stmt = db.query(CreditCardStatement).filter_by(card_last_four="6714").one()
+
+    # 用户还清 → 界线推进（模拟投递前复核把当期提醒取消：手工造 canceled 行，
+    # 与真实复核同一唯一键（卡+due+days+channel））
+    client.post(f"/api/credit-cards/statements/{stmt.id}/repay", json={"amount": stmt.total_due})
+    db.expire_all()
+    stmt = db.get(CreditCardStatement, stmt.id)
+    assert stmt.due_date is not None
+    canceled = _CCNO(
+        credit_card_id=card.id, user_id=card.user_id,
+        business_date=stmt.due_date - timedelta(days=3),
+        days_before=3, channel="telegram",
+        status="canceled", credit_card_name="建行卡", due_date=stmt.due_date,
+        payload={}, canceled_at=utcnow(),
+    )
+    db.add(canceled)
+    card.repaid_through_due = stmt.due_date
+    db.commit()
+
+    # 重解析金额上调 → 降级为未还
+    def inflated_parse(raw, from_address=""):
+        r = orig_parse(raw, from_address=from_address)
+        st = next(s for s in r.statements if s.card_last_four == "6714")
+        st.total_due = 9999.0
+        first = st.items[0]
+        st.items = list(st.items) + [type(first)(
+            trans_date_raw=first.trans_date_raw, trans_date=first.trans_date,
+            posted_date=first.posted_date, description="账单更正补录",
+            amount=9999.0 - sum(i.amount for i in st.items if i.tx_type != "payment"),
+            tx_amount=None, tx_currency=None, tx_type="purchase", installment_note=None,
+        )]
+        return r
+
+    monkeypatch.setattr(credit_card_statement_sync, "parse_email", inflated_parse)
+    assert client.post(f"/api/imap/accounts/{account_id}/sync-statements",
+                       json={"days": 90}).status_code == 200
+    db.expire_all()
+
+    stmt = db.get(CreditCardStatement, stmt.id)
+    assert stmt.is_repaid is False  # 已降级
+    # canceled 提醒恢复为 pending（新欠款的提醒不再被永久压住）
+    db.expire_all()
+    row = db.get(_CCNO, canceled.id)
+    assert row.status == "pending", f"取消的提醒应恢复 pending，实际 {row.status}"
+
+
+def test_downgrade_does_not_revive_sent_reminders(sync_env, monkeypatch):
+    """五审 Medium 4 边界：sent 行绝不复活（已经发出去的不能重发）。"""
+    from statement_fixtures import load_ccb
+
+    client, db, _, account = sync_env
+    client.post("/api/credit-cards", json={
+        "display_name": "建行卡", "bank_name": "建设银行", "last_four": "6714",
+        "statement_day": 27, "due_day": 16, "remind_days_before": [3],
+        "credit_limit": None, "is_active": True, "show_in_calendar": True,
+    })
+    account_id = account.id
+
+    from app.services import imap_client as ic
+    from app.models import CreditCardNotificationOutbox as _CCNO
+    from app.services.scheduler import utcnow
+    from datetime import timedelta
+
+    orig_parse = credit_card_statement_sync.parse_email
+    card = db.query(CreditCard).filter_by(last_four="6714").one()
+
+    monkeypatch.setattr(ic, "fetch_full_mime", lambda *a, **kw: [
+        {"uid": b"1", "from_address": "cc@ccb.com", "subject": "账单", "raw": load_ccb()}])
+    assert client.post(f"/api/imap/accounts/{account_id}/sync-statements",
+                       json={"days": 90}).status_code == 200
+    stmt = db.query(CreditCardStatement).filter_by(card_last_four="6714").one()
+    client.post(f"/api/credit-cards/statements/{stmt.id}/repay", json={"amount": stmt.total_due})
+    db.expire_all()
+    stmt = db.get(CreditCardStatement, stmt.id)
+
+    sent = _CCNO(
+        credit_card_id=card.id, user_id=card.user_id,
+        business_date=stmt.due_date - timedelta(days=3),
+        days_before=3, channel="telegram",
+        status="sent", credit_card_name="建行卡", due_date=stmt.due_date,
+        payload={}, sent_at=utcnow(),
+    )
+    db.add(sent)
+    card.repaid_through_due = stmt.due_date
+    db.commit()
+
+    def inflated_parse(raw, from_address=""):
+        r = orig_parse(raw, from_address=from_address)
+        st = next(s for s in r.statements if s.card_last_four == "6714")
+        st.total_due = 9999.0
+        first = st.items[0]
+        st.items = list(st.items) + [type(first)(
+            trans_date_raw=first.trans_date_raw, trans_date=first.trans_date,
+            posted_date=first.posted_date, description="账单更正补录",
+            amount=9999.0 - sum(i.amount for i in st.items if i.tx_type != "payment"),
+            tx_amount=None, tx_currency=None, tx_type="purchase", installment_note=None,
+        )]
+        return r
+
+    monkeypatch.setattr(credit_card_statement_sync, "parse_email", inflated_parse)
+    assert client.post(f"/api/imap/accounts/{account_id}/sync-statements",
+                       json={"days": 90}).status_code == 200
+    db.expire_all()
+    row = db.get(_CCNO, sent.id)
+    assert row.status == "sent"  # sent 不复活
+
+
+def test_downgrade_provable_boundary_includes_nominal_derived_others(sync_env, monkeypatch):
+    """七审 Medium 2 回归：更晚的已还账单 due NULL 但出账日与名义日自证一致
+    （可可靠推导还款日）——降级其他账单时界线重算必须把它计入 provable，
+    不得误判「唯一依据」而回退（已还的它不得复活）。"""
+    from statement_fixtures import load_ccb
+    from app.models import CreditCardStatement, CreditCard
+    from datetime import date
+
+    client, db, _, account = sync_env
+    client.post("/api/credit-cards", json={
+        "display_name": "建行卡", "bank_name": "建设银行", "last_four": "6714",
+        "statement_day": 27, "due_day": 16, "remind_days_before": [3],
+        "credit_limit": None, "is_active": True, "show_in_calendar": True,
+    })
+    account_id = account.id
+
+    from app.services import imap_client as ic
+    orig_parse = credit_card_statement_sync.parse_email
+    card = db.query(CreditCard).filter_by(last_four="6714").one()
+    today = date.today()
+
+    # 更晚的已还账单：due NULL、statement_date=当月16日？不——自证条件是
+    # statement_date.day == card.statement_day(27)。造 9/27 出账、due NULL。
+    sep_stmt = date(today.year, 9, 27)
+    sep = CreditCardStatement(
+        user_id=card.user_id, card_id=card.id, bank_key="ccb",
+        card_last_four="6714", match_status="matched", due_date=None,
+        total_due=800.0, statement_date=sep_stmt,
+        source_account_id=account.id, message_id="m-sep",
+        verify_status="ok", is_repaid=True, repaid_amount=800.0,
+    )
+    db.add(sep)
+    # 界线已由该账单的还款（名义推导 10/16）推进
+    from app.credit_card_rules import _next_month
+    from app.credit_card_rules import anchor_month_day
+    card.repaid_through_due = anchor_month_day(*_next_month(sep_stmt.year, sep_stmt.month), 16)
+    db.commit()
+    nominal_sep_due = card.repaid_through_due
+
+    # 另一早账单（fixture 邮件=6714）已还、随后重解析金额上调 → 降级
+    def fetch_fixture(email, password, provider, days, predicate=None, **kwargs):
+        return [{"uid": b"1", "from_address": "cc@ccb.com", "subject": "账单",
+                 "raw": load_ccb()}]
+
+    monkeypatch.setattr(ic, "fetch_full_mime", fetch_fixture)
+    assert client.post(f"/api/imap/accounts/{account_id}/sync-statements",
+                       json={"days": 90}).status_code == 200
+    aug = db.query(CreditCardStatement).filter_by(
+        card_last_four="6714", message_id="ccb-fix-1").one()
+    client.post(f"/api/credit-cards/statements/{aug.id}/repay", json={"amount": aug.total_due})
+    db.expire_all()
+
+    # 重解析金额上调 → 降级
+    def inflated_parse(raw, from_address=""):
+        r = orig_parse(raw, from_address=from_address)
+        st = next(s for s in r.statements if s.card_last_four == "6714")
+        st.total_due = 5000.0
+        first = st.items[0]
+        st.items = list(st.items) + [type(first)(
+            trans_date_raw=first.trans_date_raw, trans_date=first.trans_date,
+            posted_date=first.posted_date, description="账单更正补录",
+            amount=5000.0 - sum(i.amount for i in st.items if i.tx_type != "payment"),
+            tx_amount=None, tx_currency=None, tx_type="purchase", installment_note=None,
+        )]
+        return r
+
+    monkeypatch.setattr(credit_card_statement_sync, "parse_email", inflated_parse)
+    assert client.post(f"/api/imap/accounts/{account_id}/sync-statements",
+                       json={"days": 90}).status_code == 200
+    db.expire_all()
+
+    aug = db.get(CreditCardStatement, aug.id)
+    assert aug.is_repaid is False  # 已降级
+    # 界线不得低于名义推导的 9月已还账单还款日（盲目回退会让它复活）
+    card = db.get(CreditCard, card.id)
+    assert card.repaid_through_due is not None
+    assert card.repaid_through_due >= nominal_sep_due, (
+        f"界线 {card.repaid_through_due} 不得低于名义推导的已还账单还款日 {nominal_sep_due}"
+    )
+    assert db.get(CreditCardStatement, sep.id).is_repaid is True
+
+
+def test_downgrade_with_due_lost_uses_prior_due_for_boundary(sync_env, monkeypatch):
+    """八审 Medium 3 回归：已还账单（due=9/16，界线已推进）重解析金额上调且
+    due 丢成 NULL——降级协调用覆盖前保存的旧可信 due 兜底：界线回退正常计算、
+    canceled 提醒按旧 due 恢复（否则永久静默）。"""
+    from statement_fixtures import load_ccb
+
+    client, db, _, account = sync_env
+    client.post("/api/credit-cards", json={
+        "display_name": "建行卡", "bank_name": "建设银行", "last_four": "6714",
+        "statement_day": 27, "due_day": 16, "remind_days_before": [3],
+        "credit_limit": None, "is_active": True, "show_in_calendar": True,
+    })
+    account_id = account.id
+
+    from app.services import imap_client as ic
+    from app.models import CreditCardNotificationOutbox as _CCNO
+    from app.services.scheduler import utcnow
+    from datetime import timedelta
+
+    orig_parse = credit_card_statement_sync.parse_email
+    card = db.query(CreditCard).filter_by(last_four="6714").one()
+
+    # 第一阶段：正常解析（due 非空）入库
+    monkeypatch.setattr(ic, "fetch_full_mime", lambda *a, **kw: [
+        {"uid": b"1", "from_address": "cc@ccb.com", "subject": "账单", "raw": load_ccb()}])
+    assert client.post(f"/api/imap/accounts/{account_id}/sync-statements",
+                       json={"days": 90}).status_code == 200
+    stmt = db.query(CreditCardStatement).filter_by(card_last_four="6714").one()
+    original_due = stmt.due_date
+    assert original_due is not None
+
+    # 用户还清 + 界线推进 + 造 canceled 提醒
+    client.post(f"/api/credit-cards/statements/{stmt.id}/repay", json={"amount": stmt.total_due})
+    db.expire_all()
+    stmt = db.get(CreditCardStatement, stmt.id)
+    card = db.get(CreditCard, card.id)
+    assert card.repaid_through_due == original_due
+    canceled = _CCNO(
+        credit_card_id=card.id, user_id=card.user_id,
+        business_date=original_due - timedelta(days=3),
+        days_before=3, channel="telegram",
+        status="canceled", credit_card_name="建行卡", due_date=original_due,
+        payload={}, canceled_at=utcnow(),
+    )
+    db.add(canceled)
+    db.commit()
+
+    # 重解析：金额上调 + due 丢失
+    def inflated_null_due(raw, from_address=""):
+        r = orig_parse(raw, from_address=from_address)
+        st = next(s for s in r.statements if s.card_last_four == "6714")
+        st.total_due = 9999.0
+        st.due_date = None
+        first = st.items[0]
+        st.items = list(st.items) + [type(first)(
+            trans_date_raw=first.trans_date_raw, trans_date=first.trans_date,
+            posted_date=first.posted_date, description="账单更正补录",
+            amount=9999.0 - sum(i.amount for i in st.items if i.tx_type != "payment"),
+            tx_amount=None, tx_currency=None, tx_type="purchase", installment_note=None,
+        )]
+        return r
+
+    monkeypatch.setattr(credit_card_statement_sync, "parse_email", inflated_null_due)
+    assert client.post(f"/api/imap/accounts/{account_id}/sync-statements",
+                       json={"days": 90}).status_code == 200
+    db.expire_all()
+
+    stmt = db.get(CreditCardStatement, stmt.id)
+    assert stmt.is_repaid is False  # 已降级
+    assert stmt.due_date is None  # 新解析确实没提取到 due
+    # canceled 提醒按旧 due 恢复（否则该期提醒被永久静默）
+    row = db.get(_CCNO, canceled.id)
+    assert row.status == "pending", f"canceled 提醒应按旧 due 恢复，实际 {row.status}"
+
+
+def test_cleared_side_effect_uses_fresh_card_profile(sync_env, monkeypatch):
+    """九审 Medium 1 回归：金额下调收敛为已还清的同一次重解析同时更改了卡片
+    账单日（回写）且 due 缺失——界线推导必须用**回写后**的新名义日（用旧
+    名义日会自证失败、界线漏推进、当期提醒不静默）。"""
+    from statement_fixtures import load_ccb
+
+    client, db, _, account = sync_env
+    client.post("/api/credit-cards", json={
+        "display_name": "建行卡", "bank_name": "建设银行", "last_four": "6714",
+        "statement_day": 15, "due_day": 25, "remind_days_before": [3],
+        "credit_limit": None, "is_active": True, "show_in_calendar": True,
+    })
+    account_id = account.id
+
+    from app.services import imap_client as ic
+    from app.models import CreditCardStatement, CreditCard
+    from datetime import date
+
+    orig_parse = credit_card_statement_sync.parse_email
+    card = db.query(CreditCard).filter_by(last_four="6714").one()
+    today = date.today()
+
+    # 初始账单：9月15日出账（与旧名义日一致）、1000、已部分还款 800
+    sep15 = date(today.year, 9, 15)
+    stmt = CreditCardStatement(
+        user_id=card.user_id, card_id=card.id, bank_key="ccb",
+        card_last_four="6714", match_status="matched", due_date=None,
+        total_due=1000.0, statement_date=sep15,
+        source_account_id=account.id, message_id="ccb-fix-1",
+        verify_status="ok", is_repaid=False, repaid_amount=800.0,
+    )
+    db.add(stmt)
+    db.commit()
+
+    # 重解析：金额下调至 700（800 覆盖）+ 出账日改为 9月5日（回写新名义日 5）
+    def corrected_parse(raw, from_address=""):
+        r = orig_parse(raw, from_address=from_address)
+        st = next(s for s in r.statements if s.card_last_four == "6714")
+        st.statement_date = date(today.year, 9, 5)
+        st.due_date = None  # due 缺失（界线推导只能走名义路径）
+        # 金额下调需勾稽自洽：净额 1658.72 → 700，补一笔负调整（退款）
+        st.total_due = 700.0
+        first = st.items[0]
+        st.items = list(st.items) + [type(first)(
+            trans_date_raw=first.trans_date_raw, trans_date=first.trans_date,
+            posted_date=first.posted_date, description="账单更正调减",
+            amount=700.0 - sum(i.amount for i in st.items if i.tx_type != "payment"),
+            tx_amount=None, tx_currency=None, tx_type="refund", installment_note=None,
+        )]
+        return r
+
+    def fetch(email, password, provider, days, predicate=None, **kwargs):
+        return [{"uid": b"1", "from_address": "cc@ccb.com", "subject": "账单",
+                 "raw": load_ccb()}]
+
+    monkeypatch.setattr(ic, "fetch_full_mime", fetch)
+    monkeypatch.setattr(credit_card_statement_sync, "parse_email", corrected_parse)
+    assert client.post(f"/api/imap/accounts/{account_id}/sync-statements",
+                       json={"days": 90}).status_code == 200
+    db.expire_all()
+
+    stmt = db.get(CreditCardStatement, stmt.id)
+    assert stmt.is_repaid is True  # 800 ≥ 700 收敛为已还清
+    assert stmt.repaid_amount == 700.0
+    # 卡片名义日已被回写为 5（本次同步的最终资料）
+    card = db.get(CreditCard, card.id)
+    assert card.statement_day == 5
+    # 界线必须推进到新名义周期的还款日（9/25——9月5日出账、due_day 25 同月；
+    # 若用旧名义日 15 自证失败，界线会是 None——漏推进且当期提醒不静默）
+    assert card.repaid_through_due is not None, (
+        "界线必须用回写后的新名义日推导（旧名义日 15 会自证失败漏推进）"
+    )
+    assert card.repaid_through_due == date(today.year, 9, 25)
+
+
+def test_double_null_downgrade_restores_canceled_reminder_with_previous_boundary(
+    sync_env, monkeypatch
+):
+    """十审 Medium 1 回归：三日期全空账单经卡片级全量标记还清（界线推进到
+    名义锚定日、提醒被 canceled）→ 重解析金额上调降级为未还——界线清空前
+    先快照，canceled 提醒用降级前界线恢复为 pending（否则该期提醒被唯一键
+    永久压住，新增欠款永久无提醒）。"""
+    from statement_fixtures import load_ccb
+
+    client, db, _, account = sync_env
+    client.post("/api/credit-cards", json={
+        "display_name": "建行卡", "bank_name": "建设银行", "last_four": "6714",
+        "statement_day": 27, "due_day": 16, "remind_days_before": [3],
+        "credit_limit": None, "is_active": True, "show_in_calendar": True,
+    })
+    account_id = account.id
+
+    from app.services import imap_client as ic
+    from app.models import CreditCardNotificationOutbox as _CCNO
+    from app.services.scheduler import utcnow
+    from datetime import timedelta
+
+    orig_parse = credit_card_statement_sync.parse_email
+    card = db.query(CreditCard).filter_by(last_four="6714").one()
+
+    # 双 NULL 日期账单（statement_date/bill_period_end/due_date 全空）
+    def null_dates_parse(raw, from_address=""):
+        r = orig_parse(raw, from_address=from_address)
+        st = next(s for s in r.statements if s.card_last_four == "6714")
+        st.statement_date = None
+        st.bill_period_start = None
+        st.bill_period_end = None
+        st.due_date = None
+        return r
+
+    monkeypatch.setattr(ic, "fetch_full_mime", lambda *a, **kw: [
+        {"uid": b"1", "from_address": "cc@ccb.com", "subject": "账单", "raw": load_ccb()}])
+    monkeypatch.setattr(credit_card_statement_sync, "parse_email", null_dates_parse)
+    assert client.post(f"/api/imap/accounts/{account_id}/sync-statements",
+                       json={"days": 90}).status_code == 200
+    stmt = db.query(CreditCardStatement).filter_by(card_last_four="6714").one()
+    assert stmt.statement_date is None and stmt.due_date is None
+
+    # 卡片级全量标记还清（mark-repaid 的锚定日兜底推进界线）+ 造 canceled 提醒
+    client.post(f"/api/credit-cards/{card.id}/mark-repaid")
+    db.expire_all()
+    card = db.get(CreditCard, card.id)
+    boundary = card.repaid_through_due
+    assert boundary is not None  # mark-repaid 的锚定日兜底
+
+    canceled = _CCNO(
+        credit_card_id=card.id, user_id=card.user_id,
+        business_date=boundary - timedelta(days=3),
+        days_before=3, channel="telegram",
+        status="canceled", credit_card_name="建行卡", due_date=boundary,
+        payload={}, canceled_at=utcnow(),
+    )
+    db.add(canceled)
+    db.commit()
+
+    # 重解析金额上调（仍双 NULL 日期）→ 降级为未还。
+    # 勾稽自洽：建行逐卡勾稽是「非还款净额 == total_due」，金额上调需补
+    # purchase 调整明细（9999 − 1658.72），否则 verify=mismatch 会被门卫
+    # 正确地保留原状（mismatch 金额不可信）
+    def inflated_null_dates(raw, from_address=""):
+        r = null_dates_parse(raw, from_address=from_address)
+        st = next(s for s in r.statements if s.card_last_four == "6714")
+        st.total_due = 9999.0
+        first = st.items[0]
+        st.items = list(st.items) + [type(first)(
+            trans_date_raw=first.trans_date_raw, trans_date=first.trans_date,
+            posted_date=first.posted_date, description="账单更正补录",
+            amount=9999.0 - sum(i.amount for i in st.items if i.tx_type != "payment"),
+            tx_amount=None, tx_currency=None, tx_type="purchase", installment_note=None,
+        )]
+        return r
+
+    monkeypatch.setattr(credit_card_statement_sync, "parse_email", inflated_null_dates)
+    assert client.post(f"/api/imap/accounts/{account_id}/sync-statements",
+                       json={"days": 90}).status_code == 200
+    db.expire_all()
+
+    stmt = db.get(CreditCardStatement, stmt.id)
+    assert stmt.is_repaid is False  # 已降级
+    # 界线清空（无可证明依据，宁多提醒）
+    card = db.get(CreditCard, card.id)
+    assert card.repaid_through_due is None
+    # canceled 提醒用降级前界线恢复为 pending（十审 M1 核心）
+    row = db.get(_CCNO, canceled.id)
+    assert row.status == "pending", f"canceled 提醒应用降级前界线恢复，实际 {row.status}"
+
+
+def test_resync_null_amount_keeps_partial_repayment_intact(sync_env, monkeypatch):
+    """十一审 Medium 2 回归：部分还款（400/1000）后重解析金额未知——保留旧
+    total_due 与 repaid_amount（清零会永久丢失用户录入的真实还款）；后续
+    解析恢复 1000 时剩余仍为 600。"""
+    from statement_fixtures import load_ccb
+
+    client, db, _, account = sync_env
+    client.post("/api/credit-cards", json={
+        "display_name": "建行卡", "bank_name": "建设银行", "last_four": "6714",
+        "statement_day": 27, "due_day": 16, "remind_days_before": [3],
+        "credit_limit": None, "is_active": True, "show_in_calendar": True,
+    })
+    account_id = account.id
+
+    from app.services import imap_client as ic
+
+    def fake_fetch(email, password, provider, days, predicate=None, **kwargs):
+        return [{"uid": b"1", "from_address": "cc@ccb.com", "subject": "账单",
+                 "raw": load_ccb()}]
+
+    monkeypatch.setattr(ic, "fetch_full_mime", fake_fetch)
+    orig_parse = credit_card_statement_sync.parse_email
+
+    def null_amount_parse(raw, from_address=""):
+        r = orig_parse(raw, from_address=from_address)
+        st = next(s for s in r.statements if s.card_last_four == "6714")
+        st.total_due = None
+        return r
+
+    # 第一次同步：inflated 解析（1000，勾稽自洽需补明细——直接用
+    # self-consistent 方式构造）
+    def inflated_parse(raw, from_address=""):
+        r = orig_parse(raw, from_address=from_address)
+        st = next(s for s in r.statements if s.card_last_four == "6714")
+        st.total_due = 1000.0
+        first = st.items[0]
+        st.items = list(st.items) + [type(first)(
+            trans_date_raw=first.trans_date_raw, trans_date=first.trans_date,
+            posted_date=first.posted_date, description="账单更正补录",
+            amount=1000.0 - sum(i.amount for i in st.items if i.tx_type != "payment"),
+            tx_amount=None, tx_currency=None, tx_type="purchase", installment_note=None,
+        )]
+        return r
+
+    monkeypatch.setattr(credit_card_statement_sync, "parse_email", inflated_parse)
+    assert client.post(f"/api/imap/accounts/{account_id}/sync-statements",
+                       json={"days": 31}).status_code == 200
+    stmt = db.query(CreditCardStatement).filter_by(card_last_four="6714").one()
+    assert stmt.total_due == 1000.0
+
+    client.post(f"/api/credit-cards/statements/{stmt.id}/repay", json={"amount": 400})
+    db.expire_all()
+    stmt = db.get(CreditCardStatement, stmt.id)
+    assert stmt.repaid_amount == 400.0
+
+    # 重解析金额未知 → 保留旧 total_due=1000 与 repaid_amount=400
+    monkeypatch.setattr(credit_card_statement_sync, "parse_email", null_amount_parse)
+    assert client.post(f"/api/imap/accounts/{account_id}/sync-statements",
+                       json={"days": 31}).status_code == 200
+    db.expire_all()
+    stmt = db.get(CreditCardStatement, stmt.id)
+    assert stmt.total_due == 1000.0, "部分还款账单遇金额未知必须保留旧可信 total_due"
+    assert stmt.repaid_amount == 400.0, "用户录入的还款不得被清零"
+    assert stmt.is_repaid is False
+
+    # 后续解析恢复 1000 → 剩余仍为 600
+    monkeypatch.setattr(credit_card_statement_sync, "parse_email", inflated_parse)
+    assert client.post(f"/api/imap/accounts/{account_id}/sync-statements",
+                       json={"days": 31}).status_code == 200
+    db.expire_all()
+    stmt = db.get(CreditCardStatement, stmt.id)
+    assert stmt.total_due == 1000.0 and stmt.repaid_amount == 400.0
+    assert stmt.is_repaid is False
+
+
+def test_apply_side_effects_skips_stale_signature(sync_env, monkeypatch):
+    """十一审 Medium 3 回归（单元级）：repayment_events 携带状态签名——
+    回滚后账单实际状态与事件期望不一致时，副作用必须跳过（不得补标/推进
+    界线/静默提醒）。构造 stale cleared 事件（账单实际还是未还旧值）。"""
+    from datetime import date, timedelta
+
+    client, db, _, account = sync_env
+    client.post("/api/credit-cards", json={
+        "display_name": "建行卡", "bank_name": "建设银行", "last_four": "6714",
+        "statement_day": 27, "due_day": 16, "remind_days_before": [3],
+        "credit_limit": None, "is_active": True, "show_in_calendar": True,
+    })
+    card = db.query(CreditCard).filter_by(last_four="6714").one()
+    today = date.today()
+    due = date(today.year, 9, 16)
+
+    # 数据库实际状态：未还（回滚后恢复的旧值）
+    stmt = CreditCardStatement(
+        user_id=card.user_id, card_id=card.id, bank_key="ccb",
+        card_last_four="6714", match_status="matched", due_date=due,
+        total_due=1000.0, statement_date=due - timedelta(days=11),
+        message_id="m-x", verify_status="ok", is_repaid=False, repaid_amount=0.0,
+    )
+    db.add(stmt)
+    card.repaid_through_due = None
+    db.commit()
+
+    # stale 事件：期望签名是回滚前的（True/1000/1000），实际 DB 是 False/0
+    stale_event = {
+        "statement_id": stmt.id,
+        "cleared": True,
+        "downgraded": False,
+        "prior_due_date": None,
+        "expect_total_cents": 100000,
+        "expect_repaid_cents": 100000,
+        "expect_is_repaid": True,
+    }
+    from app.services import credit_card_statement_sync as sync_mod
+    sync_mod._apply_repayment_side_effects(db, [stale_event])
+    db.expire_all()
+
+    stmt = db.get(CreditCardStatement, stmt.id)
+    assert stmt.is_repaid is False  # stale cleared 未执行（未补标任何状态）
+    card = db.get(CreditCard, card.id)
+    assert card.repaid_through_due is None  # 界线未被推进/静默
+
+
+def test_multi_downgrade_side_effects_under_autoflush_false(sync_env, monkeypatch):
+    """十二审 Medium 1 回归：生产会话 autoflush=False——同批两笔已还账单金额
+    同时上调、都降级为未还时，副作用循环内第二个事件的 provable 查询必须
+    看到第一个事件的最新状态（否则界线停留在「已还」期次，未还提醒被静默）。"""
+    from app.models import CreditCardStatement, CreditCard
+    from datetime import date, timedelta
+
+    client, db, _, account = sync_env
+    client.post("/api/credit-cards", json={
+        "display_name": "建行卡", "bank_name": "建设银行", "last_four": "6714",
+        "statement_day": 27, "due_day": 16, "remind_days_before": [3],
+        "credit_limit": None, "is_active": True, "show_in_calendar": True,
+    })
+    from app.services import credit_card_statement_sync as sync_mod
+
+    orig_parse = credit_card_statement_sync.parse_email
+    card = db.query(CreditCard).filter_by(last_four="6714").one()
+    today = date.today()
+
+    # 用生产一致的 autoflush=False 会话执行协调（默认夹具 autoflush=True
+    # 会掩盖生产行为——十二审 M1）
+    SessionFalse = sessionmaker(bind=db.bind, expire_on_commit=False, autoflush=False)
+
+    # 两笔已还账单（8/16、9/16 都已还，界线=9/16）
+    aug_due = date(today.year, 8, 16)
+    sep_due = date(today.year, 9, 16)
+    aug = CreditCardStatement(
+        user_id=card.user_id, card_id=card.id, bank_key="ccb",
+        card_last_four="6714", match_status="matched", due_date=aug_due,
+        total_due=500.0, statement_date=aug_due - timedelta(days=11),
+        source_account_id=account.id, message_id="m-aug",
+        verify_status="ok", is_repaid=True, repaid_amount=500.0,
+    )
+    sep = CreditCardStatement(
+        user_id=card.user_id, card_id=card.id, bank_key="ccb",
+        card_last_four="6714", match_status="matched", due_date=sep_due,
+        total_due=800.0, statement_date=sep_due - timedelta(days=11),
+        source_account_id=account.id, message_id="ccb-fix-1",
+        verify_status="ok", is_repaid=True, repaid_amount=800.0,
+    )
+    db.add_all([aug, sep])
+    card.repaid_through_due = sep_due
+    db.commit()
+
+    # 重解析两笔金额同时上调（各自勾稽自洽）→ 都降级
+    def inflated_both(raw, from_address=""):
+        r = orig_parse(raw, from_address=from_address)
+        for st in r.statements:
+            st.due_date = aug_due if st.card_last_four == "6714" and "zz" else st.due_date
+        # 两封邮件场景由调用方控制——这里只处理单邮件；下方直接构造事件
+        return r
+
+    # 用生产一致的 autoflush=False 会话执行「协调修改 + 副作用」（真实
+    # sync 流程：协调修改与副作用在同一未 flush 事务——flush 语义是本轮
+    # 修复的核心）
+    events = [
+        {"statement_id": aug.id, "cleared": False, "downgraded": True,
+         "prior_due_date": aug_due,
+         "expect_total_cents": 50000, "expect_repaid_cents": 50000,
+         "expect_is_repaid": False},
+        {"statement_id": sep.id, "cleared": False, "downgraded": True,
+         "prior_due_date": sep_due,
+         "expect_total_cents": 80000, "expect_repaid_cents": 80000,
+         "expect_is_repaid": False},
+    ]
+    fx = SessionFalse()
+    try:
+        aug_fx = fx.get(CreditCardStatement, aug.id)
+        sep_fx = fx.get(CreditCardStatement, sep.id)
+        # 协调修改（未 flush——autoflush=False 不会自动落库）
+        aug_fx.is_repaid = False
+        aug_fx.repaid_at = None
+        sep_fx.is_repaid = False
+        sep_fx.repaid_at = None
+        sync_mod._apply_repayment_side_effects(fx, events)
+        fx.commit()
+    finally:
+        fx.close()
+    db.expire_all()
+
+    card = db.get(CreditCard, card.id)
+    # 两笔都未还 → 界线必须回退到最早未还账单的还款日之前（否则该期提醒
+    # 仍被静默）；aug 是唯一界线依据 → 回退到它的前一期 7/16
+    assert card.repaid_through_due is not None and card.repaid_through_due < aug_due, (
+        f"双降级后界线必须早于最早未还账单的还款日 {aug_due}，实际 {card.repaid_through_due}"
+    )
+    assert db.get(CreditCardStatement, aug.id).is_repaid is False
+    assert db.get(CreditCardStatement, sep.id).is_repaid is False

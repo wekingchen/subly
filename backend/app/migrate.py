@@ -59,6 +59,8 @@ _COLUMNS = [
     ("imap_accounts", "banks", "JSON"),
     ("credit_card_statements", "is_repaid", "BOOLEAN NOT NULL DEFAULT 0"),
     ("credit_card_statements", "repaid_at", "TIMESTAMP"),
+    # 部分还款累计已还（多次还清；取消标记清零）
+    ("credit_card_statements", "repaid_amount", "FLOAT NOT NULL DEFAULT 0"),
     ("credit_cards", "repaid_through_due", "DATE"),
     ("credit_cards", "fee_waiver_anchor_date", "DATE"),
     ("credit_cards", "fee_waiver_target_count", "INTEGER"),
@@ -329,6 +331,39 @@ def run_migrations(engine: Engine) -> None:
                 if backfilled:
                     print(f"[migrate] 已回填 {backfilled} 个用户的旧版手动排序偏好")
             except Exception as exc:  # noqa: BLE001
+                logger.exception(
+                    "event=migration_subscription_order_backfill_failed error_type=%s",
+                    type(exc).__name__,
+                )
+                raise RuntimeError(
+                    "数据库数据迁移失败：无法回填旧版手动排序偏好（subscription_order）"
+                ) from exc
+
+        # 部分还款列回填（复审 Low 5）：repaid_amount 加列前已存在的「已还清」
+        # 账单不会经 ORM default——旧库升级后 is_repaid=True + repaid_amount=0
+        # 违反不变量（剩余=total_due，界面显示已还清账单仍全额待还）。幂等回填：
+        # is_repaid=True 的行设为 max(coalesce(total_due,0),0)。
+        if (
+            _table_exists(conn, "credit_card_statements")
+            and _column_exists(conn, "credit_card_statements", "repaid_amount")
+            and _column_exists(conn, "credit_card_statements", "is_repaid")
+        ):
+            try:
+                result = conn.execute(text(
+                    "UPDATE credit_card_statements "
+                    "SET repaid_amount = MAX(COALESCE(total_due, 0), 0) "
+                    "WHERE is_repaid = 1 AND repaid_amount = 0"
+                ))
+                if result.rowcount:
+                    print(f"[migrate] 已回填 {result.rowcount} 条已还账单的部分还款金额")
+            except Exception as exc:  # noqa: BLE001
+                logger.exception(
+                    "event=migration_repaid_amount_backfill_failed error_type=%s",
+                    type(exc).__name__,
+                )
+                raise RuntimeError(
+                    "数据库数据迁移失败：无法回填已还账单的 repaid_amount"
+                ) from exc
                 logger.exception(
                     "event=migration_subscription_order_backfill_failed error_type=%s",
                     type(exc).__name__,

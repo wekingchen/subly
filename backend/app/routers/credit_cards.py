@@ -1,8 +1,9 @@
+from calendar import monthrange
 from datetime import date, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import delete, func, select
+from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.credit_card_rules import (
@@ -12,6 +13,7 @@ from app.credit_card_rules import (
     interest_free_period,
     next_due_date_after,
     statement_date_for_due,
+    statement_remaining_amount,
 )
 from app.database import get_db
 from app.deps import get_current_user
@@ -25,7 +27,7 @@ from app.models import (
     ImapAccount,
     User,
 )
-from app.schemas import CreditCardIn, CreditCardOut, CreditCardUpdate, StatementRepaidIn
+from app.schemas import CreditCardIn, CreditCardOut, CreditCardUpdate, StatementRepayIn, StatementRepaidIn
 from app.services import credit_card_notification_outbox, scheduler
 from app.services.scheduler import utcnow
 
@@ -218,6 +220,9 @@ def _statement_out(s: CreditCardStatement, today: date | None = None) -> dict:
         "is_overdue": overdue_days is not None,
         "overdue_days": overdue_days,
         "repaid_at": s.repaid_at,
+        # 部分还款：累计已还 + 剩余待还（未还清时前端展示「已还 X / 待还 Y」）
+        "repaid_amount": s.repaid_amount,
+        "remaining_amount": statement_remaining_amount(s.total_due, s.repaid_amount),
         "parsed_at": s.parsed_at,
         "item_count": len(s.items),
     }
@@ -584,7 +589,12 @@ def _auto_mark_historical_repaid(db: Session, card: CreditCard, record: CreditCa
                 CreditCardStatement.statement_date, CreditCardStatement.bill_period_end,
             ) < latest_key,
         )
-        .values(is_repaid=True, repaid_at=utcnow())
+        # repaid_amount 归一化（NOT NULL 列不能吃 NULL，金额未知按 0 计）
+        .values(
+            is_repaid=True,
+            repaid_at=utcnow(),
+            repaid_amount=func.max(func.coalesce(CreditCardStatement.total_due, 0.0), 0.0),
+        )
     )
     return result.rowcount or 0
 
@@ -758,6 +768,13 @@ def set_statement_repaid(
     stmt = _owned_statement(db, statement_id, user.id)
     stmt.is_repaid = payload.is_repaid
     stmt.repaid_at = utcnow() if payload.is_repaid else None
+    # 归一化不变量：还清时 repaid_amount = total_due（无残留部分还款额——
+    # 否则「已还 X / 待还 Y」会显示在已还清账单上）；取消清零——无还款流水
+    # 下错录金额的唯一修正入口（清零重算语义，用户确认）
+    # 归一化不变量：还清 = max(total_due, 0)——负数富余账单的「已还金额」归 0
+    # （负应还没有已还额可言，且负值会被备份恢复端拒绝——审核 Medium 1）；
+    # 取消清零——无还款流水下错录金额的唯一修正入口（清零重算，用户确认）
+    stmt.repaid_amount = max(float(stmt.total_due or 0.0), 0.0) if payload.is_repaid else 0.0
     card = None
     if payload.is_repaid and stmt.card_id is not None:
         card = db.get(CreditCard, stmt.card_id)
@@ -776,6 +793,381 @@ def set_statement_repaid(
         # 重新派生的账单（is_overdue/overdue_days 随 is_repaid 变化）：
         # 前端原位更新明细行，避免「已还」与「已逾期」同时显示
         "statement": _statement_out(stmt),
+    }
+
+
+def _auto_mark_older_repaid(db: Session, card: CreditCard, stmt: CreditCardStatement) -> int:
+    """还清某笔账单时，自动标记该卡「排序不晚于它」的未还勾稽账单（「旧债
+    复活」防护）。
+
+    滚动余额口径下账单应还总额已含历史欠款——只还清最新一笔会让更早的
+    未标记账单重新成为最新，待还金额凭空复活。排序键与待还汇总/目标选择
+    同一规则（八审 M1：同日期更正账单按 (日期, id) 字典序分先后，只比日期
+    会漏掉同期的更正前记录）；双日期皆 NULL 的账单无法判定先后，保守不标。
+    界线推进由调用方统一处理。
+    """
+    stmt_key = func.coalesce(stmt.statement_date, stmt.bill_period_end)
+    if stmt.statement_date is None and stmt.bill_period_end is None:
+        return 0  # 自身无日期，无法定义「更早」
+    other_key = func.coalesce(
+        CreditCardStatement.statement_date, CreditCardStatement.bill_period_end,
+    )
+    result = db.execute(
+        CreditCardStatement.__table__.update()
+        .where(
+            CreditCardStatement.card_id == card.id,
+            CreditCardStatement.verify_status == "ok",
+            CreditCardStatement.is_repaid.is_(False),
+            # (日期, id) 字典序「不晚于」被还清账单：日期更早，或同日期但
+            # id 更小（同期的更正前记录已被更正账单滚动吸收）
+            or_(
+                other_key < stmt_key,
+                and_(other_key == stmt_key, CreditCardStatement.id < stmt.id),
+            ),
+        )
+        # repaid_amount 归一化（NOT NULL 列不能吃 NULL，金额未知按 0 计）
+        .values(
+            is_repaid=True,
+            repaid_at=utcnow(),
+            repaid_amount=func.max(func.coalesce(CreditCardStatement.total_due, 0.0), 0.0),
+        )
+    )
+    return result.rowcount or 0
+
+
+def _apply_repayment(
+    db: Session, stmt: CreditCardStatement, amount: float, card: CreditCard | None,
+    *, lock_held: bool = False,
+) -> dict:
+    """登记一次部分还款（共享核心）：校验响亮 → 累计已还 → 还清则归一化 +
+    顺延 + 静默 + 自动补标更早账单。返回响应 dict（不含 card，由端点补）。
+
+    并发安全（复审 Medium 1）：累计用「条件原子 UPDATE」——WHERE 带调用方
+    读到的旧 repaid_amount，另一标签页同时登记时条件不命中（rowcount=0）→
+    重读重试（busy_timeout 5s 内互斥由 BEGIN IMMEDIATE 建立）。
+    lock_held=True（七审 M1）：调用方已持有写锁（卡片级端点锁内选目标后
+    调用）——跳过本函数的 BEGIN/commit，直接在调用方事务内执行锁内核心，
+    消灭嵌套 BEGIN（内层 rollback 会释放外层锁、重新打开目标竞态）。"""
+    remaining = statement_remaining_amount(stmt.total_due, stmt.repaid_amount) or 0.0
+    if stmt.verify_status != "ok":
+        raise HTTPException(400, "勾稽未通过的账单不能登记还款")
+    if stmt.total_due is None:
+        raise HTTPException(400, "账单金额未知，无法登记部分还款")
+    if stmt.is_repaid:
+        raise HTTPException(400, "该账单已还清")
+    if stmt.total_due <= 0:
+        raise HTTPException(400, "该账单无待还金额")
+    amount_cents = round(amount * 100)
+    # 响亮拒绝精度不足的输入：0.001 换算成 0 分会「成功但什么都没还」，
+    # 三位小数被静默舍入会让账实不符（审核 Low 6——后端是独立安全边界，
+    # 不依赖前端正则）
+    if amount_cents == 0 or _has_sub_cent_precision(amount):
+        raise HTTPException(400, "还款金额至少为 0.01 元，且最多两位小数")
+    remaining_cents = round(remaining * 100)
+    if amount_cents > remaining_cents:
+        raise HTTPException(400, f"还款金额不能超过剩余待还 {remaining:.2f}")
+
+    import time as _time
+
+    auto_marked = 0
+    # lock_held=True（七审 M1）：调用方已持有 BEGIN IMMEDIATE 写锁（卡片级
+    # 端点在锁内选择目标后调用）——本函数禁止再次 BEGIN/rollback 外层事务，
+    # 所有校验与写入直接在调用方事务内执行。
+    if lock_held:
+        return _apply_repayment_locked(db, stmt, amount, card)
+    for attempt in range(3):
+        try:
+            db_connection = db.connection()
+            db_connection.exec_driver_sql("BEGIN IMMEDIATE")
+            try:
+                result = _apply_repayment_locked(db, stmt, amount, card)
+                auto_marked = result.pop("_auto_marked", 0)
+                db.commit()
+                result["auto_marked"] = auto_marked
+                return result
+            except HTTPException:
+                db.rollback()
+                raise
+            except Exception:
+                db.rollback()
+                if attempt == 2:
+                    raise
+                _time.sleep(0.05 * (attempt + 1))
+        except HTTPException:
+            db.rollback()
+            raise
+        except Exception:
+            # 外层兜底：BEGIN IMMEDIATE 本身的锁冲突（连接级异常发生在内层
+            # try 之外）——回滚退避重试，与 reorder 的重试模式一致
+            db.rollback()
+            if attempt == 2:
+                raise
+            _time.sleep(0.05 * (attempt + 1))
+    return {
+        "ok": True,
+        "id": stmt.id,
+        "is_repaid": stmt.is_repaid,
+        "repaid_amount": stmt.repaid_amount,
+        "remaining_amount": statement_remaining_amount(stmt.total_due, stmt.repaid_amount),
+        "auto_marked": auto_marked,
+    }
+
+
+def _apply_repayment_locked(db: Session, stmt: CreditCardStatement, amount: float, card: CreditCard | None) -> dict:
+    """锁内核心（七审 M1 拆分）：调用方必须已持有 BEGIN IMMEDIATE 写锁。
+    完成锁内重读 + 全套校验 + 条件原子累计 + 还清副作用。本函数不做
+    BEGIN/commit。返回响应 dict（附 _auto_marked 内部键，由调用方清理）。"""
+    remaining = statement_remaining_amount(stmt.total_due, stmt.repaid_amount) or 0.0
+    if stmt.verify_status != "ok":
+        raise HTTPException(400, "勾稽未通过的账单不能登记还款")
+    if stmt.total_due is None:
+        raise HTTPException(400, "账单金额未知，无法登记部分还款")
+    if stmt.is_repaid:
+        raise HTTPException(400, "该账单已还清")
+    if stmt.total_due <= 0:
+        raise HTTPException(400, "该账单无待还金额")
+    amount_cents = round(amount * 100)
+    # 响亮拒绝精度不足的输入：0.001 换算成 0 分会「成功但什么都没还」，
+    # 三位小数被静默舍入会让账实不符（审核 Low 6——后端是独立安全边界，
+    # 不依赖前端正则）
+    if amount_cents == 0 or _has_sub_cent_precision(amount):
+        raise HTTPException(400, "还款金额至少为 0.01 元，且最多两位小数")
+    remaining_cents = round(remaining * 100)
+    if amount_cents > remaining_cents:
+        raise HTTPException(400, f"还款金额不能超过剩余待还 {remaining:.2f}")
+
+    auto_marked = 0
+    db.expire(stmt)
+    db.refresh(stmt)  # 锁内重读（含 verify/金额最新值——四审 M3：
+    # 锁前校验不能约束等待写锁期间其他事务提交的变化）
+    # 锁内按刷新后的归属重解析卡片（八审 M2：锁前加载的 card 对象可能是
+    # 陈旧快照——并发请求已推进 repaid_through_due 时，用陈旧界线做单调
+    # 判断会把界线回拨；账单也可能已被同步改挂到其他卡）
+    if stmt.card_id is not None:
+        card = db.get(CreditCard, stmt.card_id)
+        if card is not None:
+            db.expire(card)
+            db.refresh(card)
+    elif card is not None:
+        card = None  # 账单已与卡解除关联：无卡片副作用
+    if stmt.verify_status != "ok":
+        raise HTTPException(400, "勾稽未通过的账单不能登记还款")
+    if stmt.total_due is None:
+        raise HTTPException(400, "账单金额未知，无法登记部分还款")
+    if stmt.total_due <= 0:
+        raise HTTPException(400, "该账单无待还金额")
+    if stmt.is_repaid:
+        raise HTTPException(400, "该账单已还清")
+    current = stmt.repaid_amount or 0.0
+    current_cents = round(current * 100)
+    now_remaining_cents = round(stmt.total_due * 100) - current_cents
+    if now_remaining_cents <= 0:
+        raise HTTPException(400, "该账单已还清")
+    if amount_cents > now_remaining_cents:
+        raise HTTPException(
+            400,
+            f"还款金额不能超过剩余待还 {(now_remaining_cents) / 100:.2f}",
+        )
+    new_cents = current_cents + amount_cents
+    cleared = new_cents >= round(stmt.total_due * 100)
+    result = db.execute(
+        CreditCardStatement.__table__.update()
+        .where(
+            CreditCardStatement.id == stmt.id,
+            CreditCardStatement.repaid_amount == current,  # 条件写：并发已被改则不命中
+        )
+        .values(repaid_amount=new_cents / 100)
+    )
+    if result.rowcount == 0:
+        raise HTTPException(409, "还款登记冲突，请重试")
+    stmt.repaid_amount = new_cents / 100  # 同步 ORM 供下方还清分支
+    if cleared:
+        # 还清：归一化 + 顺延 + 静默 + 自动补标更早账单（旧债复活防护）
+        stmt.is_repaid = True
+        stmt.repaid_at = utcnow()
+        stmt.repaid_amount = max(float(stmt.total_due), 0.0)  # 防御性归 0（负数不可达）
+        if card is not None:
+            auto_marked = _auto_mark_older_repaid(db, card, stmt)
+            # 界线优先取本账单 due；NULL 时取本账单所属名义周期的还款日
+            # （由账单周期 + 名义日推导，不能用「今天」的锚定日——历史账单
+            # 会被错误推进到当前周期，越过仍未还的新账，复审 Medium 3）；
+            # 推导不出 → 保守不推进（宁多提醒一期，不错误静默其他未还账单）
+            boundary = stmt.due_date
+            if boundary is None:
+                boundary = _nominal_due_for_statement(stmt, card)
+            if boundary is not None and _advance_repaid_through(card, boundary):
+                _invalidate_scan_checkpoint(db)
+    return {
+        "ok": True,
+        "id": stmt.id,
+        "is_repaid": stmt.is_repaid,
+        "repaid_amount": stmt.repaid_amount,
+        "remaining_amount": statement_remaining_amount(stmt.total_due, stmt.repaid_amount),
+        "_auto_marked": auto_marked,
+    }
+
+
+def _has_sub_cent_precision(amount: float) -> bool:
+    """金额是否带两位小数以外的精度（复审 Medium 4：不能用固定 1e-9 阈值——
+    浮点误差随金额放大，131072.02*100=13107201.999998 会被误判三位小数）。
+    用 repr（最短往返表示）的 Decimal 判断：repr 不含二进制噪声（131072.02
+    的 repr 就是 '131072.02'，指数 -2），指数 ≤ -3 即真实输入了第三位小数。"""
+    from decimal import Decimal
+
+    try:
+        d = Decimal(repr(amount))
+    except Exception:
+        return True
+    exponent = d.as_tuple().exponent
+    return not (isinstance(exponent, int) and exponent >= -2)
+
+
+def _nominal_due_for_statement(stmt: CreditCardStatement, card: CreditCard) -> date | None:
+    """由账单所属周期 + 卡片名义日推导该期还款日（复审 Medium 3）。
+
+    安全边界（三审 Medium 3）：卡片名义日可能已被最新账单回写变更（如
+    账单日 15 → 5），用「当前名义日」给历史出账日分期会跨入下一账单期，
+    界线越过仍未还的新账。因此只在**可自证一致**时反推：
+    - 出账日恰好落在当前名义账单日的锚定日（anchor_date.day ==
+      card.statement_day，或锚定日等于出账日）→ 用当前名义日反推可靠；
+    - bill_period_start/bill_period_end 都存在且 statement_date == start
+      时也可反推（周期信息来自账单自身，不依赖当前名义日）；
+    其余情形（历史名义日未知）保守返回 None——界线退到锚定日兜底，
+    宁可少顺延一期（下次标记还会推进），不可越过未还的新账静默其提醒。"""
+    anchor_date = stmt.statement_date or stmt.bill_period_end
+    if anchor_date is None:
+        return None
+    # 自证一致：出账日 day 与当前名义账单日一致（含月末锚定重合），或账单
+    # 周期信息完整且 statement_date == bill_period_start（周期来自账单自身）
+    day_matches = anchor_date.day == min(card.statement_day, monthrange(anchor_date.year, anchor_date.month)[1])
+    period_self_evident = (
+        stmt.bill_period_start is not None
+        and stmt.statement_date is not None
+        and stmt.bill_period_start == stmt.statement_date
+    )
+    if not (day_matches or period_self_evident):
+        return None  # 历史名义日未知，保守不推导
+    current_statement = anchor_month_day(anchor_date.year, anchor_date.month, card.statement_day)
+    if anchor_date <= current_statement:
+        due_month = (anchor_date.year, anchor_date.month) if card.due_day > card.statement_day else _next_month(anchor_date.year, anchor_date.month)
+    else:
+        nm = _next_month(anchor_date.year, anchor_date.month)
+        due_month = nm if card.due_day > card.statement_day else _next_month(*nm)
+    return anchor_month_day(due_month[0], due_month[1], card.due_day)
+
+
+@router.post("/statements/{statement_id}/repay")
+def repay_statement(
+    statement_id: int,
+    payload: StatementRepayIn,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """明细区单期登记部分还款（含已删卡的孤立账单，user 级归属）。
+
+    路由在 /{card_id} 之前注册以避免路径歧义。还清时走与卡片级一致的
+    归一化/顺延/静默/自动补标链路。"""
+    stmt = _owned_statement(db, statement_id, user.id)
+    card = db.get(CreditCard, stmt.card_id) if stmt.card_id is not None else None
+    result = _apply_repayment(db, stmt, payload.amount, card)
+    db.commit()
+    db.refresh(stmt)
+    db.refresh(card) if card is not None else None
+    return {
+        **result,
+        "card": _to_out(card) if card is not None else None,
+        "statement": _statement_out(stmt),
+    }
+
+
+def _latest_unrepaid_ok(db: Session, card_id: int) -> CreditCardStatement | None:
+    """该卡最新一期未还勾稽通过账单（不管金额是否已知）——汇总端
+    latest_statement_id 与卡片级还款目标选择的同一「最新」判定。
+    比较键 coalesce(statement_date, bill_period_end) DESC, id DESC；双日期
+    皆空的账单不参与「最新」判定（与汇总 latest 口径一致）。"""
+    return db.scalars(
+        select(CreditCardStatement)
+        .where(
+            CreditCardStatement.card_id == card_id,
+            CreditCardStatement.is_repaid.is_(False),
+            CreditCardStatement.verify_status == "ok",
+            CreditCardStatement.statement_date.is_not(None)
+            | CreditCardStatement.bill_period_end.is_not(None),
+        )
+        .order_by(
+            func.coalesce(
+                CreditCardStatement.statement_date, CreditCardStatement.bill_period_end
+            ).desc(),
+            CreditCardStatement.id.desc(),
+        )
+        .limit(1)
+    ).first()
+
+
+@router.post("/{card_id}/repay")
+def repay_card(
+    card_id: int,
+    payload: StatementRepayIn,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """卡片上登记部分还款：服务端自选目标账单（最新一期未还、勾稽通过、
+    金额已知且仍有剩余），前端无需传账单 id。无可用目标时 400（前端有
+    门卫——富余/金额未知/无可还款卡走旧的全量确认——此为并发兜底）。
+    目标选择在 BEGIN IMMEDIATE 内执行（五审 M5：锁外选目标时并发同步可
+    落一笔更新的账单，还款会被登记到已被滚动吸收的旧账上——锁内重新选择
+    才能与「最新」语义一致）。"""
+    card = _owned_card(db, card_id, user.id)
+    import time as _time
+
+    for attempt in range(3):
+        try:
+            db_connection = db.connection()
+            db_connection.exec_driver_sql("BEGIN IMMEDIATE")
+            try:
+                # 锁内选择目标（与汇总 latest_statement_id 同一算法）；
+                # 锁前窗口内同步提交的新账单在此可见
+                target = _latest_unrepaid_ok(db, card.id)
+                if (
+                    target is None
+                    or target.total_due is None
+                    or target.total_due <= 0
+                    or (statement_remaining_amount(target.total_due, target.repaid_amount) or 0.0) <= 0
+                ):
+                    # 最新账单不可还（金额未知/零/负富余/不存在）：响亮拒绝，
+                    # 不回落旧账单（审核 Medium 4——旧账金额已被最新账单滚动吸收）
+                    raise HTTPException(400, "没有可登记还款的账单")
+                # lock_held=True：复用本函数已持有的写锁——不再嵌套 BEGIN
+                # （嵌套会让内层 rollback 释放外层锁、重新打开目标竞态，
+                # 七审 M1 动态复现）
+                result = _apply_repayment(
+                    db, target, payload.amount, card, lock_held=True
+                )
+                result["auto_marked"] = result.pop("_auto_marked", 0)
+                db.commit()
+                break
+            except HTTPException:
+                db.rollback()
+                raise
+            except Exception:
+                db.rollback()
+                if attempt == 2:
+                    raise
+                _time.sleep(0.05 * (attempt + 1))
+        except HTTPException:
+            db.rollback()
+            raise
+        except Exception:
+            db.rollback()
+            if attempt == 2:
+                raise
+            _time.sleep(0.05 * (attempt + 1))
+    db.refresh(target)
+    db.refresh(card)
+    return {
+        **result,
+        "card": _to_out(card),
+        "statement": _statement_out(target),
     }
 
 
@@ -809,7 +1201,13 @@ def mark_card_repaid(
             CreditCardStatement.is_repaid.is_(False),
             CreditCardStatement.verify_status == "ok",
         )
-        .values(is_repaid=True, repaid_at=utcnow())
+        # repaid_amount 归一化为 total_due（NOT NULL 列不能吃 NULL——
+        # coalesce 兜底金额未知的账单按 0 计，与汇总口径一致）
+        .values(
+            is_repaid=True,
+            repaid_at=utcnow(),
+            repaid_amount=func.max(func.coalesce(CreditCardStatement.total_due, 0.0), 0.0),
+        )
     )
     marked_count = result.rowcount or 0
     if marked_count:
@@ -883,7 +1281,9 @@ def outstanding_summary(
     # 取「最新一笔」会把多卡的累加值覆盖掉（审核 Medium），保持逐期累加。
     latest: dict[int, dict] = {}
     for s in rows:
-        amount = float(s.total_due or 0.0)
+        # 部分还款口径：金额 = 剩余待还（total_due − repaid_amount，按分
+        # 整数）；is_repaid=False 的过滤谓词不变——部分还款的账单仍是未还
+        amount = statement_remaining_amount(s.total_due, s.repaid_amount) or 0.0
         unrepaid_count += 1
         entry = per_card.setdefault(s.card_id, {
             "total_due": 0.0, "count": 0, "cycle_keys": [],
@@ -911,7 +1311,8 @@ def outstanding_summary(
             cur = latest.get(s.card_id)
             if cur is None or (s_key, s.id) > (cur["key"], cur["id"]):
                 latest[s.card_id] = {"key": s_key, "id": s.id, "amount": amount,
-                                     "due_date": s.due_date, "month_key": month_key}
+                                     "due_date": s.due_date, "month_key": month_key,
+                                     "total_due": s.total_due}
         # 孤立账单组保持逐期逾期累计（复审 Medium）：正常卡的逾期由下方
         # latest 口径覆盖，孤立组没有 latest，必须在此处按笔累计——否则
         # 已删卡逾期账单的汇总归零，与明细行 is_overdue=True 矛盾
@@ -955,6 +1356,18 @@ def outstanding_summary(
         # 全局逾期 = 正常卡最新账单逾期 + 孤立组逐笔累计（复审 Medium）；
         # 基于取整后的金额累计，避免浮点误差（复审 Low）
         overdue_total += entry["overdue_amount"]
+        # 可部分还款目标（部分还款功能）：与卡片级还款端点同一算法（审核
+        # Medium 4）——取真正最新未还账单，金额已知且仍有剩余才给 id；孤立组
+        # /金额未知/无剩余（含富余负账单）为 None，回退旧确认流程。两端一致
+        # 才能保证「前端门卫放行的卡，提交时服务端一定接受」。
+        latest_stmt = _latest_unrepaid_ok(db, cid) if cid is not None else None
+        entry["latest_statement_id"] = (
+            latest_stmt.id
+            if latest_stmt is not None
+            and latest_stmt.total_due is not None
+            and (statement_remaining_amount(latest_stmt.total_due, latest_stmt.repaid_amount) or 0.0) > 0
+            else None
+        )
     return {
         # 全局待还 = 各卡最新账单正金额之和 + 孤立账单累加（富余卡为 0，不抵扣他卡）
         "total": round(max(total, 0.0), 2),

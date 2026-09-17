@@ -125,6 +125,49 @@ def _prepare_delivery(db: Session, claim: dict) -> tuple[str, dict | None]:
     config_state, config = notification_transport.channel_config(user, row.channel)
     if config_state != "ready":
         return config_state, None
+    # 金额投递前复核（五审 M2）：payload 在扫描时固化——之后的部分还款会
+    # 让已入队/等待重试的提醒带着旧的全额金额发出去（诱导重复还款）。这里
+    # 持有合法 lease 时按当前剩余重算并原子更新 payload；sent/dead/canceled
+    # 行不经此路径（只有合法 claim 的 pending/retry_wait 才会走到这里）。
+    from app.services.credit_card_reminders import (
+        _app_public_url,
+        _build_payload,
+        latest_unrepaid_amount,
+    )
+    from app.services.scheduler import _local_today as _today
+
+    current_amount = latest_unrepaid_amount(db, card)
+    payload = dict(row.payload or {})
+    # days_before 按今天与到期日的真实间隔重建（retry_wait 跨天后旧倒计时失真）
+    days_before_now = (row.due_date - _today()).days
+    effective_days = row.days_before
+    # telegram/bark 的 payload 没有 event/total_due 结构化键（只有文案）——
+    # 从文案无法可靠反推已固化金额（八审 M4：已知→未知时 None==None 恰好
+    # 跳过重建，仍发旧的「应还 1000」文案）。三类通道统一策略：只要金额或
+    # 倒计时的当前值与「重建后会得到的结果」可能不同就重建；文本通道无法
+    # 判断，则凡金额或倒计时发生变化一律重建（幂等，成本低）。
+    current_total_in_payload = (payload.get("event") or {}).get(
+        "total_due", payload.get("total_due")
+    )
+    amount_unknown_now = current_amount is None
+    needs_rebuild = (
+        (current_total_in_payload != current_amount and not (amount_unknown_now and current_total_in_payload is None))
+        or row.days_before != days_before_now
+        or (amount_unknown_now and row.channel in ("telegram", "bark"))
+    )
+    if needs_rebuild:
+        rebuilt = _build_payload(
+            card, row.due_date, days_before_now, row.channel, current_amount,
+            # Bark 重建必须带 APP_PUBLIC_URL——缺省时 _bark_icon 返回 None
+            # 会把扫描入队时已生成的银行徽标抹掉（七审 L1）
+            app_public_url=_app_public_url(),
+        )
+        payload = dict(rebuilt)
+        row.payload = rebuilt
+        effective_days = days_before_now
+        # prepare_delivery 的 session 由 dispatch_claim close（不自动提交）——
+        # payload 刷新必须显式提交，否则 close 时回滚、重试仍发旧金额
+        db.commit()
     return "ready", {
         "id": row.id,
         "delivery_id": row.delivery_id,
@@ -133,9 +176,9 @@ def _prepare_delivery(db: Session, claim: dict) -> tuple[str, dict | None]:
         "source_name": row.credit_card_name,
         "credit_card_id": row.credit_card_id,
         "user": user,
-        "days_before": row.days_before,
+        "days_before": effective_days,
         "channel": row.channel,
-        "payload": row.payload,
+        "payload": payload,
         "config": config,
         "token": claim["token"],
         "attempt_no": claim["attempt_no"],

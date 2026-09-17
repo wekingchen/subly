@@ -100,6 +100,33 @@ export function useCreditCards() {
     }
   }
 
+  // 卡片上「登记还款」（部分还款）：输入当次金额，还清时后端顺延+自动补标
+  // 更早账单。响应卡片原位替换 + 刷新待还汇总（剩余即时减少）。
+  // 返回响应数据（is_repaid/remaining_amount 供 toast 分支），失败抛出由调用方 toast。
+  // 成功边界 = POST 本身（复审 Medium 2）：还款已提交后汇总刷新失败不能让
+  // 调用方误判「还款失败」并按原金额重试（会重复累计）——刷新失败只置
+  // outstandingError 并在返回值标记 refreshFailed，由调用方补提示。
+  async function repayCard(card, amount) {
+    if (mutationPending.value || !card?.id) return null
+    mutationPending.value = true
+    try {
+      const { data } = await api.post(`/api/credit-cards/${card.id}/repay`, { amount })
+      if (data?.card) {
+        const index = cards.value.findIndex((item) => item.id === data.card.id)
+        if (index >= 0) cards.value.splice(index, 1, data.card)
+      }
+      let refreshFailed = false
+      try {
+        await refreshOutstanding()
+      } catch {
+        refreshFailed = true
+      }
+      return { ...data, refreshFailed }
+    } finally {
+      mutationPending.value = false
+    }
+  }
+
   async function save(card, source) {
     if (mutationPending.value) return null
     mutationPending.value = true
@@ -178,6 +205,7 @@ export function useCreditCards() {
     load,
     refreshOutstanding,
     markCardRepaid,
+    repayCard,
     save,
     remove
   }

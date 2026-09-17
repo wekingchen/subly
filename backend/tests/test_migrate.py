@@ -400,3 +400,82 @@ def test_legacy_sort_backfill_to_subscription_order(tmp_path, monkeypatch):
         )).scalar_one()
         assert migrate_mod.json.loads(raw2) == order
     engine.dispose()
+
+
+def test_repaid_amount_backfill_for_cleared_statements(tmp_path):
+    """复审 Low 5 回归：repaid_amount 加列前已存在的「已还清」账单在旧库升级
+    后必须回填 repaid_amount = max(total_due, 0)——否则界面显示已还清账单仍
+    全额待还（违反不变量），重新导出的备份会永久保存矛盾状态。"""
+    from sqlalchemy import create_engine, text
+
+    from app import migrate as migrate_mod
+
+    # 建库时故意不含 repaid_amount 列（模拟升级前旧库），先插数据再加列
+    engine = create_engine("sqlite:///:memory:")
+    # 手工建最小 schema：credit_card_statements 无 repaid_amount
+    with engine.begin() as conn:
+        conn.execute(text(
+            "CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT, email TEXT, "
+            "password_hash TEXT, is_admin INTEGER NOT NULL DEFAULT 0, is_active INTEGER NOT NULL DEFAULT 1, "
+            "email_verified INTEGER NOT NULL DEFAULT 1, is_approved INTEGER NOT NULL DEFAULT 1, "
+            "locale TEXT NOT NULL DEFAULT 'zh-CN', theme TEXT NOT NULL DEFAULT 'light', "
+            "base_currency TEXT NOT NULL DEFAULT 'CNY', monthly_budget FLOAT, category_order JSON, "
+            "subscription_order JSON, telegram_enabled INTEGER NOT NULL DEFAULT 0, "
+            "bark_enabled INTEGER NOT NULL DEFAULT 0, webhook_enabled INTEGER NOT NULL DEFAULT 0)"
+        ))
+        conn.execute(text(
+            "CREATE TABLE credit_cards (id INTEGER PRIMARY KEY, user_id INTEGER, "
+            "display_name TEXT, bank_name TEXT, last_four TEXT, statement_day INTEGER, "
+            "due_day INTEGER, remind_days_before JSON, credit_limit FLOAT, "
+            "is_active INTEGER NOT NULL DEFAULT 1, show_in_calendar INTEGER NOT NULL DEFAULT 1, "
+            "repaid_through_due DATE, fee_waiver_anchor_date DATE, "
+            "fee_waiver_target_count INTEGER, fee_waiver_target_amount FLOAT)"
+        ))
+        conn.execute(text(
+            "CREATE TABLE credit_card_statements (id INTEGER PRIMARY KEY, user_id INTEGER, "
+            "card_id INTEGER, source_account_id INTEGER, bank_key TEXT, card_last_four TEXT, "
+            "match_status TEXT DEFAULT 'matched', bill_period_start DATE, bill_period_end DATE, "
+            "statement_date DATE, due_date DATE, total_due FLOAT, min_due FLOAT, credit_limit FLOAT, "
+            "message_id TEXT, subject TEXT, verify_status TEXT DEFAULT 'ok', "
+            "is_repaid INTEGER NOT NULL DEFAULT 0, repaid_at TIMESTAMP, "
+            "parsed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"
+        ))
+        conn.execute(text(
+            "INSERT INTO users (username, email, password_hash) VALUES ('u', 'u@e.com', 'h')"
+        ))
+        uid = conn.execute(text("SELECT id FROM users")).scalar_one()
+        conn.execute(text(
+            "INSERT INTO credit_cards (user_id, display_name, bank_name, last_four, statement_day, due_day) "
+            f"VALUES ({uid}, '金卡', '招商银行', '1234', 5, 25)"
+        ))
+        card_id = conn.execute(text("SELECT id FROM credit_cards")).scalar_one()
+        # 已还清账单（total_due=500）+ 未还账单——升级后已还的应回填 500
+        conn.execute(text(
+            "INSERT INTO credit_card_statements (user_id, card_id, bank_key, card_last_four, "
+            "message_id, total_due, is_repaid) VALUES "
+            f"({uid}, {card_id}, 'cmb', '1234', 'm1', 500.0, 1), "
+            f"({uid}, {card_id}, 'cmb', '1234', 'm2', 300.0, 0)"
+        ))
+
+    migrate_mod.run_migrations(engine)
+
+    with engine.begin() as conn:
+        rows = dict(conn.execute(text(
+            "SELECT message_id, repaid_amount FROM credit_card_statements"
+        )).all())
+        # 已还清 → 回填 total_due；未还 → 保持 0
+        assert rows["m1"] == 500.0
+        assert rows["m2"] == 0.0
+
+    # 幂等：再次运行不重复改写
+    with engine.begin() as conn:
+        conn.execute(text(
+            "UPDATE credit_card_statements SET repaid_amount = 123 WHERE message_id = 'm1'"
+        ))
+    migrate_mod.run_migrations(engine)
+    with engine.begin() as conn:
+        # 回填条件含 repaid_amount = 0——已被手动改过的行不再触碰
+        assert conn.execute(text(
+            "SELECT repaid_amount FROM credit_card_statements WHERE message_id='m1'"
+        )).scalar_one() == 123.0
+    engine.dispose()

@@ -199,3 +199,87 @@ describe('useCreditCards save batch behavior', () => {
 async function saveBatch(store, source) {
   return store.save(null, source)
 }
+
+describe('useCreditCards repayCard（部分还款）', () => {
+  beforeEach(() => {
+    api.post.mockReset()
+    api.put.mockReset()
+    api.delete.mockReset()
+    api.get.mockReset()
+  })
+
+  function makeStore() {
+    const store = useCreditCards()
+    store.cards.value = [{ id: 9, display_name: '车主金卡', next_due_date: '2026-09-28' }]
+    return store
+  }
+
+  it('POST repay 后原位替换卡片并刷新待还汇总', async () => {
+    api.post.mockImplementation((url) => {
+      if (url === '/api/credit-cards/9/repay') {
+        return Promise.resolve({ data: { ok: true, is_repaid: false, remaining_amount: 600, card: { id: 9, display_name: '车主金卡', next_due_date: '2026-09-28' } } })
+      }
+      return Promise.reject(new Error(`unexpected POST ${url}`))
+    })
+    api.get.mockResolvedValue({ data: { total: 600, per_card: [] } })
+    const store = makeStore()
+
+    const data = await store.repayCard({ id: 9 }, 400)
+
+    expect(api.post).toHaveBeenCalledWith('/api/credit-cards/9/repay', { amount: 400 })
+    expect(data.is_repaid).toBe(false)
+    expect(data.remaining_amount).toBe(600)
+    expect(store.cards.value[0].display_name).toBe('车主金卡')
+    expect(store.outstanding.value.total).toBe(600)
+  })
+
+  it('mutationPending 期间不重入', async () => {
+    let release
+    api.post.mockImplementation(() => new Promise((resolve) => { release = resolve }))
+    const store = makeStore()
+    store.mutationPending.value = true
+
+    const result = await store.repayCard({ id: 9 }, 400)
+
+    expect(result).toBeNull()
+    expect(api.post).not.toHaveBeenCalled()
+    release?.({ data: {} })
+  })
+
+  it('失败时抛出由调用方 toast（不吞错）', async () => {
+    api.post.mockRejectedValue(new Error('boom'))
+    const store = makeStore()
+
+    await expect(store.repayCard({ id: 9 }, 400)).rejects.toThrow('boom')
+  })
+})
+
+describe('useCreditCards repayCard 成功边界（复审 Medium 2）', () => {
+  beforeEach(() => {
+    api.post.mockReset()
+    api.get.mockReset()
+  })
+
+  it('POST 成功但汇总刷新失败：返回 refreshFailed=true 而非抛错（不误报还款失败）', async () => {
+    api.post.mockResolvedValue({ data: { ok: true, is_repaid: false, remaining_amount: 600, card: { id: 9 } } })
+    api.get.mockRejectedValue(new Error('summary network down'))
+    const store = useCreditCards()
+    store.cards.value = [{ id: 9, display_name: 'X' }]
+
+    const data = await store.repayCard({ id: 9 }, 400)
+
+    expect(data.is_repaid).toBe(false)          // 还款本身成功
+    expect(data.refreshFailed).toBe(true)       // 标记刷新失败供调用方补提示
+    expect(store.outstandingError.value).toBe(true)
+  })
+
+  it('全部成功时 refreshFailed 为假值', async () => {
+    api.post.mockResolvedValue({ data: { ok: true, is_repaid: true, card: { id: 9 } } })
+    api.get.mockResolvedValue({ data: { total: 0, per_card: [] } })
+    const store = useCreditCards()
+    store.cards.value = [{ id: 9, display_name: 'X' }]
+
+    const data = await store.repayCard({ id: 9 }, 400)
+    expect(data.refreshFailed).toBeFalsy()
+  })
+})

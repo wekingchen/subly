@@ -17,6 +17,9 @@
           <span class="stmt-period">{{ cycleName(s) }}</span>
           <span v-if="overdueDays(s) != null" class="stmt-overdue-tag">{{ t('creditCards.overdueDays', { n: overdueDays(s) }) }}</span>
           <span v-if="s.is_repaid" class="stmt-repaid-tag">{{ t('creditCards.repaidTag') }}</span>
+          <span v-else-if="s.repaid_amount > 0" class="stmt-partial-tag">
+            {{ t('creditCards.statementPartialTag', { paid: formatMoney(s.repaid_amount), remaining: formatMoney(remainingOf(s)) }) }}
+          </span>
           <MoneyText class="stmt-amount" :class="{ repaid: s.is_repaid, overdue: s.is_overdue }" :value="s.total_due" currency="CNY" position="prefix" />
           <span class="stmt-due muted">{{ s.due_date ? t('creditCards.dueOn', { d: s.due_date }) : '' }}</span>
           <span class="stmt-verify" :class="s.verify_status === 'ok' ? 'ok' : 'bad'">
@@ -35,9 +38,20 @@
                 type="button"
                 class="btn ghost sm"
                 :disabled="markPending"
-                @click="toggleRepaid(s)"
+                @click="onRepayAction(s)"
               >
                 {{ s.is_repaid ? t('creditCards.unmarkRepaid') : t('creditCards.markRepaid') }}
+              </button>
+              <!-- 清零重算入口（十一审 M1）：部分还款错录金额的唯一修正——
+                   清除该账单全部已登记还款（恢复全额待还），与继续还款分开 -->
+              <button
+                v-if="!s.is_repaid && s.repaid_amount > 0"
+                type="button"
+                class="btn ghost sm"
+                :disabled="markPending"
+                @click="requestPurgeRepayment(s)"
+              >
+                {{ t('creditCards.purgeRepayment') }}
               </button>
               <span v-if="markErrorId === s.id" class="stmt-err" role="alert">{{ t('creditCards.markRepaidFailed') }}</span>
             </div>
@@ -71,15 +85,47 @@
       </li>
     </ul>
   </section>
+
+  <!-- 单期部分还款输入框（AppModal 就地渲染） -->
+  <RepaymentModal
+    v-if="repayOpen && repayTarget"
+    :target="repayTarget"
+    :pending="markPending"
+    :server-error="repayServerError"
+    @close="repayOpen = false"
+    @confirm="onStatementRepay"
+  />
+
+  <!-- 取消还款标记确认（有还款记录时清零是破坏性操作） -->
+  <AppModal
+    v-model="confirmModalOpen"
+    :title="confirm.state.value?.title || ''"
+    width="430px"
+    :close-label="t('common.close')"
+    :pending="confirm.state.value?.pending"
+    @close="confirm.close"
+  >
+    <p class="stmt-confirm-copy">{{ confirm.state.value?.message }}</p>
+    <template #footer>
+      <button type="button" class="btn ghost" :disabled="confirm.state.value?.pending" @click="confirm.close">{{ t('creditCards.cancel') }}</button>
+      <button type="button" class="btn danger" :disabled="confirm.state.value?.pending" @click="confirm.confirm">
+        {{ confirm.state.value?.pending ? t('common.processing') : (confirm.state.value?.confirmLabel || t('creditCards.unmarkRepaid')) }}
+      </button>
+    </template>
+  </AppModal>
 </template>
 
 <script setup>
-import { ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import api from '../../api'
 import MoneyText from '../MoneyText.vue'
+import AppModal from '../AppModal.vue'
+import RepaymentModal from './RepaymentModal.vue'
 import { useBreakpoint } from '../../composables/useBreakpoint'
+import { useConfirm } from '../../composables/useConfirm'
 import { statementCycleLabel } from '../../utils/creditCardDates'
+import { statementRemainingAmount } from '../../utils/creditCardRepayment'
 import { formatMoney } from '../../utils/money'
 
 // 账单明细：打开卡片详情时懒加载；金额一律 MoneyText（与订阅卡同源）。
@@ -170,20 +216,115 @@ async function toggle(id) {
   }
 }
 
-// 单期账单标记/取消已还款（明细区操作）；成功后本地更新并通知父级
-async function toggleRepaid(s) {
+// 单期账单标记/取消已还款（明细区操作）；成功后本地更新并通知父级。
+// 三路分派（部分还款功能）：已还 → 取消标记（有还款记录先确认——清零重算
+// 是错录金额的唯一修正入口）；未还且有金额 → 弹金额输入框登记还款；
+// 金额未知 → 保留原 PATCH 快捷全量标记（没有「部分」可言）。
+const confirm = useConfirm()
+// AppModal 的 v-model 需要 boolean；useConfirm.state 为 null/对象，桥接一层
+const confirmModalOpen = computed({
+  get: () => Boolean(confirm.state.value?.open),
+  set: (v) => { if (!v) confirm.close() }
+})
+const repayOpen = ref(false)
+const repayTarget = ref(null)
+// 明细入口无 toast：服务端失败原因显示在弹窗内（审核 Medium 5——
+// 错误留在弹窗后方用户看不到，会误以为按钮没生效）
+const repayServerError = ref('')
+
+function remainingOf(s) {
+  return statementRemainingAmount(s.total_due, s.repaid_amount) ?? 0
+}
+
+function onRepayAction(s) {
+  if (s.is_repaid) {
+    if (s.repaid_amount > 0) {
+      confirm.open({
+        title: t('creditCards.unmarkRepaidConfirmTitle'),
+        message: t('creditCards.unmarkRepaidConfirmMessage', { amount: formatMoney(s.repaid_amount) }),
+        danger: true,
+        onConfirm: () => toggleRepaid(s)
+      })
+    } else {
+      toggleRepaid(s)
+    }
+    return
+  }
+  // 部分还款账单（十一审 M1）：按钮只打开弹窗继续登记；清零走独立入口
+  // mismatch 账单走原 PATCH 单期标记（后端 repay 明确拒绝勾稽失败账单，
+  // 弹窗会必然失败）；金额未知走 PATCH 快捷标记
+  if (s.verify_status === 'ok' && s.total_due != null && remainingOf(s) > 0) {
+    repayTarget.value = {
+      kind: 'statement',
+      name: cycleName(s),
+      statementId: s.id,
+      remaining: remainingOf(s),
+      repaidAmount: s.repaid_amount || 0,
+      cyclesText: cycleName(s)
+    }
+    repayServerError.value = ''
+    repayOpen.value = true
+    return
+  }
+  toggleRepaid(s) // 金额未知等：保留原快捷标记
+}
+
+// 清除部分还款记录（十一审 M1 清零重算）：PATCH is_repaid=false——后端把
+// repaid_amount 清零（错录金额的唯一修正入口），破坏性操作需确认
+function requestPurgeRepayment(s) {
+  confirm.open({
+    title: t('creditCards.unmarkRepaidConfirmTitle'),
+    message: t('creditCards.unmarkRepaidConfirmMessage', { amount: formatMoney(s.repaid_amount) }),
+    danger: true,
+    onConfirm: () => toggleRepaid(s, false)  // 清零重算：复位为未还
+  })
+}
+
+// 还款弹窗确认：PATCH 语义已由 POST /repay 承担；原位更新行 + 通知父级
+async function onStatementRepay(amount) {
+  const target = repayTarget.value
+  if (!target || markPending.value) return
+  markPending.value = true
+  markErrorId.value = null
+  repayServerError.value = ''
+  try {
+    const { data } = await api.post(
+      `/api/credit-cards/statements/${target.statementId}/repay`,
+      { amount }
+    )
+    if (data?.statement) {
+      const idx = statements.value.findIndex((x) => x.id === target.statementId)
+      if (idx >= 0) Object.assign(statements.value[idx], data.statement)
+    }
+    // 自动补标（十审 M2）：还清最新账单时后端会同步结清更早的未还账单——
+    // 重载明细列表，否则旧行仍显示未还（点它会被「已还清」拒绝，界面矛盾）
+    if (data?.auto_marked > 0) {
+      await load()
+    }
+    emit('repaid-changed', data?.card || null)
+    repayOpen.value = false
+  } catch (e) {
+    // 失败要响亮：原因直接显示在弹窗内（弹窗不关，用户输入保留）
+    repayServerError.value = e.response?.data?.detail || t('creditCards.repayFailed')
+  } finally {
+    markPending.value = false
+  }
+}
+
+async function toggleRepaid(s, targetState) {
   if (markPending.value) return
   markPending.value = true
   markErrorId.value = null
+  const next = targetState !== undefined ? targetState : !s.is_repaid
   try {
     const { data } = await api.patch(
       `/api/credit-cards/statements/${s.id}/repaid`,
-      { is_repaid: !s.is_repaid }
+      { is_repaid: next }
     )
     // 用服务端重新派生的账单原位更新（is_overdue/overdue_days 随标记变化，
     // 避免「已还」与「已逾期」同时显示或逾期徽标漏掉）
     if (data?.statement) Object.assign(s, data.statement)
-    else s.is_repaid = !s.is_repaid
+    else s.is_repaid = next
     // 界线推进改变了卡片派生字段（next_due_date 等）：带上最新卡片供父级替换
     emit('repaid-changed', data?.card || null)
   } catch {
@@ -213,6 +354,8 @@ watch(() => [props.cardId, props.refreshKey], ([id]) => {
 .stmt-summary:hover { background: color-mix(in srgb, var(--primary) 6%, var(--surface-2)); }
 .stmt-period { font-weight: 750; font-size: 12px; }
 .stmt-repaid-tag { flex: 0 0 auto; padding: 2px 7px; border-radius: 999px; background: color-mix(in srgb, var(--success) 12%, transparent); color: var(--success-text); font-size: 11px; font-weight: 750; }
+.stmt-partial-tag { flex: 0 0 auto; padding: 2px 7px; border-radius: 999px; background: color-mix(in srgb, var(--primary) 10%, transparent); color: var(--primary-text, var(--primary)); font-size: 11px; font-weight: 750; }
+.stmt-confirm-copy { margin: 0; font-size: 13px; line-height: 1.6; }
 .stmt-overdue-tag { flex: 0 0 auto; padding: 2px 7px; border-radius: 999px; background: color-mix(in srgb, var(--danger) 13%, transparent); color: var(--danger-text); font-size: 11px; font-weight: 750; white-space: nowrap; }
 .stmt-amount.repaid { opacity: .55; text-decoration: line-through; }
 .stmt-amount.overdue { color: var(--danger-text); }

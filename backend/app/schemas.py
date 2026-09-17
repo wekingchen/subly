@@ -632,6 +632,20 @@ class StatementRepaidIn(BaseModel):
     is_repaid: bool
 
 
+class StatementRepayIn(BaseModel):
+    """部分还款登记请求体（amount 为本次还款金额，非累计）。
+
+    独立于 StatementRepaidIn：把 repaid_amount 塞进布尔标记端点会让
+    is_repaid 变成「有时被服务端忽略的输入」，契约含混。
+    allow_inf_nan=False 拒绝 Infinity/NaN（round(inf) 会让请求变 500）；
+    le 上限防御极端输入（前端正则另有 1-9 位整数约束）。"""
+    model_config = ConfigDict(extra="forbid")
+
+    # strict=True 拒绝 Pydantic 宽松转换的布尔值（true→1.0 会被当作 1 元
+    # 登记还款——十二审 Low 1）；JSON 整数/浮点数仍正常接受
+    amount: float = Field(gt=0, le=1_000_000_000, allow_inf_nan=False, strict=True)
+
+
 class CreditCardOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

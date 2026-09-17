@@ -833,3 +833,137 @@ def test_bank_matching_legacy_card_names_still_resolve():
     # CMB/CMBC 唯一性与负例不回归
     assert resolve_bank_key("CMB") == "cmb" and resolve_bank_key("CMBC") == "cmbc"
     assert resolve_bank_key("建设殖银行") is None
+
+
+def test_partial_repay_refreshes_queued_payload_before_delivery(
+    tmp_path, monkeypatch
+):
+    """五审 M2 回归：提醒入队时固化全额 payload，部分还款后投递前必须按
+    当前剩余重算——重试发送不能带旧的全额金额（诱导重复还款）。"""
+    Session, engine = make_db(tmp_path, monkeypatch)
+    db = Session()
+    try:
+        user, card = add_card(db)
+        from app.models import CreditCardStatement
+        from app.services.scheduler import _local_today
+        from app.credit_card_rules import next_due_date
+        from datetime import timedelta
+
+        today = _local_today()
+        due = next_due_date(today, card.due_day)
+        stmt = CreditCardStatement(
+            user_id=user.id, card_id=card.id, bank_key="cmb", card_last_four="1234",
+            match_status="matched", due_date=due, total_due=1000.0,
+            statement_date=due - timedelta(days=20), message_id="m-partial",
+            verify_status="ok",
+        )
+        db.add(stmt)
+        db.commit()
+
+        business = due - timedelta(days=7)
+        first = credit_card_reminders.run_reminder_scan(business)
+        assert first["enqueued"] == 1
+        row = db.scalar(select(CreditCardNotificationOutbox))
+        assert "1,000" in str(row.payload) or "1000" in str(row.payload)
+
+        # 部分还款 400 → 剩余 600；同时失效 checkpoint 模拟真实还款副作用
+        from app.routers import credit_cards as cc_router
+        client_side_stmt = db.get(CreditCardStatement, stmt.id)
+        client_side_stmt.repaid_amount = 400.0
+        cc_router._invalidate_scan_checkpoint(db)
+        db.commit()
+
+        # 投递（真实 dispatch 路径）：_prepare_delivery 应重算 payload
+        captured = {}
+        monkeypatch.setattr(
+            notification_transport.webhook,
+            "send_notification",
+            lambda url, secret, payload, *, delivery_id=None: captured.update(
+                {"payload": payload, "delivery_id": delivery_id, "secret": secret}
+            ) or payload,
+        )
+        result = credit_card_notification_outbox.dispatch_due(batch_size=10)
+        db.expire_all()
+        row_dbg = db.scalar(select(CreditCardNotificationOutbox))
+        print("AFTER-DISPATCH payload:", str(row_dbg.payload)[:150])
+        print("AFTER-DISPATCH status:", row_dbg.status)
+        assert result["sent"] == 1
+        db.expire_all()
+        row = db.scalar(select(CreditCardNotificationOutbox))
+        assert row.status == "sent"
+        # 发送出去的 payload 必须是新剩余 600（不是入队时的 1000）；
+        # webhook 结构为 {"event": {..., "total_due": ...}}
+        sent_total = captured["payload"].get("total_due")
+        assert sent_total == 600.0, f"投递 payload 应为剩余 600，实际 {captured['payload']}"
+        sent_body = captured["payload"].get("body", "")
+        assert "600" in sent_body and "1,000" not in sent_body
+        # DB 中的 payload 同步刷新
+        row_total = (row.payload.get("event") or {}).get("total_due")
+        assert row_total == 600.0, f"DB payload 应为剩余 600，实际 {row.payload}"
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_partial_repay_amount_becomes_unknown_rebuilds_text_payload(
+    tmp_path, monkeypatch
+):
+    """八审 Medium 4 回归：telegram/bark 的 payload 无结构化金额键——金额从
+    已知变为未知时 None==None 的比较恰好跳过重建，仍发旧的「应还 1000」
+    文案。文本通道在金额未知时必须重建（文案回退「金额以银行账单为准」）。"""
+    Session, engine = make_db(tmp_path, monkeypatch)
+    db = Session()
+    try:
+        user, card = add_card(db)
+        user.telegram_enabled = True
+        user.telegram_bot_token = "token"
+        user.telegram_chat_id = "chat"
+        db.commit()
+
+        from app.models import CreditCardStatement
+        from app.services.scheduler import _local_today
+        from app.credit_card_rules import next_due_date
+        from datetime import timedelta
+
+        today = _local_today()
+        due = next_due_date(today, card.due_day)
+        stmt = CreditCardStatement(
+            user_id=user.id, card_id=card.id, bank_key="cmb", card_last_four="1234",
+            match_status="matched", due_date=due, total_due=1000.0,
+            statement_date=due - timedelta(days=20), message_id="m-known",
+            verify_status="ok",
+        )
+        db.add(stmt)
+        db.commit()
+
+        business = due - timedelta(days=7)
+        first = credit_card_reminders.run_reminder_scan(business)
+        assert first["enqueued"] >= 1
+        row = db.scalar(select(CreditCardNotificationOutbox))
+        assert row.channel == "telegram"
+
+        # 金额未知化 + 真实还款副作用（失效 checkpoint）
+        stmt.total_due = None
+        from app.routers import credit_cards as cc_router
+        cc_router._invalidate_scan_checkpoint(db)
+        db.commit()
+
+        captured = {}
+        monkeypatch.setattr(
+            notification_transport.telegram,
+            "send_message",
+            lambda chat_id, text, **kwargs: captured.update({"text": text}) or {},
+        )
+        result = credit_card_notification_outbox.dispatch_due(batch_size=10)
+        assert result["sent"] == 1
+        # 发送的 telegram 文案不得再含旧的 1000（金额未知 → 回退提示）
+        sent_text = str(captured.get("text", ""))
+        assert "1,000" not in sent_text and "1000" not in sent_text, (
+            f"金额未知后仍发送旧金额文案：{sent_text[:200]}"
+        )
+        db.expire_all()
+        row = db.scalar(select(CreditCardNotificationOutbox))
+        assert "1,000" not in str(row.payload)
+    finally:
+        db.close()
+        engine.dispose()

@@ -105,6 +105,14 @@
       </template>
     </AppModal>
 
+    <RepaymentModal
+      v-if="repayOpen && repayTarget"
+      :target="repayTarget"
+      :pending="repayPending"
+      @close="repayOpen = false"
+      @confirm="onRepayConfirm"
+    />
+
     <AppToastRegion :toasts="toasts" />
   </div>
 </template>
@@ -118,8 +126,9 @@ import CreditCardDetailModal from '../components/credit-cards/CreditCardDetailMo
 import CreditCardFormModal from '../components/credit-cards/CreditCardFormModal.vue'
 import CreditCardItem from '../components/credit-cards/CreditCardItem.vue'
 import CreditCardStats from '../components/credit-cards/CreditCardStats.vue'
+import RepaymentModal from '../components/credit-cards/RepaymentModal.vue'
 import DataState from '../components/DataState.vue'
-import { buildRepaidScopeText, orderCards } from '../utils/creditCardDates'
+import { buildRepaidScopeText, orderCards, statementCycleLabel } from '../utils/creditCardDates'
 import { useConfirm } from '../composables/useConfirm'
 import { useCreditCards } from '../composables/useCreditCards'
 import { useToasts } from '../composables/useToasts'
@@ -127,7 +136,12 @@ import { useToasts } from '../composables/useToasts'
 const { t } = useI18n()
 const confirm = useConfirm()
 const { toasts, add: toast } = useToasts()
-const { cards, dataState, mutationPending, outstanding, outstandingError, load, refreshOutstanding, markCardRepaid, save, remove } = useCreditCards()
+const { cards, dataState, mutationPending, outstanding, outstandingError, load, refreshOutstanding, markCardRepaid, repayCard, save, remove } = useCreditCards()
+
+// 部分还款弹窗状态（卡片级入口）
+const repayOpen = ref(false)
+const repayPending = ref(false)
+const repayTarget = ref(null)
 
 // 单期标记后后端返回更新卡片（界线推进 → next_due_date 等派生变化）：
 // 原位替换列表数据并同步已打开的详情弹窗，UI 立即顺延无需重载
@@ -263,12 +277,30 @@ function requestDelete(card) {
   })
 }
 
-// 卡片上「标记已还款」：把该卡全部未标记的勾稽通过账单（含历史各期）一次标记。
-// 需确认——这决定待还总额是否剔除，误触会掩盖真实欠款。
+// 卡片上「标记已还款」：优先走部分还款输入框（后端给出 latest_statement_id =
+// 最新未还账单金额已知且有剩余）；富余/混合/金额未知卡没有「还多少」可言，
+// 回退旧的 useConfirm 全量确认（一次标记该卡全部未标记账单，含历史各期）。
 // 文案按账单月份列出（「26年8月账单」）；有月份缺失的账单时明确补上笔数，
 // 保证确认范围 = 实际标记范围。
-async function requestMarkRepaid(card) {
+function requestMarkRepaid(card) {
   const entry = outstandingPerCard.value.get(card.id)
+  // 有可还款目标：弹金额输入框（默认填剩余全额，一次还清点确认即可）
+  if (entry && !entry.is_surplus && entry.latest_statement_id) {
+    repayTarget.value = {
+      kind: 'card',
+      name: card.display_name,
+      cardId: card.id,
+      remaining: entry.total_due,
+      repaidAmount: 0,
+      cyclesText: buildScopeText(entry)
+    }
+    repayOpen.value = true
+    return
+  }
+  requestMarkRepaidConfirm(card, entry)
+}
+
+async function requestMarkRepaidConfirm(card, entry) {
   // 负合计（溢缴款/多还）不是「欠款合计」：金额展示绝对值，文案按富余语义。
   // 混合情形（净富余但含正金额欠款）：必须披露欠款额也在本次标记范围内，
   // 否则用户确认「结清富余」时真实欠款被悄悄清掉。
@@ -296,6 +328,46 @@ async function requestMarkRepaid(card) {
       }
     }
   })
+}
+
+// 部分还款弹窗确认：按响应 is_repaid 分「已还清 / 部分还款」toast。
+// 成功边界 = POST 本身（复审 Medium 2）：还款已提交后汇总刷新失败只补
+// 「汇总刷新失败」提示，不误报还款失败、不关闭弹窗让用户按原金额重试
+//（重试会重复累计——后端已接受第一笔）。
+async function onRepayConfirm(amount) {
+  const target = repayTarget.value
+  if (!target) return
+  repayPending.value = true
+  try {
+    const data = target.kind === 'card'
+      ? await repayCard({ id: target.cardId }, amount)
+      : null
+    if (target.kind === 'card' && data) {
+      // 还清文案只声称实际处理的目标账单期（八审 L2：卡片级目标是最新一期，
+      // 日期未知的历史账单不在范围内——复用全量确认的范围文案会谎报已还清）
+      const targetCycle = statementCycleLabel(data.statement)
+      toast(data.is_repaid
+        ? t('creditCards.repayDoneCleared', {
+            name: target.name,
+            cycles: targetCycle
+              ? t('creditCards.statementCycleName', { month: targetCycle })
+              : target.cyclesText
+          })
+        : t('creditCards.repayDonePartial', {
+            amount: formatAmount(amount),
+            name: target.name,
+            remaining: formatAmount(data.remaining_amount ?? 0)
+          }))
+      if (data.refreshFailed) {
+        toast(t('creditCards.outstandingRefreshFailed'), 'error')
+      }
+    }
+    repayOpen.value = false
+  } catch {
+    toast(t('creditCards.repayFailed'))
+  } finally {
+    repayPending.value = false
+  }
 }
 
 onMounted(() => {

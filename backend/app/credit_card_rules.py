@@ -4,6 +4,20 @@ from calendar import monthrange
 from datetime import date
 
 
+def statement_remaining_amount(
+    total_due: float | None, repaid_amount: float | None
+) -> float | None:
+    """账单剩余待还 = total_due − repaid_amount（按分整数防浮点误差）。
+
+    total_due 为 None（金额未知）返回 None；repaid_amount 为 None 按 0 计。
+    富余账单（total_due<0）的 repaid_amount 恒 0，负值原样返回。
+    """
+    if total_due is None:
+        return None
+    cents = round(total_due * 100) - round((repaid_amount or 0.0) * 100)
+    return round(cents) / 100
+
+
 def anchor_month_day(year: int, month: int, nominal_day: int) -> date:
     """将名义日锚定到指定月份，超出月末时取该月最后一天。"""
     if not 1 <= nominal_day <= 31:
