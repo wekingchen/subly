@@ -299,6 +299,11 @@ def annual_fee_progress(
     - 覆盖警示：窗口内名义账单期与库中实际账单期比对，缺期响亮返回
       （统计偏低不伪装可信）。期次比对按 statement_date/bill_period_end
       的 (year, month)，与账单月份命名口径一致。
+    - 无消费跳期：缺期若满足「同银行他卡有 ok 账单、且该 (账户, 尾号)
+      曾与本卡同封合并邮件（历史组关系）+ 本卡该期无任何记录」→ 判定
+      本期无消费，归入 skipped 而非 missing（不触发无意义补拉；不计入
+      进度——无消费本就无贡献）。已知限制：同银行全部卡同期零消费时
+      库中零记录、无证据，仍报 missing。
     """
     card = _owned_card(db, card_id, user.id)
     anchor = card.fee_waiver_anchor_date
@@ -324,6 +329,84 @@ def annual_fee_progress(
         ((s.bill_period_end or s.statement_date).year, (s.bill_period_end or s.statement_date).month)
         for s in covered_rows
     }
+
+    # 无消费跳期证据（十二审新增）：同银行其他卡「ok 且期键可算」的账单 =
+    # 该期邮件已到；邮件没列本卡 = 本卡本期无消费，该期跳过不报缺。
+    # 归属判定（十三审 M2）以权威字段 card_id 优先，尾号只在无关联（孤立
+    # 账单）时回退使用——卡片改尾号后历史账单尾号不级联，且同银行尾号可
+    # 重复（ambiguous 语义），尾号相等/不等都不能单独定归属：
+    # - row.card_id == card.id → 本卡记录（任意 verify），邮件列过本卡，阻断跳期
+    # - row.card_id 非空且 ≠ card.id → 明确是 sibling（尾号碰撞也不算本卡）
+    # - row.card_id is NULL → 孤立账单，按尾号回退判断（同尾号保守视为本卡）
+    # - 卡片 last_four 为空时整个跳期机制不启用（孤立账单无法区分本卡/他卡）
+    # - 未收录银行 _bank_keys_for 返回 [] → in_([]) 恒假 → 不跳期
+    #
+    # 邮件组证据（十三审 M1，十四审重写）：固定「±5 天」容差无法证明
+    # sibling 与本卡属同一封邮件（同银行异账单日卡可能恰好落容差内），
+    # 精确同 message_id 在被跳期次也永远不成立——本期本卡无记录，不可能
+    # 与 sibling 同封。组关系因此是历史派生的卡片对属性：某期本卡与他卡
+    # 账单共享同一 (source_account_id, message_id)（同封合并邮件拆出），
+    # 即把 (账户, 他卡尾号) 记入本卡的组员集合；之后同账户下该尾号的 ok
+    # 账单才可作为「邮件已到、未列本卡」的证据。无历史组关系时保守
+    # 留 missing。
+    own_cycles: set[tuple[int, int]] = set()
+    sibling_by_cycle: dict[tuple[int, int], list[date]] = {}
+    bank_keys = _bank_keys_for(card.bank_name)
+    if bank_keys and card.last_four:
+        rows_for_skip = db.execute(
+            select(
+                CreditCardStatement.card_id,
+                CreditCardStatement.card_last_four,
+                CreditCardStatement.statement_date,
+                CreditCardStatement.bill_period_end,
+                CreditCardStatement.verify_status,
+                CreditCardStatement.source_account_id,
+                CreditCardStatement.message_id,
+            ).where(
+                CreditCardStatement.user_id == user.id,
+                CreditCardStatement.bank_key.in_(bank_keys),
+                CreditCardStatement.statement_date.isnot(None),
+            )
+        ).all()
+        # 第一遍（历史组关系派生）：本卡账单出现过的 (账户, message_id)
+        # → 同封其他行（他卡或孤立）**行上记录的**尾号入组员集合。以账单
+        # 行的冗余尾号为准，不回查卡片当前尾号——组关系锚定历史账单行的
+        # 身份；卡片改尾号后旧账单行尾号不变，组员集合随之保持历史口径。
+        own_mail_keys = {
+            (r.source_account_id, r.message_id)
+            for r in rows_for_skip
+            if r.card_id == card.id and r.source_account_id is not None
+        }
+        own_account_ids = {src for src, _ in own_mail_keys}
+        group_tails_by_account: dict[int, set[str]] = {}
+        for r in rows_for_skip:
+            if (
+                r.card_id != card.id
+                and r.source_account_id in own_account_ids
+                and (r.source_account_id, r.message_id) in own_mail_keys
+                and r.card_last_four
+            ):
+                group_tails_by_account.setdefault(r.source_account_id, set()).add(
+                    r.card_last_four
+                )
+        # 第二遍（证据分类）
+        for row_card_id, tail, s_date, b_end, v, src_id, msg_id in rows_for_skip:
+            cycle_key = ((b_end or s_date).year, (b_end or s_date).month)
+            if row_card_id == card.id:
+                own_cycles.add(cycle_key)  # 本卡记录（任意 verify）：邮件列过本卡
+            elif row_card_id is not None:
+                # 明确他卡（尾号碰撞也不算本卡）——组关系 + ok 才算证据
+                if v == "ok" and tail in group_tails_by_account.get(src_id or -1, ()):
+                    sibling_by_cycle.setdefault(cycle_key, []).append(s_date)
+            elif tail == card.last_four:
+                own_cycles.add(cycle_key)  # 孤立账单同尾号：保守视为本卡
+            elif (
+                v == "ok"
+                and src_id is not None
+                and tail in group_tails_by_account.get(src_id, ())
+            ):
+                # 孤立账单（无 card_id）+ 账户下该尾号在历史组员集合 → sibling 证据
+                sibling_by_cycle.setdefault(cycle_key, []).append(s_date)
 
     # 交易聚合：按有效归属日期限定在本年费窗口内（上一窗口的交易不计入）。
     # 归属日期 = trans_date，缺交易日期回退账单出账月（bill_period_end || statement_date）。
@@ -389,7 +472,20 @@ def annual_fee_progress(
         cursor = date(year, month, 1)
     # covered_cycles 含窗口外历史期：响应与 missing 都只看窗口内交集
     covered_in_window = covered_cycles & expected
-    missing = sorted(expected - covered_cycles)
+    missing_all = sorted(expected - covered_cycles)
+    # 无消费跳期拆分（十二审新增 → 十三审 M1 收紧证据）：缺期 + 同邮件组
+    # （本卡与他卡曾共享 (source_account_id, message_id)——同一封合并邮件
+    # 拆出的各卡）他卡有 ok 账单 + 本卡该期无任何记录 → 判定本期无消费，
+    # 跳过该期不报缺。固定「±N 天」日期容差无法证明同一封邮件（同银行异
+    # 账单日卡的出账日可能恰好落在容差内，误跳真实缺账单的期次），已改用
+    # 历史邮件组关系作为证据。
+    skipped: set[tuple[int, int]] = set()
+    for y, m in missing_all:
+        if (y, m) in own_cycles:
+            continue
+        if sibling_by_cycle.get((y, m)):
+            skipped.add((y, m))
+    missing = sorted(set(missing_all) - skipped)
 
     qualified_amount = qualified_amount_cents / 100.0
     target_amount_cents = round(target_amount * 100) if target_amount is not None else None
@@ -413,6 +509,10 @@ def annual_fee_progress(
         "missing_cycles": [_cycle_label(y, m) for y, m in missing],
         # 结构化缺期（供前端逐期补拉请求）：与 missing_cycles 一一对应
         "missing_periods": [{"year": y, "month": m} for y, m in missing],
+        # 无消费跳期（十二审新增）：同银行同期他卡有账单而本卡无 → 本期
+        # 无消费已跳过（不进 missing、不触发补拉、不计入进度）
+        "skipped_cycles": [_cycle_label(y, m) for y, m in sorted(skipped)],
+        "skipped_periods": [{"year": y, "month": m} for y, m in sorted(skipped)],
     }
 
 

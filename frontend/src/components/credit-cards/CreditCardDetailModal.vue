@@ -55,6 +55,9 @@
             cycle: feeWaiver.annual_fee_charged.cycle || ''
           }) }}
         </p>
+        <p v-if="feeWaiver.skipped_cycles?.length" class="fee-skipped">
+          {{ t('creditCards.annualFeeSkipped', { n: feeWaiver.skipped_cycles.length, cycles: feeWaiver.skipped_cycles.join('、') }) }}
+        </p>
         <p v-if="feeWaiver.missing_cycles.length" class="fee-missing">
           {{ t('creditCards.annualFeeMissing', { n: feeWaiver.missing_cycles.length, cycles: feeWaiver.missing_cycles.join('、') }) }}
         </p>
@@ -255,6 +258,7 @@ function onModalChange(value) {
 .fee-progress { margin: 8px 0 0; font-size: 13px; font-weight: 650; }
 .fee-charged { margin: 8px 0 0; color: var(--danger-text); font-size: 12px; font-weight: 650; }
 .fee-missing { margin: 8px 0 0; color: var(--warning-text); font-size: 12px; }
+.fee-skipped { margin: 8px 0 0; color: var(--text-soft); font-size: 12px; }
 .fee-retry { margin-left: 6px; padding: 0; border: 0; background: none; color: var(--primary); font: inherit; font-weight: 750; cursor: pointer; text-decoration: underline; }
 /* 历史账单补拉：按钮行 + 逐期进度列表 */
 .fee-backfill-row { margin-top: 10px; }

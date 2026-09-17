@@ -598,3 +598,446 @@ def test_backfill_imap_error_reason(fee_env, monkeypatch):
     assert body["filled"] is False
     # 连接级原因 + 未找到并存：账户 A 连接失败不代表邮箱里一定没有该期账单
     assert body["reasons"] == ["a@qq.com: ImapConnectionError", "邮箱中未找到该期账单邮件"]
+
+
+# ---------- 无消费跳期（十二审新增） ----------
+
+def _add_sibling(db, user_id, *, statement_date, tail="8888", verify="ok",
+                 bank_key="cmb", message_id=None, own_card_id=None):
+    """同银行他卡的 sibling 账单（期键证据）。
+
+    邮件组关系（十三审 M1）：证据要求 sibling 与本卡曾共享同封合并邮件
+    （组关系来自历史期次——本期本卡无记录，不可能与本卡同封）。own_card_id
+    提供时，先在去年同日造一对「本卡 + 他卡同 message」的 ok 记录建立组
+    关系（窗口外，不影响 covered/missing 计数），再落本期 sibling 账单，
+    模拟「历史两卡同封、本期仅他卡出账」的真实形态；不提供时无组关系，
+    sibling 不构成证据（由各测试自行预期）。"""
+    from app.models import CreditCardStatement, ImapAccount
+
+    account = db.query(ImapAccount).first()
+    msg = message_id or f"sibling-{tail}-{statement_date}-{verify}"
+    if own_card_id is not None and account is not None:
+        history_date = date(statement_date.year - 1, statement_date.month, statement_date.day)
+        history_msg = f"{msg}-group-history"
+        db.add(CreditCardStatement(
+            user_id=user_id, card_id=own_card_id, bank_key=bank_key,
+            card_last_four="6310", match_status="matched",
+            due_date=history_date, total_due=99.0, statement_date=history_date,
+            source_account_id=account.id, message_id=history_msg,
+            verify_status="ok",
+        ))
+        db.add(CreditCardStatement(
+            user_id=user_id, card_id=None, bank_key=bank_key, card_last_four=tail,
+            match_status="unmatched", due_date=history_date,
+            total_due=100.0, statement_date=history_date,
+            source_account_id=account.id, message_id=history_msg,
+            verify_status="ok",
+        ))
+        db.commit()
+    stmt = CreditCardStatement(
+        user_id=user_id, card_id=None, bank_key=bank_key, card_last_four=tail,
+        match_status="unmatched", due_date=statement_date,
+        total_due=100.0, statement_date=statement_date,
+        source_account_id=account.id if account else None, message_id=msg,
+        verify_status=verify,
+    )
+    db.add(stmt)
+    db.commit()
+    return stmt
+
+
+def test_sibling_statement_skips_no_spending_cycle(fee_env, monkeypatch):
+    """同银行同期他卡有 ok 账单（出账日=本卡名义日）而本卡无 → 该期跳过
+    不报 missing，进 skipped；covered/total 不变。"""
+    client, db, user = fee_env
+    today = date(2026, 9, 3)
+    monkeypatch.setattr(scheduler, "_local_today", lambda: today)
+    card = _make_card(db, user.id, anchor=date(2025, 3, 15), count=6)
+    # 本卡只有 8/15 期账单；3~7 月都缺。给 7/15 期造他卡 sibling 证据
+    _make_statement_with_items(db, user.id, card.id, date(2026, 8, 15), [
+        ("purchase", 100.0, "超市"),
+    ])
+    _add_sibling(db, user.id, statement_date=date(2026, 7, 15),
+                 own_card_id=card.id)
+
+    body = client.get(f"/api/credit-cards/{card.id}/annual-fee").json()
+    # 7/15 期：sibling 证据 → skipped（不进 missing、不触发补拉）
+    assert "26年7月" in body["skipped_cycles"]
+    assert {"year": 2026, "month": 7} in body["skipped_periods"]
+    assert "26年7月" not in body["missing_cycles"]
+    # 其余 4 期仍 missing
+    assert len(body["missing_cycles"]) == 4
+    assert "26年7月" not in body["missing_periods"]
+    # covered/total 不受跳期影响
+    assert body["covered_cycles"] == 1
+    assert body["total_cycles"] == 6
+
+
+def test_mixed_missing_and_skipped_split(fee_env, monkeypatch):
+    """两个缺期：一期有 sibling 证据（→ skipped）、一期没有（→ missing），
+    拆分互不混入。"""
+    client, db, user = fee_env
+    today = date(2026, 9, 3)
+    monkeypatch.setattr(scheduler, "_local_today", lambda: today)
+    card = _make_card(db, user.id, anchor=date(2025, 3, 15), count=6)
+    # 6/15 有本卡账单（covered）；4/15 有 sibling（skip）；3/5、5/15、7/15 无证据（missing）
+    _make_statement_with_items(db, user.id, card.id, date(2026, 6, 15), [
+        ("purchase", 100.0, "超市"),
+    ])
+    _add_sibling(db, user.id, statement_date=date(2026, 4, 15),
+                 own_card_id=card.id)
+
+    body = client.get(f"/api/credit-cards/{card.id}/annual-fee").json()
+    assert "26年4月" in body["skipped_cycles"]
+    for month in ("26年3月", "26年5月", "26年7月"):
+        assert month in body["missing_cycles"]
+        assert month not in body["skipped_cycles"]
+    assert "26年4月" not in body["missing_cycles"]
+
+
+def test_other_bank_sibling_no_effect(fee_env, monkeypatch):
+    """他银行的同期账单不构成本卡跳期证据（bank_key 过滤）。
+
+    组关系、期键、尾号、verify 全部满足（历史同封经 _add_sibling 的
+    own_card_id 建立在 ccb 上），唯一不满足的是 bank_key——锁定
+    「证据查询只在本银行 bank_key 集合内进行」这一过滤本身。"""
+    client, db, user = fee_env
+    today = date(2026, 9, 3)
+    monkeypatch.setattr(scheduler, "_local_today", lambda: today)
+    card = _make_card(db, user.id, anchor=date(2025, 3, 15), count=6)
+    # 历史组关系也建在 ccb 上（_add_sibling 内本卡历史行 bank_key 同参）
+    _add_sibling(db, user.id, statement_date=date(2026, 7, 15), bank_key="ccb",
+                 own_card_id=card.id)
+
+    body = client.get(f"/api/credit-cards/{card.id}/annual-fee").json()
+    assert "26年7月" in body["missing_cycles"]
+    assert body["skipped_cycles"] == []
+
+
+def test_other_user_sibling_no_effect(fee_env, monkeypatch):
+    """其他用户的同期同银行账单不构成本卡跳期证据（user_id 过滤）。"""
+    client, db, user = fee_env
+    today = date(2026, 9, 3)
+    monkeypatch.setattr(scheduler, "_local_today", lambda: today)
+    card = _make_card(db, user.id, anchor=date(2025, 3, 15), count=6)
+    bob = User(username="bob", email="bob@example.com", password_hash="hash")
+    db.add(bob)
+    db.commit()
+    _add_sibling(db, bob.id, statement_date=date(2026, 7, 15))
+
+    body = client.get(f"/api/credit-cards/{card.id}/annual-fee").json()
+    assert "26年7月" in body["missing_cycles"]
+    assert body["skipped_cycles"] == []
+
+
+def test_mismatch_sibling_no_effect(fee_env, monkeypatch):
+    """组关系成立但 sibling verify=mismatch → 不算证据（勾稽不通过的
+    他卡账单不可信，不能证明「邮件已到」）。"""
+    client, db, user = fee_env
+    today = date(2026, 9, 3)
+    monkeypatch.setattr(scheduler, "_local_today", lambda: today)
+    card = _make_card(db, user.id, anchor=date(2025, 3, 15), count=6)
+    _add_sibling(db, user.id, statement_date=date(2026, 7, 15), verify="mismatch",
+                 own_card_id=card.id)
+
+    body = client.get(f"/api/credit-cards/{card.id}/annual-fee").json()
+    assert "26年7月" in body["missing_cycles"]
+    assert body["skipped_cycles"] == []
+
+
+def test_own_tail_record_blocks_skip(fee_env, monkeypatch):
+    """本卡尾号在该期有记录（即使 mismatch）→ 邮件列过本卡，不跳
+    （缺数据是勾稽问题不是无消费）。sibling 组关系已成立，阻断只能
+    来自本卡自身记录。"""
+    client, db, user = fee_env
+    today = date(2026, 9, 3)
+    monkeypatch.setattr(scheduler, "_local_today", lambda: today)
+    card = _make_card(db, user.id, anchor=date(2025, 3, 15), count=6)
+    # 他卡 ok（组关系成立）+ 本卡 mismatch 记录同期
+    _add_sibling(db, user.id, statement_date=date(2026, 7, 15), own_card_id=card.id)
+    from app.models import CreditCardStatement
+    db.add(CreditCardStatement(
+        user_id=user.id, card_id=card.id, bank_key="cmb", card_last_four="6310",
+        match_status="matched", statement_date=date(2026, 7, 15),
+        total_due=50.0, message_id="own-mismatch", verify_status="mismatch",
+    ))
+    db.commit()
+
+    body = client.get(f"/api/credit-cards/{card.id}/annual-fee").json()
+    assert "26年7月" in body["missing_cycles"]
+    assert body["skipped_cycles"] == []
+
+
+def test_sibling_date_far_from_nominal_no_skip(fee_env, monkeypatch):
+    """sibling 同期键、组关系成立但出账日距本卡名义日远（同银行异账单日
+    卡，如 7/3 vs 7/15）→ 该期 sibling 自身期键归 7 月、本卡缺期也是
+    7 月：无「日期容差」判定，组关系本身即证据——但若两卡账单日错开到
+    不同期键则互不干扰。此处验证异账单日卡（sibling 在本卡缺期月份有
+    ok 组员账单、组关系成立）时组关系生效的前提是期键一致，不引入
+    任何日期相似度判断。"""
+    client, db, user = fee_env
+    today = date(2026, 9, 3)
+    monkeypatch.setattr(scheduler, "_local_today", lambda: today)
+    card = _make_card(db, user.id, anchor=date(2025, 3, 15), count=6)
+    # 出账日 7/3、期键 (2026, 7) 与本卡缺期一致 + 组关系成立 → 是证据
+    _add_sibling(db, user.id, statement_date=date(2026, 7, 3),
+                 own_card_id=card.id)
+
+    body = client.get(f"/api/credit-cards/{card.id}/annual-fee").json()
+    # 十四审语义：无日期容差，期键一致 + 组关系即跳
+    assert "26年7月" in body["skipped_cycles"]
+    assert "26年7月" not in body["missing_cycles"]
+
+
+def test_sibling_without_statement_date_no_evidence(fee_env, monkeypatch):
+    """sibling statement_date NULL → 期键不可算，不计证据。"""
+    client, db, user = fee_env
+    today = date(2026, 9, 3)
+    monkeypatch.setattr(scheduler, "_local_today", lambda: today)
+    card = _make_card(db, user.id, anchor=date(2025, 3, 15), count=6)
+    from app.models import CreditCardStatement
+    db.add(CreditCardStatement(
+        user_id=user.id, card_id=None, bank_key="cmb", card_last_four="8888",
+        match_status="unmatched", due_date=date(2026, 7, 15),
+        total_due=100.0, statement_date=None,
+        message_id="sibling-no-date", verify_status="ok",
+    ))
+    db.commit()
+
+    body = client.get(f"/api/credit-cards/{card.id}/annual-fee").json()
+    assert "26年7月" in body["missing_cycles"]
+    assert body["skipped_cycles"] == []
+
+
+def test_card_without_last_four_no_skip(fee_env, monkeypatch):
+    """卡片 last_four=None：跳期机制整体不启用（不崩溃、skipped 空、
+    仍 missing）。即便组关系场景齐备（历史同封 + 本期他卡 ok）也不跳
+    ——尾号缺失时孤立账单无法区分本卡/他卡，机制保守关闭。"""
+    client, db, user = fee_env
+    today = date(2026, 9, 3)
+    monkeypatch.setattr(scheduler, "_local_today", lambda: today)
+    card = _make_card(db, user.id, anchor=date(2025, 3, 15), count=6)
+    card.last_four = None
+    db.commit()
+    # 组关系齐备：历史同封建立关系 + 本期他卡 ok 孤立账单
+    _add_sibling(db, user.id, statement_date=date(2026, 7, 15),
+                 own_card_id=card.id)
+
+    body = client.get(f"/api/credit-cards/{card.id}/annual-fee").json()
+    assert body["skipped_cycles"] == []
+    assert "26年7月" in body["missing_cycles"]
+
+
+def test_sibling_without_mail_group_no_skip(fee_env, monkeypatch):
+    """sibling 出账日恰为本卡名义日但无历史邮件组关系 → 不算证据
+    （旧「±5 天容差」已移除：日期相近不能证明同一封邮件）。"""
+    client, db, user = fee_env
+    today = date(2026, 9, 3)
+    monkeypatch.setattr(scheduler, "_local_today", lambda: today)
+    card = _make_card(db, user.id, anchor=date(2025, 3, 15), count=6)
+    _add_sibling(db, user.id, statement_date=date(2026, 7, 15))  # 名义日当天
+
+    body = client.get(f"/api/credit-cards/{card.id}/annual-fee").json()
+    assert "26年7月" in body["missing_cycles"]
+    assert body["skipped_cycles"] == []
+
+
+def test_linked_sibling_same_tail_still_sibling(fee_env, monkeypatch):
+    """归属优先级：card_id 明确为他卡、尾号恰与本卡当前尾号相同（本卡
+    曾用旧尾号 5555、换卡后为 6310；他卡一直是 6310）。历史同封建立
+    组员集合含 "6310"，本期他卡 ok 账单 → 按 card_id 判为他卡、组关系
+    成立 → 跳过。若尾号判断先于 card_id 判断会被误当本卡阻断——
+    锁定「card_id 优先于尾号」的分支顺序。
+    （同封两行不能同尾号——(账户, message, 尾号) 唯一约束，历史组关系
+    只能经本卡旧尾号行构造。）"""
+    client, db, user = fee_env
+    today = date(2026, 9, 3)
+    monkeypatch.setattr(scheduler, "_local_today", lambda: today)
+    card = _make_card(db, user.id, anchor=date(2025, 3, 15), count=6)  # 6310
+    sibling_card = CreditCard(
+        user_id=user.id, display_name="同尾号卡", bank_name="招商银行",
+        last_four="6310", statement_day=15, due_day=3,
+    )
+    db.add(sibling_card)
+    db.commit()
+    from app.models import CreditCardStatement, ImapAccount
+    account = db.query(ImapAccount).first()
+    # 历史同封：本卡换卡前旧尾号 5555 + 他卡 6310 → 组员 {"6310"}
+    history = date(2025, 7, 15)
+    db.add(CreditCardStatement(
+        user_id=user.id, card_id=card.id, bank_key="cmb", card_last_four="5555",
+        match_status="matched", statement_date=history, total_due=99.0,
+        source_account_id=account.id, message_id="same-tail-hist", verify_status="ok",
+    ))
+    db.add(CreditCardStatement(
+        user_id=user.id, card_id=sibling_card.id, bank_key="cmb",
+        card_last_four="6310", match_status="matched", statement_date=history,
+        total_due=50.0, source_account_id=account.id, message_id="same-tail-hist",
+        verify_status="ok",
+    ))
+    db.commit()
+    # 本期：同尾号他卡（card_id 已关联）ok 账单（组关系来自历史期次）
+    db.add(CreditCardStatement(
+        user_id=user.id, card_id=sibling_card.id, bank_key="cmb",
+        card_last_four="6310", match_status="matched",
+        statement_date=date(2026, 7, 15), total_due=60.0,
+        source_account_id=account.id, message_id="same-tail-now",
+        verify_status="ok",
+    ))
+    db.commit()
+
+    body = client.get(f"/api/credit-cards/{card.id}/annual-fee").json()
+    assert "26年7月" in body["skipped_cycles"]
+    assert "26年7月" not in body["missing_cycles"]
+
+
+def test_orphan_same_tail_blocks_even_in_group(fee_env, monkeypatch):
+    """归属优先级：孤立账单（card_id=NULL）尾号与本卡相同 → 保守视为
+    本卡记录（阻断跳期），即使该尾号同时在历史组员集合内也不得改判
+    sibling——锁定「孤立同尾号保守阻断」优先于组员匹配（删掉该阻断
+    分支时本测试失败）。组员集合经换卡场景构造（历史同封：本卡旧尾号
+    5555 + 孤立 6310）。"""
+    client, db, user = fee_env
+    today = date(2026, 9, 3)
+    monkeypatch.setattr(scheduler, "_local_today", lambda: today)
+    card = _make_card(db, user.id, anchor=date(2025, 3, 15), count=6)  # 6310
+    from app.models import CreditCardStatement, ImapAccount
+    account = db.query(ImapAccount).first()
+    # 历史同封：本卡旧尾号 5555 + 孤立账单 6310 → 组员 {"6310"}
+    history = date(2025, 7, 15)
+    db.add(CreditCardStatement(
+        user_id=user.id, card_id=card.id, bank_key="cmb", card_last_four="5555",
+        match_status="matched", statement_date=history, total_due=99.0,
+        source_account_id=account.id, message_id="orphan-grp-hist", verify_status="ok",
+    ))
+    db.add(CreditCardStatement(
+        user_id=user.id, card_id=None, bank_key="cmb", card_last_four="6310",
+        match_status="unmatched", statement_date=history, total_due=100.0,
+        source_account_id=account.id, message_id="orphan-grp-hist", verify_status="ok",
+    ))
+    db.commit()
+    # 本期：孤立账单尾号 = 本卡当前尾号 6310 → 保守阻断，不改判 sibling
+    db.add(CreditCardStatement(
+        user_id=user.id, card_id=None, bank_key="cmb", card_last_four="6310",
+        match_status="unmatched", statement_date=date(2026, 7, 15), total_due=100.0,
+        source_account_id=account.id, message_id="orphan-grp-now", verify_status="ok",
+    ))
+    db.commit()
+
+    body = client.get(f"/api/credit-cards/{card.id}/annual-fee").json()
+    assert "26年7月" in body["missing_cycles"]
+    assert body["skipped_cycles"] == []
+
+
+def test_period_key_prefers_bill_period_end(fee_env, monkeypatch):
+    """期键口径：sibling 的 statement_date 与 bill_period_end 不同月时，
+    期键以 coalesce(bill_period_end, statement_date) = bill_period_end 为准
+    （与 covered_cycles 同一规则）——证据归入账期结束月，不归出账月。"""
+    client, db, user = fee_env
+    today = date(2026, 9, 3)
+    monkeypatch.setattr(scheduler, "_local_today", lambda: today)
+    card = _make_card(db, user.id, anchor=date(2025, 3, 15), count=6)
+    from app.models import CreditCardStatement, ImapAccount
+    account = db.query(ImapAccount).first()
+    # 历史同封对建立组关系（期键无歧义：statement_date 与 period_end 同月）
+    history = date(2025, 7, 15)
+    db.add(CreditCardStatement(
+        user_id=user.id, card_id=card.id, bank_key="cmb", card_last_four="6310",
+        match_status="matched", statement_date=history, total_due=99.0,
+        source_account_id=account.id, message_id="period-key-hist", verify_status="ok",
+    ))
+    db.add(CreditCardStatement(
+        user_id=user.id, card_id=None, bank_key="cmb", card_last_four="8888",
+        match_status="unmatched", statement_date=history, total_due=100.0,
+        source_account_id=account.id, message_id="period-key-hist", verify_status="ok",
+    ))
+    db.commit()
+    # 本期 sibling：出账 7/3、账期结束 8/10 → 期键 (2026, 8)
+    db.add(CreditCardStatement(
+        user_id=user.id, card_id=None, bank_key="cmb", card_last_four="8888",
+        match_status="unmatched", statement_date=date(2026, 7, 3),
+        bill_period_end=date(2026, 8, 10), total_due=100.0,
+        source_account_id=account.id, message_id="period-key-now",
+        verify_status="ok",
+    ))
+    db.commit()
+
+    body = client.get(f"/api/credit-cards/{card.id}/annual-fee").json()
+    # 证据归 8 月 → 8 月跳过；7 月无证据仍 missing
+    assert "26年8月" in body["skipped_cycles"]
+    assert "26年8月" not in body["missing_cycles"]
+    assert "26年7月" in body["missing_cycles"]
+    assert "26年7月" not in body["skipped_cycles"]
+
+
+def test_linked_sibling_with_mail_group_skips(fee_env, monkeypatch):
+    """明确他卡（card_id 已关联）+ 历史组关系 + ok → 该期跳过。
+    与孤立账单（card_id=NULL）路径不同的分支，各自需要覆盖。"""
+    client, db, user = fee_env
+    today = date(2026, 9, 3)
+    monkeypatch.setattr(scheduler, "_local_today", lambda: today)
+    card = _make_card(db, user.id, anchor=date(2025, 3, 15), count=6)
+    sibling_card = CreditCard(
+        user_id=user.id, display_name="招行二卡", bank_name="招商银行",
+        last_four="8888", statement_day=15, due_day=3,
+    )
+    db.add(sibling_card)
+    db.commit()
+    from app.models import CreditCardStatement, ImapAccount
+    account = db.query(ImapAccount).first()
+    # 历史期次：本卡与他卡同封（建立组关系）
+    history = date(2025, 7, 15)
+    db.add(CreditCardStatement(
+        user_id=user.id, card_id=card.id, bank_key="cmb", card_last_four="6310",
+        match_status="matched", statement_date=history, total_due=99.0,
+        source_account_id=account.id, message_id="grp-hist", verify_status="ok",
+    ))
+    db.add(CreditCardStatement(
+        user_id=user.id, card_id=sibling_card.id, bank_key="cmb",
+        card_last_four="8888", match_status="matched", statement_date=history,
+        total_due=50.0, source_account_id=account.id, message_id="grp-hist",
+        verify_status="ok",
+    ))
+    db.commit()
+    # 本期：他卡（card_id 已关联）有 ok 账单，本卡无记录
+    db.add(CreditCardStatement(
+        user_id=user.id, card_id=sibling_card.id, bank_key="cmb",
+        card_last_four="8888", match_status="matched",
+        statement_date=date(2026, 7, 15), total_due=60.0,
+        source_account_id=account.id, message_id="grp-now",
+        verify_status="ok",
+    ))
+    db.commit()
+
+    body = client.get(f"/api/credit-cards/{card.id}/annual-fee").json()
+    assert "26年7月" in body["skipped_cycles"]
+    assert "26年7月" not in body["missing_cycles"]
+
+
+def test_linked_sibling_without_mail_group_no_skip(fee_env, monkeypatch):
+    """明确他卡（card_id 已关联）但无历史组关系 → 不算证据（单独收信的
+    他卡出账不能证明本卡的邮件已到）。"""
+    client, db, user = fee_env
+    today = date(2026, 9, 3)
+    monkeypatch.setattr(scheduler, "_local_today", lambda: today)
+    card = _make_card(db, user.id, anchor=date(2025, 3, 15), count=6)
+    sibling_card = CreditCard(
+        user_id=user.id, display_name="招行二卡", bank_name="招商银行",
+        last_four="8888", statement_day=15, due_day=3,
+    )
+    db.add(sibling_card)
+    db.commit()
+    from app.models import CreditCardStatement, ImapAccount
+    account = db.query(ImapAccount).first()
+    db.add(CreditCardStatement(
+        user_id=user.id, card_id=sibling_card.id, bank_key="cmb",
+        card_last_four="8888", match_status="matched",
+        statement_date=date(2026, 7, 15), total_due=60.0,
+        source_account_id=account.id, message_id="solo-msg",
+        verify_status="ok",
+    ))
+    db.commit()
+
+    body = client.get(f"/api/credit-cards/{card.id}/annual-fee").json()
+    assert "26年7月" in body["missing_cycles"]
+    assert body["skipped_cycles"] == []
