@@ -284,6 +284,40 @@ describe('useCreditCards repayCard 成功边界（复审 Medium 2）', () => {
   })
 })
 
+describe('refreshOutstanding 返回「结果是否生效」（竞态下调用方依赖）', () => {
+  beforeEach(() => {
+    api.post.mockReset()
+    api.get.mockReset()
+  })
+
+  it('最新请求成功返回 applied=true', async () => {
+    api.get.mockResolvedValue({ data: { total: 0, per_card: [] } })
+    const store = useCreditCards()
+
+    const applied = await store.refreshOutstanding()
+
+    expect(applied).toBe(true)
+    expect(store.outstanding.value.total).toBe(0)
+  })
+
+  it('被更新请求取代的旧响应：applied=false 且不覆盖汇总（成功后处理不得执行）', async () => {
+    // 旧请求挂起期间新请求已发出并完成 → 旧响应过期
+    let releaseOld
+    api.get.mockImplementationOnce(() => new Promise((resolve) => { releaseOld = resolve }))
+    api.get.mockResolvedValue({ data: { total: 0, per_card: [] } }) // 新请求走这里
+    const store = useCreditCards()
+
+    const oldCall = store.refreshOutstanding()          // 旧：挂起
+    await store.refreshOutstanding()                    // 新：立即完成
+    releaseOld?.({ data: { total: 999, per_card: [] } }) // 旧响应最后到达
+    const applied = await oldCall
+
+    expect(applied).toBe(false)
+    expect(store.outstanding.value.total).not.toBe(999) // 旧值未写入
+    expect(store.outstandingError.value).toBe(false)
+  })
+})
+
 describe('useCreditCards refreshFeeMet（达标徽标）', () => {
   beforeEach(() => {
     api.post.mockReset()

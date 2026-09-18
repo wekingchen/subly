@@ -84,15 +84,18 @@ export function useCreditCards() {
   }
 
   async function refreshOutstanding() {
-    // 请求序号防竞态：连续两次标记切换时，慢的旧响应不能覆盖新状态
+    // 请求序号防竞态：连续两次标记切换时，慢的旧响应不能覆盖新状态。
+    // 返回值告知调用方本次结果是否真正生效：最新请求成功=true；被更新的
+    // 请求取代（普通 return）或失败（throw）时调用方不应做「成功后处理」
     const seq = ++outstandingSeq
     try {
       const data = (await api.get('/api/credit-cards/outstanding/summary')).data
-      if (seq !== outstandingSeq) return
+      if (seq !== outstandingSeq) return false
       outstanding.value = data
       outstandingError.value = false
+      return true
     } catch (error) {
-      if (seq !== outstandingSeq) return // 已有更新的请求接管状态
+      if (seq !== outstandingSeq) return false // 已有更新的请求接管状态
       // 首次加载失败没有可用数据，置错误态（页面显示明确失败而非 0）；
       // 标记后的刷新失败保留旧值但同样置错，调用方 toast 提示重试
       outstandingError.value = true

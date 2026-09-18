@@ -9,21 +9,31 @@
         <p class="stat-desc">{{ t('creditCards.activeCardsHint', { total: totalCount }) }}</p>
       </div>
     </article>
-    <article class="stat-tile card is-outstanding">
+    <!-- 待还 tile 正常态可点击 → 打开「全部账单」对账视图（从金额直达明细）；
+         失败态保留独立重试结构（button 不能嵌套 button） -->
+    <button
+      v-if="!outstandingError"
+      type="button"
+      class="stat-tile card is-outstanding stat-clickable"
+      :title="t('creditCards.allStatementsEntry')"
+      @click="$emit('show-all-statements')"
+    >
       <div class="stat-icon" aria-hidden="true">¥</div>
       <div class="stat-body">
         <span class="stat-label">{{ t('creditCards.outstandingTitle') }}</span>
-        <template v-if="outstandingError">
-          <strong class="stat-value mono-data">—</strong>
-          <p class="stat-desc stat-err">
-            {{ t('creditCards.outstandingLoadFailed') }}
-            <button type="button" class="retry-link" @click="$emit('retry-outstanding')">{{ t('imap.retry') }}</button>
-          </p>
-        </template>
-        <template v-else>
-          <strong class="stat-value mono-data" :class="{ 'is-overdue-amt': overdueTotal > 0, 'is-surplus-amt': isSurplus && overdueTotal <= 0 }">{{ outstandingLabel }}</strong>
-          <p class="stat-desc">{{ outstandingDesc }}</p>
-        </template>
+        <strong class="stat-value mono-data" :class="{ 'is-overdue-amt': overdueTotal > 0, 'is-surplus-amt': isSurplus && overdueTotal <= 0 }">{{ outstandingLabel }}</strong>
+        <p class="stat-desc">{{ outstandingDesc }}</p>
+      </div>
+    </button>
+    <article v-else class="stat-tile card is-outstanding">
+      <div class="stat-icon" aria-hidden="true">¥</div>
+      <div class="stat-body">
+        <span class="stat-label">{{ t('creditCards.outstandingTitle') }}</span>
+        <strong class="stat-value mono-data">—</strong>
+        <p class="stat-desc stat-err">
+          {{ t('creditCards.outstandingLoadFailed') }}
+          <button type="button" class="retry-link" @click="$emit('retry-outstanding')">{{ t('imap.retry') }}</button>
+        </p>
       </div>
     </article>
     <article class="stat-tile card is-due">
@@ -84,7 +94,7 @@ const props = defineProps({
   outstandingError: { type: Boolean, default: false }
 })
 
-defineEmits(['toggle-interest-sort', 'retry-outstanding'])
+defineEmits(['toggle-interest-sort', 'retry-outstanding', 'show-all-statements'])
 
 const { t } = useI18n()
 const activeCount = computed(() => props.cards.filter((card) => card.is_active).length)

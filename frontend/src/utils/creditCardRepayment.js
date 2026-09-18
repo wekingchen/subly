@@ -61,3 +61,14 @@ export function formatAmountInput(n) {
   const num = Number(n) || 0
   return Number.isInteger(num) ? String(num) : num.toFixed(2)
 }
+
+/**
+ * 账单列表加载守卫（纯函数，可单测）：全局模式（all=true）无条件加载；
+ * 单卡模式必须有 cardId——两者都缺时不发请求（也不能隐式回退到全局）。
+ * @param {boolean} all 全局模式
+ * @param {number|null} cardId 单卡 id
+ * @returns {boolean}
+ */
+export function shouldLoadStatements(all, cardId) {
+  return Boolean(all) || cardId != null
+}

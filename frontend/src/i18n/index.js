@@ -132,7 +132,7 @@ const zh = {
   creditCards: {
     kicker: '还款节奏 · 信用卡', title: '信用卡管理', subtitle: '集中记录账单日、计划还款日与提醒窗口，让每张卡的还款节奏清晰可见。', cardCount: '{n} 张卡片', add: '添加信用卡',
     statsLabel: '信用卡概览', activeCards: '启用卡片', activeCardsHint: '共记录 {total} 张卡', dueSoon: '7 天内计划还款', nearestDue: '最近：{name}，还有 {n} 天', noUpcomingDue: '暂无即将到来的还款日',
-    outstandingTitle: '待还款总额', outstandingHint: '{cycles}账单未标记还款', outstandingCountOnly: '{n} 笔账单', outstandingEmpty: '暂无待还款账单', outstandingOverdue: '{cycles}账单已逾期 {amount} 元', outstandingOrphan: '含 {n} 笔已删卡账单，重新添加同尾号卡并解析即可关联标记', outstandingLoadFailed: '加载失败', outstandingSurplusDesc: '还款多过欠款，账上有富余（不计为待还款）', outstandingSurplusAside: '另有卡片账上有富余 {amount} 元（不计入待还款）',
+    outstandingTitle: '待还款总额', outstandingHint: '{cycles}账单未标记还款', outstandingCountOnly: '{n} 笔账单', outstandingEmpty: '暂无待还款账单', outstandingOverdue: '{cycles}账单已逾期 {amount} 元', outstandingOrphan: '含 {n} 笔已删卡账单（可在「全部账单」中查看与标记）', outstandingLoadFailed: '加载失败', outstandingSurplusDesc: '还款多过欠款，账上有富余（不计为待还款）', outstandingSurplusAside: '另有卡片账上有富余 {amount} 元（不计入待还款）',
     statementCycleNames: '{cycles}账单', statementCycleName: '{month}账单', unknownCycleCount: '{n} 笔未知月份账单', scopeJoin: '及',
     markRepaid: '标记已还款', markRepaidHint: '把 {cycles} 一次标记为已还款', markRepaidTitle: '标记已还款', markRepaidMessage: '确认把「{name}」的 {cycles}（合计 {amount}）标记为已还款？标记后将从待还款总额中剔除，卡片顺延到下个账单周期。', markRepaidDone: '「{name}」的 {cycles} 已标记还款', markRepaidFailed: '标记失败，请重试', unmarkRepaid: '取消还款标记', repaidTag: '已还', overdueDays: '已逾期 {n} 天', outstandingOfCard: '待还款',
     // 部分还款（多次还清）：输入当次金额，还清走顺延；未还清继续显示剩余
@@ -150,6 +150,7 @@ const zh = {
     phase: { 'before-statement': '等待出账', 'repayment-window': '还款窗口', overdue: '已过计划日', unknown: '等待计算' },
     disclaimerTitle: '仅作计划提醒', disclaimer: 'Subly 不会验证欠款或代你还款；账单邮件在账单日次日起自动抓取（最多连续 3 天）或你手动点击「解析账单」时读取并保存明细用于对账展示，金额以银行账单为准。日期与提醒仅依据你填写的规则和服务端派生结果，请以银行账单与官方通知为准。',
     statementsTitle: '账单明细', statementsEmpty: '尚未解析到这张卡的账单，可在设置页邮件账户点击「解析账单」', statementsUnmatched: '解析到了这张卡尾号的账单，但未关联成功（同尾号多卡或建卡时间晚于解析），重新点「解析账单」即可关联', statementsLoadFailed: '账单加载失败',
+    allStatementsEntry: '全部账单', allStatementsTitle: '全部账单（跨卡对账）', allStatementsEmpty: '尚无已解析账单', orphanCardLabel: '已删卡 / 未关联', statementUnknownBank: '未知银行', allStatementsHint: '列表为历史账单存档，各期金额不可直接相加；待还款总额按卡片最新账单口径计算，已删卡账单逐期累计，勾稽异常账单不计入。', allStatementsLimit: '当前仅展示最近 500 条账单，更早账单可能未列出。',
     dueOn: '还款日 {d}', minDue: '最低还款', periodUnknown: '未知账单期',
     txDate: '交易日', txDesc: '描述', txAmount: '金额', txType: '类型',
     txType_purchase: '消费', txType_payment: '还款', txType_refund: '退款', txType_installment: '分期', txType_interest: '利息', txType_fee: '费用', txType_unknown: '其他',

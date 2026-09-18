@@ -46,3 +46,19 @@ describe('matchBankBrand（存量自然名称兼容）', () => {
     expect(matchBankBrand('PAB储蓄卡')).toBeNull()
   })
 })
+
+// 全部账单视图的孤立行身份展示依赖：解析器 bank_key（"cmb"/"pab" 等小写键）
+// 必须能映射到中文银行名；未收录键回退 null（组件显示原键，不猜测）。
+describe('matchBankBrand（解析器 bank_key 直查，全部账单身份列依赖）', () => {
+  it('解析器 bank_key 映射到中文银行名', () => {
+    expect(matchBankBrand('cmb')?.name).toBe('招商银行')
+    expect(matchBankBrand('pab')?.name).toBe('平安银行')
+    expect(matchBankBrand('cmbc')?.name).toBe('民生银行')
+    expect(matchBankBrand('citic')?.name).toBe('中信银行')
+    expect(matchBankBrand('ccb')?.name).toBe('建设银行')
+  })
+  it('未知 bank_key 不猜测银行品牌', () => {
+    expect(matchBankBrand('icbc')).toBeNull()
+    expect(matchBankBrand('')).toBeNull()
+  })
+})

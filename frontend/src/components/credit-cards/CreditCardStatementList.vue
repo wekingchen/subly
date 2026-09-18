@@ -1,19 +1,31 @@
 <template>
-  <section class="stmt-section">
+  <section class="stmt-section" :class="{ 'stmt-all': all }">
     <div class="stmt-head">
-      <strong>{{ t('creditCards.statementsTitle') }}</strong>
+      <strong>{{ all ? t('creditCards.allStatementsTitle') : t('creditCards.statementsTitle') }}</strong>
       <!-- 刷新失败优先于空列表文案：补拉后刷新失败时「还没有账单」会掩盖错误 -->
       <span v-if="error" class="stmt-err">{{ t('creditCards.statementsLoadFailed') }}
         <button type="button" class="btn ghost sm" @click="load">{{ t('imap.retry') }}</button>
       </span>
       <span v-else-if="loaded && !statements.length" class="muted stmt-empty">
-        {{ unmatchedCount ? t('creditCards.statementsUnmatched') : t('creditCards.statementsEmpty') }}
+        {{ all ? t('creditCards.allStatementsEmpty') : (unmatchedCount ? t('creditCards.statementsUnmatched') : t('creditCards.statementsEmpty')) }}
       </span>
+      <!-- 全局模式首次加载状态（单卡模式由外层弹窗/详情自身状态表达） -->
+      <span v-else-if="all && !loaded" class="muted stmt-empty">{{ t('common.loading') }}</span>
     </div>
+
+    <!-- 全局模式口径说明：历史列表 ≠ 待还汇总（存活卡取最新一期、孤立组逐期累加，
+         勾稽异常不计入），防止用户把列表金额相加与统计卡对不上当成 bug -->
+    <p v-if="all && loaded && statements.length" class="stmt-hint">{{ t('creditCards.allStatementsHint') }}</p>
+    <!-- 接口 500 条上限：如实披露可能未展示的更早账单，不声称总数 -->
+    <p v-if="all && loaded && statements.length >= 500" class="stmt-hint">{{ t('creditCards.allStatementsLimit') }}</p>
 
     <ul v-if="statements.length" class="stmt-list">
       <li v-for="s in statements" :key="s.id" class="stmt-item">
         <button type="button" class="stmt-summary" @click="toggle(s.id)" :aria-expanded="expanded === s.id">
+          <!-- 全局模式：每行带卡片身份（跨卡列表区分哪张卡的账单；孤立账单
+               card_name=null → 「已删卡 / 未关联 · 银行 ···· 尾号」）。单卡
+               模式行不渲染身份（接口无 card_name，也不能误标孤立） -->
+          <span v-if="all" class="stmt-owner" :class="{ orphan: isOrphan(s) }">{{ ownerLabel(s) }}</span>
           <span class="stmt-period">{{ cycleName(s) }}</span>
           <span v-if="overdueDays(s) != null" class="stmt-overdue-tag">{{ t('creditCards.overdueDays', { n: overdueDays(s) }) }}</span>
           <span v-if="s.is_repaid" class="stmt-repaid-tag">{{ t('creditCards.repaidTag') }}</span>
@@ -125,18 +137,26 @@ import RepaymentModal from './RepaymentModal.vue'
 import { useBreakpoint } from '../../composables/useBreakpoint'
 import { useConfirm } from '../../composables/useConfirm'
 import { statementCycleLabel } from '../../utils/creditCardDates'
-import { statementRemainingAmount } from '../../utils/creditCardRepayment'
+import { statementRemainingAmount, shouldLoadStatements } from '../../utils/creditCardRepayment'
+import { matchBankBrand } from '../../utils/creditCardBanks'
 import { formatMoney } from '../../utils/money'
 
 // 账单明细：打开卡片详情时懒加载；金额一律 MoneyText（与订阅卡同源）。
+// all=true 为全局对账模式（信用卡页「全部账单」弹窗）：跨卡列出本用户全部
+// 已解析账单（含已删卡孤立账单），行带卡片身份；还款链路（三路分派/清零
+// 确认/自动补标）与单卡模式共用同一实现，只有数据来源和身份展示不同。
 const props = defineProps({
-  cardId: { type: Number, required: true },
+  // 单卡模式的卡 id；all 模式下忽略。两模式必须显式二选一
+  cardId: { type: Number, default: null },
+  all: { type: Boolean, default: false },
   // 父级递增触发账单列表重载（补拉新账单落库后）
   refreshKey: { type: Number, default: 0 }
 })
 
-// 还款标记变化时通知父级（携带更新后的卡片派生数据，null=孤立账单）
-const emit = defineEmits(['repaid-changed'])
+// 还款标记变化时通知父级（携带更新后的卡片派生数据，null=孤立账单——
+// null 不是失败，父级仍需刷新汇总）；pending-change：写操作进行中（外层
+// 全局弹窗据此禁止关闭，防止请求中卸载组件丢结果；单卡调用方无需监听）
+const emit = defineEmits(['repaid-changed', 'pending-change'])
 
 const { t } = useI18n()
 const statements = ref([])
@@ -166,6 +186,23 @@ const cycleName = (s) => {
   const month = statementCycleLabel(s)
   return month ? t('creditCards.statementCycleName', { month }) : t('creditCards.periodUnknown')
 }
+
+// ---- 全局模式：卡片身份展示 ----
+// 孤立判定（仅全局模式使用）：/statements/all 附加 card_name，存活卡=名称、
+// 无关联账单=null。单卡接口没有该字段，绝不能用「字段缺失」误标孤立。
+const isOrphan = (s) => props.all && s.card_name === null
+// 身份列：display_name 无唯一约束（同名卡合法），存活卡同样附加银行+尾号
+// 区分——「主卡 · 招商银行 ···· 6310」；孤立=「已删卡 / 未关联 · 银行 ···· 尾号」。
+// 银行名从 bank_key 经品牌映射取中文名，未收录银行回退原键（不猜测）；
+// 尾号保持原字符串（前导零不丢，缺失不补造）。
+const ownerLabel = (s) => {
+  const bank = matchBankBrand(s.bank_key)?.name || s.bank_key || t('creditCards.statementUnknownBank')
+  const tail = s.card_last_four ? ` ···· ${s.card_last_four}` : ''
+  if (s.card_name) return `${s.card_name} · ${bank}${tail}`
+  return `${t('creditCards.orphanCardLabel')} · ${bank}${tail}`
+}
+// 还款弹窗目标名（全局模式带身份，区分多卡同月账单；单卡模式保持原样）
+const repayTargetName = (s) => (props.all ? `${ownerLabel(s)} · ${cycleName(s)}` : cycleName(s))
 // 逾期天数由后端按业务时区算好返回（overdue_days），前端不重算——浏览器
 // 时区与服务端不同时会少算/隐藏徽标
 const overdueDays = (s) => (s.is_overdue ? s.overdue_days : null)
@@ -178,7 +215,10 @@ async function load() {
   const seq = ++loadSeq
   error.value = false
   try {
-    const { data } = await api.get(`/api/credit-cards/${props.cardId}/statements`)
+    const url = props.all
+      ? '/api/credit-cards/statements/all'
+      : `/api/credit-cards/${props.cardId}/statements`
+    const { data } = await api.get(url)
     if (seq !== loadSeq) return
     statements.value = data.statements || []
     unmatchedCount.value = data.unmatched_count || 0
@@ -202,7 +242,10 @@ async function toggle(id) {
   detailLoading.value = true
   const seq = ++detailSeq
   try {
-    const { data } = await api.get(`/api/credit-cards/${props.cardId}/statements/${id}/items`)
+    const url = props.all
+      ? `/api/credit-cards/statements/all/${id}/items`
+      : `/api/credit-cards/${props.cardId}/statements/${id}/items`
+    const { data } = await api.get(url)
     if (seq !== detailSeq || expanded.value !== id) return // 已切换到其他账单，丢弃过期响应
     detail.value = data.items || []
     truncated.value = Boolean(data.truncated)
@@ -256,7 +299,7 @@ function onRepayAction(s) {
   if (s.verify_status === 'ok' && s.total_due != null && remainingOf(s) > 0) {
     repayTarget.value = {
       kind: 'statement',
-      name: cycleName(s),
+      name: repayTargetName(s),
       statementId: s.id,
       remaining: remainingOf(s),
       repaidAmount: s.repaid_amount || 0,
@@ -281,6 +324,12 @@ function requestPurgeRepayment(s) {
 }
 
 // 还款弹窗确认：PATCH 语义已由 POST /repay 承担；原位更新行 + 通知父级
+// 写操作 pending 同步给外层（全局弹窗禁止请求中关闭；emit 值变化时才发）
+function notifyPending() {
+  emit('pending-change', markPending.value)
+}
+watch(markPending, notifyPending)
+
 async function onStatementRepay(amount) {
   const target = repayTarget.value
   if (!target || markPending.value) return
@@ -335,14 +384,17 @@ async function toggleRepaid(s, targetState) {
   }
 }
 
-// refreshKey 由父级递增触发重载（如补拉新账单落库后刷新明细）
-watch(() => [props.cardId, props.refreshKey], ([id]) => {
-  if (id) load()
+// refreshKey 由父级递增触发重载（如补拉新账单落库后刷新明细）；
+// 加载守卫提取为纯函数 shouldLoadStatements（单测覆盖）
+watch(() => [props.all, props.cardId, props.refreshKey], () => {
+  if (shouldLoadStatements(props.all, props.cardId)) load()
 }, { immediate: true })
 </script>
 
 <style scoped>
 .stmt-section { margin-top: 16px; border-top: 1px solid var(--border); padding-top: 12px; }
+/* 全局模式在独立弹窗内：去掉单卡详情的顶部分隔线与上边距 */
+.stmt-section.stmt-all { margin-top: 0; border-top: 0; padding-top: 0; }
 .stmt-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 8px; }
 .stmt-empty { font-size: 12px; }
 .stmt-err { font-size: 12px; color: var(--danger-text); }
@@ -353,6 +405,12 @@ watch(() => [props.cardId, props.refreshKey], ([id]) => {
   border: 0; background: var(--surface-2); font: inherit; cursor: pointer; text-align: left; }
 .stmt-summary:hover { background: color-mix(in srgb, var(--primary) 6%, var(--surface-2)); }
 .stmt-period { font-weight: 750; font-size: 12px; }
+/* 全局模式身份列：卡名·银行·尾号 /「已删卡 / 未关联 · 银行 ···· 尾号」；孤立行弱化色 */
+.stmt-owner { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 750; font-size: 12px; }
+.stmt-owner.orphan { color: var(--text-soft); font-weight: 650; }
+/* 全局模式行元素更多（身份+月份+徽标+金额+日期+勾稽）：窄屏允许换行 */
+.stmt-all .stmt-summary { flex-wrap: wrap; }
+.stmt-all .stmt-amount { margin-left: auto; }
 .stmt-repaid-tag { flex: 0 0 auto; padding: 2px 7px; border-radius: 999px; background: color-mix(in srgb, var(--success) 12%, transparent); color: var(--success-text); font-size: 11px; font-weight: 750; }
 .stmt-partial-tag { flex: 0 0 auto; padding: 2px 7px; border-radius: 999px; background: color-mix(in srgb, var(--primary) 10%, transparent); color: var(--primary-text, var(--primary)); font-size: 11px; font-weight: 750; }
 .stmt-confirm-copy { margin: 0; font-size: 13px; line-height: 1.6; }

@@ -9,6 +9,8 @@
       <div class="hero-actions">
         <span class="mono-data">{{ t('creditCards.cardCount', { n: cards.length }) }}</span>
         <button type="button" class="btn" :disabled="mutationPending" @click="openAdd">+ {{ t('creditCards.add') }}</button>
+        <!-- 全部账单对账：跨卡历史账单（含已删卡孤立账单）的查看与标记入口 -->
+        <button type="button" class="btn ghost" @click="openAllStatements">{{ t('creditCards.allStatementsEntry') }}</button>
       </div>
     </section>
 
@@ -19,7 +21,8 @@
       :outstanding="outstanding"
       :outstanding-error="outstandingError"
       @toggle-interest-sort="sortByInterestFree = !sortByInterestFree"
-      @retry-outstanding="refreshOutstanding().catch(() => {})"
+      @retry-outstanding="onOutstandingRetry"
+      @show-all-statements="openAllStatements"
     />
 
     <DataState
@@ -82,6 +85,29 @@
       @annual-fee-changed="refreshFeeMet().catch(() => {})"
     />
 
+    <!-- 全部账单对账：跨卡历史账单（含已删卡孤立账单）。pending 绑定列表写
+         操作，请求中禁止关闭防止丢结果；写成功但汇总刷新失败时弹窗内提示 -->
+    <AppModal
+      v-if="allStatementsOpen"
+      :model-value="true"
+      :title="t('creditCards.allStatementsTitle')"
+      width="640px"
+      :close-label="t('common.close')"
+      :pending="allStatementsPending"
+      @update:model-value="(v) => { if (!v) allStatementsOpen = false }"
+      @close="allStatementsOpen = false"
+    >
+      <p v-if="allStatementsRefreshFailed" class="all-stmt-refresh-err" role="alert">
+        {{ t('creditCards.outstandingRefreshFailed') }}
+        <button type="button" class="btn ghost sm" @click="onAllStatementsChanged(null)">{{ t('imap.retry') }}</button>
+      </p>
+      <CreditCardStatementList
+        all
+        @repaid-changed="onAllStatementsChanged"
+        @pending-change="allStatementsPending = $event"
+      />
+    </AppModal>
+
     <AppModal
       v-model="confirmOpen"
       :title="confirm.state.value?.title || ''"
@@ -127,6 +153,7 @@ import AppToastRegion from '../components/AppToastRegion.vue'
 import CreditCardDetailModal from '../components/credit-cards/CreditCardDetailModal.vue'
 import CreditCardFormModal from '../components/credit-cards/CreditCardFormModal.vue'
 import CreditCardItem from '../components/credit-cards/CreditCardItem.vue'
+import CreditCardStatementList from '../components/credit-cards/CreditCardStatementList.vue'
 import CreditCardStats from '../components/credit-cards/CreditCardStats.vue'
 import RepaymentModal from '../components/credit-cards/RepaymentModal.vue'
 import DataState from '../components/DataState.vue'
@@ -144,6 +171,43 @@ const { cards, dataState, mutationPending, outstanding, outstandingError, feeMet
 const repayOpen = ref(false)
 const repayPending = ref(false)
 const repayTarget = ref(null)
+
+// 全部账单对账弹窗：pending=列表写操作进行中（禁止关闭）；refreshFailed=
+// 写入成功但汇总刷新失败（弹窗内提示重试，不算还款失败）
+const allStatementsOpen = ref(false)
+const allStatementsPending = ref(false)
+const allStatementsRefreshFailed = ref(false)
+
+// 两个打开入口统一走这里：新会话清掉上一轮遗留的局部错误（汇总可能已在
+// 弹窗外被成功刷新，过期告警不能再显示）
+function openAllStatements() {
+  allStatementsRefreshFailed.value = false
+  allStatementsOpen.value = true
+}
+
+// 统计卡上的汇总重试：仅当本次结果真正生效（未被更新的请求取代）才清掉
+// 弹窗内可能遗留的过期告警——refreshOutstanding 返回 applied 布尔
+async function onOutstandingRetry() {
+  try {
+    const applied = await refreshOutstanding()
+    if (applied) allStatementsRefreshFailed.value = false
+  } catch {
+    /* 重试失败：outstandingError 已由 composable 置位展示，无需额外处理 */
+  }
+}
+
+// 全局账单的标记/还款回调：孤立账单返回 card=null——null 不是失败，
+// 仍必须刷新汇总（孤立账单计入待还与逾期统计）；汇总刷新失败单独标记
+// （写入已成功，不回滚行、不要求重复提交）
+async function onAllStatementsChanged(updatedCard) {
+  applyCardUpdate(updatedCard)
+  try {
+    allStatementsRefreshFailed.value = false
+    await refreshOutstanding()
+  } catch {
+    allStatementsRefreshFailed.value = true
+  }
+}
 
 // 单期标记后后端返回更新卡片（界线推进 → next_due_date 等派生变化）：
 // 原位替换列表数据并同步已打开的详情弹窗，UI 立即顺延无需重载
@@ -408,6 +472,8 @@ onMounted(() => {
 .page-disclaimer strong { color: var(--warning-text); font-size: 12px; }
 .page-disclaimer p, .delete-copy { margin: 4px 0 0; color: var(--text-soft); font-size: 12px; line-height: 1.6; }
 .delete-error { color: var(--danger-text); font-size: 13px; }
+/* 全部账单弹窗内：写入成功但汇总刷新失败的提示行 */
+.all-stmt-refresh-err { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 0 0 10px; padding: 8px 12px; border: 1px solid color-mix(in srgb, var(--warning) 32%, var(--border)); border-radius: 10px; background: color-mix(in srgb, var(--warning) 6%, var(--surface)); color: var(--warning-text); font-size: 12px; font-weight: 650; }
 @media (max-width: 900px) {
   .cards-grid { grid-template-columns: 1fr; }
 }
