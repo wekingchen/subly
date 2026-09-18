@@ -11,6 +11,11 @@
       <span class="status-tag" :class="card.is_active ? 'active' : 'inactive-tag'">
         {{ card.is_active ? t('creditCards.active') : t('creditCards.inactive') }}
       </span>
+      <!-- 年费可豁免徽标：批量 summary 判定达标才显示（金色荣誉感，区别于
+           绿色的还款语义；✓ 为装饰，文本本身可读） -->
+      <span v-if="feeMet" class="fee-met-tag" :title="t('creditCards.annualFeeMetTag')">
+        <span aria-hidden="true">✓</span> {{ t('creditCards.annualFeeMet') }}
+      </span>
       <!-- 操作收敛：编辑/删除收进右上「⋯」，卡片主区只留核心操作（与订阅卡片同一交互语言） -->
       <button
         ref="moreBtnRef"
@@ -99,7 +104,9 @@ const props = defineProps({
   highlight: { type: Boolean, default: false },
   // 该卡未标记还款的汇总 { total_due, count, cycles, overdue_cycles, max_overdue_days }；
   // 无未还账单为 null（待还行与按钮隐藏）
-  outstandingEntry: { type: Object, default: null }
+  outstandingEntry: { type: Object, default: null },
+  // 免年费达标（批量 summary）：true 显示「年费可豁免」徽标
+  feeMet: { type: Boolean, default: false }
 })
 
 const emit = defineEmits(['view', 'edit', 'delete', 'mark-repaid'])
@@ -211,6 +218,10 @@ onBeforeUnmount(() => {
 .status-tag { flex: 0 0 auto; padding: 4px 9px; border-radius: 999px; font-size: 11px; font-weight: 750; }
 .status-tag.active { background: color-mix(in srgb, var(--success) 11%, var(--surface)); color: var(--success-text); }
 .status-tag.inactive-tag { background: var(--surface-2); color: var(--text-soft); }
+/* 年费可豁免徽标：金色（renewal-amber）荣誉感——还款系统已占用绿色语义，
+   金色既区别开又与「续费雷达」的琥珀信号一致；语义 token 五套主题+暗色自适应 */
+.fee-met-tag { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 3px; padding: 3px 9px; border: 1px solid color-mix(in srgb, var(--renewal-amber) 38%, var(--border)); border-radius: 999px; background: color-mix(in srgb, var(--renewal-amber) 12%, var(--surface)); color: var(--warning-text); font-size: 11px; font-weight: 750; white-space: nowrap; }
+.fee-met-tag span[aria-hidden="true"] { font-size: 10px; }
 /* 「⋯」入口：与订阅卡片 card-more 同一交互语言（圆形透明 hover） */
 .card-more { display: inline-flex; flex-shrink: 0; align-items: center; justify-content: center; width: var(--tap-size); height: var(--tap-size); margin-right: -6px; border: none; border-radius: 999px; background: transparent; color: var(--text-soft); cursor: pointer; font-size: 20px; line-height: 1; transition: background .15s ease, color .15s ease; }
 .card-more:hover { background: var(--surface-2); color: var(--text); }

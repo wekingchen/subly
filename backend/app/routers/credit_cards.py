@@ -283,6 +283,41 @@ def _bank_keys_for(bank_name: str) -> list[str]:
     return [k for k in BANK_SENDER_DOMAINS if bank_matches_card(bank_name, k)]
 
 
+def _qualified_totals(rows, window_start: date, window_end: date) -> tuple[int, int]:
+    """年费窗口内合格消费累计（单卡接口与批量 summary 共用的口径核心）。
+
+    归属日期 = trans_date，缺交易日期回退账单出账月（bill_period_end || statement_date）；
+    窗口外交易不计入。金额按「分」整数累计（float 直接比较会让 0.1+0.7 < 0.8
+    误判未达标）。返回 (qualified_count, qualified_amount_cents)：
+    - purchase/installment 且金额为正 → 计 1 笔 + 正金额
+    - refund → 负金额抵扣（笔数不减）
+    """
+    qualified_count = 0
+    qualified_amount_cents = 0
+    for tx_type, amount, _description, trans_date, statement_date, bill_period_end in rows:
+        cycle_month = bill_period_end or statement_date
+        effective = trans_date or cycle_month
+        if effective is None or not (window_start <= effective < window_end):
+            continue
+        amount = float(amount or 0.0)
+        if tx_type in ("purchase", "installment") and amount > 0:
+            qualified_count += 1
+            qualified_amount_cents += round(amount * 100)
+        elif tx_type == "refund":
+            qualified_amount_cents += round(amount * 100)  # 负金额抵扣
+    return qualified_count, qualified_amount_cents
+
+
+def _fee_waiver_met(target_count: int | None, target_amount: float | None,
+                    qualified_count: int, qualified_amount_cents: int) -> bool:
+    """达标判定（单卡与批量共用）：笔数 / 金额满足其一副目标即达标。"""
+    target_amount_cents = round(target_amount * 100) if target_amount is not None else None
+    return bool(
+        (target_count is not None and qualified_count >= target_count)
+        or (target_amount_cents is not None and qualified_amount_cents >= target_amount_cents)
+    )
+
+
 @router.get("/{card_id}/annual-fee")
 def annual_fee_progress(
     card_id: int,
@@ -431,8 +466,10 @@ def annual_fee_progress(
         )
     ).all()
 
-    qualified_count = 0
-    qualified_amount_cents = 0
+    qualified_count, qualified_amount_cents = _qualified_totals(rows, window_start, window_end)
+    # 年费入账检测与合格消费共用同一窗口口径（helper 提取前的行为）：窗口外
+    # 的历史年费属于上一周期，不能报进当前窗口；交易查询无排序，「取首条」
+    # 的语义因此必须是「窗口内首条」。
     annual_fee_charged: dict | None = None
     for tx_type, amount, description, trans_date, statement_date, bill_period_end in rows:
         cycle_month = bill_period_end or statement_date
@@ -440,11 +477,6 @@ def annual_fee_progress(
         if effective is None or not (window_start <= effective < window_end):
             continue
         amount = float(amount or 0.0)
-        if tx_type in ("purchase", "installment") and amount > 0:
-            qualified_count += 1
-            qualified_amount_cents += round(amount * 100)
-        elif tx_type == "refund":
-            qualified_amount_cents += round(amount * 100)  # 负金额抵扣
         if (
             tx_type == "fee"
             and annual_fee_charged is None
@@ -488,11 +520,7 @@ def annual_fee_progress(
     missing = sorted(set(missing_all) - skipped)
 
     qualified_amount = qualified_amount_cents / 100.0
-    target_amount_cents = round(target_amount * 100) if target_amount is not None else None
-    met = bool(
-        (target_count is not None and qualified_count >= target_count)
-        or (target_amount_cents is not None and qualified_amount_cents >= target_amount_cents)
-    )
+    met = _fee_waiver_met(target_count, target_amount, qualified_count, qualified_amount_cents)
     return {
         "enabled": True,
         "window_start": window_start.isoformat(),
@@ -1480,5 +1508,79 @@ def outstanding_summary(
         "per_card": [
             {"card_id": cid, **v}
             for cid, v in per_card.items()
+        ],
+    }
+
+
+@router.get("/annual-fee/summary")
+def annual_fee_summary(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """免年费达标徽标批量汇总：列表卡片上「年费可豁免」标的数据源。
+
+    轻量口径：met 只由「窗口内合格消费 vs 副目标」决定（_qualified_totals +
+    _fee_waiver_met，与单卡 /{id}/annual-fee 的 met 完全同源）——单卡接口的
+    missing/skipped/跳期证据只影响进度展示明细，不影响 met 判定，因此这里
+    不查跳期证据、不算缺期明细，与单卡 met 天然一致、无口径分裂。
+
+    只返回配置了收取日且至少一个副目标的卡（未配置卡不出现在 per_card，
+    前端视为未启用）。个人自托管卡数少，一次 join 拉全用户 ok 账单交易行
+    按 card_id 分组即可，不做跨卡共享等优化。"""
+    today = scheduler._local_today()
+    cards = db.scalars(
+        select(CreditCard)
+        .where(
+            CreditCard.user_id == user.id,
+            CreditCard.fee_waiver_anchor_date.isnot(None),
+            or_(
+                CreditCard.fee_waiver_target_count.isnot(None),
+                CreditCard.fee_waiver_target_amount.isnot(None),
+            ),
+        )
+        .order_by(CreditCard.id)
+    ).all()
+    if not cards:
+        return {"per_card": []}
+
+    rows = db.execute(
+        select(
+            CreditCardStatement.card_id,
+            CreditCardStatementItem.tx_type,
+            CreditCardStatementItem.amount,
+            CreditCardStatementItem.trans_date,
+            CreditCardStatement.statement_date,
+            CreditCardStatement.bill_period_end,
+        )
+        .join(
+            CreditCardStatement,
+            CreditCardStatementItem.statement_id == CreditCardStatement.id,
+        )
+        .where(
+            CreditCardStatement.user_id == user.id,
+            CreditCardStatement.card_id.in_([c.id for c in cards]),
+            CreditCardStatement.verify_status == "ok",
+            CreditCardStatement.statement_date.isnot(None),
+        )
+    ).all()
+    rows_by_card: dict[int, list] = {}
+    for card_id, tx_type, amount, trans_date, statement_date, bill_period_end in rows:
+        rows_by_card.setdefault(card_id, []).append(
+            (tx_type, amount, None, trans_date, statement_date, bill_period_end)
+        )
+    return {
+        "per_card": [
+            {
+                "card_id": card.id,
+                "met": _fee_waiver_met(
+                    card.fee_waiver_target_count,
+                    card.fee_waiver_target_amount,
+                    *_qualified_totals(
+                        rows_by_card.get(card.id, ()),
+                        *annual_fee_window(today, card.fee_waiver_anchor_date),
+                    ),
+                ),
+            }
+            for card in cards
         ],
     }

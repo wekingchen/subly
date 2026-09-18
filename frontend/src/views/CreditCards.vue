@@ -49,6 +49,7 @@
         :highlight="sortByInterestFree && bestInterestFree?.id === card.id"
         :disabled="mutationPending"
         :outstanding-entry="outstandingPerCard.get(card.id) || null"
+        :fee-met="feeMetPerCard.get(card.id) === true"
         @view="openDetail"
         @edit="openEdit"
         @delete="requestDelete"
@@ -78,6 +79,7 @@
       :card="detailTarget"
       @close="detailTarget = null"
       @statements-changed="(updated) => { applyCardUpdate(updated); refreshOutstanding().catch(() => {}) }"
+      @annual-fee-changed="refreshFeeMet().catch(() => {})"
     />
 
     <AppModal
@@ -136,7 +138,7 @@ import { useToasts } from '../composables/useToasts'
 const { t } = useI18n()
 const confirm = useConfirm()
 const { toasts, add: toast } = useToasts()
-const { cards, dataState, mutationPending, outstanding, outstandingError, load, refreshOutstanding, markCardRepaid, repayCard, save, remove } = useCreditCards()
+const { cards, dataState, mutationPending, outstanding, outstandingError, feeMet, load, refreshOutstanding, refreshFeeMet, markCardRepaid, repayCard, save, remove } = useCreditCards()
 
 // 部分还款弹窗状态（卡片级入口）
 const repayOpen = ref(false)
@@ -180,6 +182,9 @@ const outstandingPerCard = computed(() => {
   }
   return map
 })
+
+// card_id → met：达标徽标（「年费可豁免」）的数据源
+const feeMetPerCard = computed(() => feeMet.value)
 
 function formatAmount(value) {
   const n = Number(value)
@@ -229,6 +234,8 @@ async function submitForm(payload, localError = '') {
     const wasEditing = Boolean(formTarget.value?.id)
     const result = await save(formTarget.value, payload)
     closeForm()
+    // 卡配置（免年费目标）变更可能改变达标状态：保存成功后刷新徽标
+    refreshFeeMet().catch(() => {})
     if (wasEditing) {
       toast(t('creditCards.updated'))
     } else {
@@ -374,6 +381,8 @@ onMounted(() => {
   load()
   // 汇总失败要响亮：置 outstandingError 展示重试入口，不伪装成 0 待还
   refreshOutstanding().catch(() => {})
+  // 达标徽标失败静默降级（增强信息，详情进度块已有响亮错误）
+  refreshFeeMet().catch(() => {})
 })
 </script>
 

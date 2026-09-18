@@ -164,6 +164,29 @@ def test_annual_fee_charged_detection(fee_env):
     assert body["met"] is True
 
 
+def test_annual_fee_charged_window_filtered(fee_env, monkeypatch):
+    """年费入账检测受窗口约束：上一周期的历史年费不报进当前窗口，
+    窗口内的年费仍正常暴露（helper 提取等价性回归，M2-1）。"""
+    client, db, user = fee_env
+    today = date(2026, 9, 3)
+    monkeypatch.setattr(scheduler, "_local_today", lambda: today)
+    card = _make_card(db, user.id, anchor=date(2025, 3, 15), count=6)
+    # 窗口 [2026-03-15, 2027-03-15)：2026-02-15 账单的年费属上一周期 → 不报
+    _make_statement_with_items(db, user.id, card.id, date(2026, 2, 15), [
+        ("fee", 800.0, "年费"),
+    ])
+    body = client.get(f"/api/credit-cards/{card.id}/annual-fee").json()
+    assert body["annual_fee_charged"] is None
+
+    # 窗口内的年费仍暴露
+    _make_statement_with_items(db, user.id, card.id, date(2026, 8, 15), [
+        ("fee", 500.0, "年费"),
+    ])
+    body = client.get(f"/api/credit-cards/{card.id}/annual-fee").json()
+    assert body["annual_fee_charged"]["amount"] == pytest.approx(500.0)
+    assert body["annual_fee_charged"]["cycle"] == "26年8月"
+
+
 def test_missing_cycles_warning(fee_env, monkeypatch):
     """窗口内已过出账时点却未出账的期次响亮返回 missing_cycles（缺失=统计
     可能偏低）；今天之后尚未到账期的月份不报缺（时间未到 ≠ 数据缺失）。
@@ -1041,3 +1064,82 @@ def test_linked_sibling_without_mail_group_no_skip(fee_env, monkeypatch):
     body = client.get(f"/api/credit-cards/{card.id}/annual-fee").json()
     assert "26年7月" in body["missing_cycles"]
     assert body["skipped_cycles"] == []
+
+
+# ---------- 批量达标汇总（列表徽标数据源） ----------
+
+def test_annual_fee_summary_split_met_and_not(fee_env, monkeypatch):
+    """批量接口按卡分列：达标卡 met=true、未达标 met=false、未配置卡不出现。
+    达标判定与单卡接口同源（met 只由合格消费 vs 副目标决定）。"""
+    client, db, user = fee_env
+    today = date(2026, 9, 3)
+    monkeypatch.setattr(scheduler, "_local_today", lambda: today)
+    met_card = _make_card(db, user.id, anchor=date(2025, 3, 15), count=1)
+    not_met_card = _make_card(db, user.id, anchor=date(2025, 3, 15), count=6)
+    no_config_card = _make_card(db, user.id)  # 无免年费配置
+    # met_card 窗口内 1 笔达标；not_met_card 只有 1 笔（< 6）
+    _make_statement_with_items(db, user.id, met_card.id, date(2026, 8, 15), [
+        ("purchase", 100.0, "超市"),
+    ])
+    _make_statement_with_items(db, user.id, not_met_card.id, date(2026, 8, 15), [
+        ("purchase", 100.0, "超市"),
+    ])
+
+    body = client.get("/api/credit-cards/annual-fee/summary").json()
+    by_card = {e["card_id"]: e for e in body["per_card"]}
+    assert by_card[met_card.id]["met"] is True
+    assert by_card[not_met_card.id]["met"] is False
+    assert no_config_card.id not in by_card
+
+
+def test_annual_fee_summary_window_and_targets(fee_env, monkeypatch):
+    """窗口外交易不计入达标；金额副目标达标判定含退款负金额抵扣。"""
+    client, db, user = fee_env
+    today = date(2026, 9, 3)
+    monkeypatch.setattr(scheduler, "_local_today", lambda: today)
+    # anchor 2025-03-15 → 窗口 [2026-03-15, 2027-03-15)：2026-02 交易在窗口外
+    amount_card = _make_card(db, user.id, anchor=date(2025, 3, 15), amount=80.0)
+    outside_card = _make_card(db, user.id, anchor=date(2025, 3, 15), amount=80.0)
+    plain_card = _make_card(db, user.id, anchor=date(2025, 3, 15), amount=80.0)
+    # amount_card：100 消费 - 20 退款抵扣 = 80 ≥ 80 达标（金额口径含退款）
+    _make_statement_with_items(db, user.id, amount_card.id, date(2026, 8, 15), [
+        ("purchase", 100.0, "超市"),
+        ("refund", -20.0, "退货"),
+    ])
+    # outside_card：窗口外（2026-02-15）消费 100 → 不计入，未达标
+    _make_statement_with_items(db, user.id, outside_card.id, date(2026, 2, 15), [
+        ("purchase", 100.0, "超市"),
+    ])
+    # plain_card：窗口内 100 消费无退款 → 100 ≥ 80 达标
+    _make_statement_with_items(db, user.id, plain_card.id, date(2026, 8, 15), [
+        ("purchase", 100.0, "超市"),
+    ])
+
+    body = client.get("/api/credit-cards/annual-fee/summary").json()
+    by_card = {e["card_id"]: e for e in body["per_card"]}
+    assert by_card[amount_card.id]["met"] is True   # 100-20=80 ≥ 80
+    assert by_card[outside_card.id]["met"] is False  # 窗口外不计入
+    assert by_card[plain_card.id]["met"] is True
+
+
+def test_annual_fee_summary_matches_single_card(fee_env, monkeypatch):
+    """一致性锁定：同一数据下批量接口 met 与单卡接口 met 相等
+    （轻量口径不查跳期/缺期，但 met 判定与单卡同源不分裂）。"""
+    client, db, user = fee_env
+    today = date(2026, 9, 3)
+    monkeypatch.setattr(scheduler, "_local_today", lambda: today)
+    card = _make_card(db, user.id, anchor=date(2025, 3, 15), count=1)
+    _make_statement_with_items(db, user.id, card.id, date(2026, 8, 15), [
+        ("purchase", 100.0, "超市"),
+    ])
+
+    summary = client.get("/api/credit-cards/annual-fee/summary").json()
+    single = client.get(f"/api/credit-cards/{card.id}/annual-fee").json()
+    by_card = {e["card_id"]: e for e in summary["per_card"]}
+    assert by_card[card.id]["met"] == single["met"] is True
+    # 反向也锁：未达标卡两侧同为 False
+    card2 = _make_card(db, user.id, anchor=date(2025, 3, 15), count=9)
+    summary2 = client.get("/api/credit-cards/annual-fee/summary").json()
+    single2 = client.get(f"/api/credit-cards/{card2.id}/annual-fee").json()
+    by_card2 = {e["card_id"]: e for e in summary2["per_card"]}
+    assert by_card2[card2.id]["met"] == single2["met"] is False

@@ -283,3 +283,42 @@ describe('useCreditCards repayCard 成功边界（复审 Medium 2）', () => {
     expect(data.refreshFailed).toBeFalsy()
   })
 })
+
+describe('useCreditCards refreshFeeMet（达标徽标）', () => {
+  beforeEach(() => {
+    api.post.mockReset()
+    api.put.mockReset()
+    api.delete.mockReset()
+    api.get.mockReset()
+  })
+
+  function makeStore() {
+    return useCreditCards()
+  }
+
+  it('成功拉取批量 summary 并建 card_id→met Map', async () => {
+    api.get.mockImplementation((url) => {
+      if (url === '/api/credit-cards/annual-fee/summary') {
+        return Promise.resolve({ data: { per_card: [{ card_id: 1, met: true }, { card_id: 2, met: false }] } })
+      }
+      return Promise.reject(new Error(`unexpected GET ${url}`))
+    })
+    const store = makeStore()
+
+    await store.refreshFeeMet()
+
+    expect(store.feeMet.value.get(1)).toBe(true)
+    expect(store.feeMet.value.get(2)).toBe(false)
+    expect(store.feeMet.value.has(3)).toBe(false)
+  })
+
+  it('失败静默降级：保留旧 Map 不清空（徽标是增强信息）', async () => {
+    const store = makeStore()
+    store.feeMet.value = new Map([[1, true]])
+
+    api.get.mockRejectedValue(new Error('summary down'))
+    await store.refreshFeeMet()
+
+    expect(store.feeMet.value.get(1)).toBe(true)
+  })
+})

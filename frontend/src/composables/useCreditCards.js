@@ -60,6 +60,25 @@ export function useCreditCards() {
   const outstandingError = ref(false)
   let outstandingSeq = 0
 
+  // 免年费达标徽标（card_id → met）：列表卡片的「年费可豁免」标数据源。
+  // 增强信息，失败静默降级保留旧值——详情弹窗的进度块已有响亮错误与重试，
+  // 徽标缺失不会被误读成「未达标」（无徽标 = 未知/未达标，进度以详情为准）。
+  const feeMet = ref(new Map())
+  let feeMetSeq = 0
+
+  async function refreshFeeMet() {
+    const seq = ++feeMetSeq
+    try {
+      const { data } = await api.get('/api/credit-cards/annual-fee/summary')
+      if (seq !== feeMetSeq) return
+      const map = new Map()
+      for (const entry of data?.per_card || []) map.set(entry.card_id, Boolean(entry.met))
+      feeMet.value = map
+    } catch {
+      // 静默：保留旧 map（seq 不是最新时更不能写）
+    }
+  }
+
   async function load() {
     return request.run(async () => (await api.get('/api/credit-cards')).data || [])
   }
@@ -202,8 +221,10 @@ export function useCreditCards() {
     mutationPending,
     outstanding,
     outstandingError,
+    feeMet,
     load,
     refreshOutstanding,
+    refreshFeeMet,
     markCardRepaid,
     repayCard,
     save,

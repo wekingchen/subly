@@ -119,7 +119,7 @@ import CreditCardCycleTrack from './CreditCardCycleTrack.vue'
 import CreditCardStatementList from './CreditCardStatementList.vue'
 
 const props = defineProps({ card: { type: Object, required: true } })
-const emit = defineEmits(['close', 'statements-changed'])
+const emit = defineEmits(['close', 'statements-changed', 'annual-fee-changed'])
 const { t } = useI18n()
 function formatLimit(value) {
   return new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 2 }).format(Number(value))
@@ -226,6 +226,9 @@ async function startBackfill() {
   // 结束（含中止）：刷新进度与账单列表——新补齐的期次改变统计与明细
   loadFeeWaiver()
   stmtRefreshKey.value += 1
+  // 补拉真实落了账单（非「未找到」的空转）：新账单可能改变达标状态，
+  // 通知列表刷新徽标（纯还款路径不触发——还款不动消费统计）
+  if (backfillResults.value.some((r) => r.filled)) emit('annual-fee-changed')
 }
 
 function onModalChange(value) {
