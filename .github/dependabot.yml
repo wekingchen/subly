@@ -1,0 +1,32 @@
+# Dependabot 仅做安全更新（安全漏洞自动提修复 PR，人工审阅合并）。
+# 日常依赖版本升级维持人工直推 main 的约定：
+# - open-pull-requests-limit: 0 关闭常规版本更新（官方语义：仅作用于
+#   version-update PR，安全更新不受此限、继续开启）
+# - schedule 为必填项，但不决定安全更新频率
+# 注意：安全更新 PR 会在 origin 创建 dependabot/* 分支（合并后自动删除，
+# 未合并的可用界面一键关闭）——这是开启本配置的已知代价。
+# security 标签需预先存在于仓库（Dependabot 忽略未定义的自定义标签），
+# 已由 gh label create 一次性创建。
+version: 2
+updates:
+  # 后端依赖：pip-audit --strict 门禁的扫描对象
+  - package-ecosystem: "pip"
+    directory: "/backend"
+    schedule:
+      interval: "daily"
+    open-pull-requests-limit: 0
+    labels:
+      - "security"
+    commit-message:
+      prefix: "fix"
+
+  # 前端依赖：npm audit --audit-level=high 门禁的扫描对象
+  - package-ecosystem: "npm"
+    directory: "/frontend"
+    schedule:
+      interval: "daily"
+    open-pull-requests-limit: 0
+    labels:
+      - "security"
+    commit-message:
+      prefix: "fix"

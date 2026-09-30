@@ -1,0 +1,99 @@
+name: Auto-merge Dependabot security updates
+
+# B1 范围豁免：仅「Dependabot 安全修复 PR + CI verify 全绿 + 非 major 版本
+# 跳变」自动合并。这是用户对「安全补丁」这一类的预先授权；其余一切推
+# main 仍需明确点头。不满足任一条件的 PR（含 major 升级）不自动合并。
+#
+# 已知边界（用户知情）：本 workflow 用 GITHUB_TOKEN 合并——GitHub 防递归
+# 规则下，该合并产生的 main push 不会触发 docker-publish 的镜像发布。
+# 安全补丁合入源码后，镜像发布需用户手动 workflow_dispatch（或下次任意
+# push 时顺带发布）。
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+
+permissions:
+  contents: write       # 合并 PR 需要（pull-requests: write 不含 contents 写）
+  pull-requests: write
+
+jobs:
+  automerge:
+    runs-on: ubuntu-latest
+    # 双保险：作者必须 Dependabot，标签必须是 security（标签已预创建，
+    # Dependabot 对未定义标签会静默忽略）
+    if: >-
+      github.event.pull_request.user.login == 'dependabot[bot]' &&
+      contains(github.event.pull_request.labels.*.name, 'security')
+    steps:
+      - name: Fetch Dependabot metadata
+        id: metadata
+        uses: dependabot/fetch-metadata@v2
+        with:
+          github-token: '${{ secrets.GITHUB_TOKEN }}'
+
+      - name: Decide auto-merge eligibility
+        id: decide
+        env:
+          UPDATE_TYPE: ${{ steps.metadata.outputs.update-type }}
+        run: |
+          if [ "${UPDATE_TYPE}" = "version-update:semver-major" ]; then
+            echo "Major version jump: needs human review, skipping auto-merge." >> "${GITHUB_STEP_SUMMARY}"
+            echo "eligible=false" >> "${GITHUB_OUTPUT}"
+          else
+            echo "Safe range (patch/minor): auto-merge eligible." >> "${GITHUB_STEP_SUMMARY}"
+            echo "eligible=true" >> "${GITHUB_OUTPUT}"
+          fi
+
+      # 等待 docker-publish 的 verify job（pytest/pip_audit/npm audit/vitest/
+      # build 全套门禁）出结果——轮询 gh pr checks 直到全部非 pending。
+      # 不引入第三方 action（等待类 action 生态质量参差，官方 gh CLI 足够）。
+      - name: Wait for CI verify to complete
+        if: steps.decide.outputs.eligible == 'true'
+        env:
+          GH_TOKEN: '${{ secrets.GITHUB_TOKEN }}'
+          GH_REPO: '${{ github.repository }}'
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 60); do
+            # --required 只看必需检查；无分支保护时等价于全部检查
+            pending=$(gh pr view "${PR_NUMBER}" --json statusCheckRollup \
+              --jq '[.statusCheckRollup[] | select(.status == "PENDING" or .status == "IN_PROGRESS" or .status == "QUEUED")] | length')
+            if [ "${pending}" = "0" ]; then
+              echo "All checks completed."
+              break
+            fi
+            echo "attempt ${attempt}: ${pending} check(s) still pending, waiting 60s..."
+            sleep 60
+          done
+          if [ "${pending}" != "0" ]; then
+            echo "Timed out waiting for checks (10min). Auto-merge aborted; CI will not merge this PR." >&2
+            exit 1
+          fi
+
+      # 任一检查失败则中止（gh pr view 的 rollup 含 failed 状态时显式拒绝）
+      - name: Verify all checks passed
+        if: steps.decide.outputs.eligible == 'true'
+        env:
+          GH_TOKEN: '${{ secrets.GITHUB_TOKEN }}'
+          GH_REPO: '${{ github.repository }}'
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          failed=$(gh pr view "${PR_NUMBER}" --json statusCheckRollup \
+            --jq '[.statusCheckRollup[] | select(.conclusion == "FAILURE" or .conclusion == "CANCELLED" or .conclusion == "TIMED_OUT")] | length')
+          if [ "${failed}" != "0" ]; then
+            echo "${failed} check(s) failed. Auto-merge refused." >&2
+            exit 1
+          fi
+          echo "All checks passed."
+
+      # gh pr merge --auto：登记自动合并——若分支保护/状态尚未满足会在满足后
+      # 由 GitHub 合并；若已全部满足则立即合并（此处 verify 已确认全绿）
+      - name: Merge (squash)
+        if: steps.decide.outputs.eligible == 'true'
+        env:
+          GH_TOKEN: '${{ secrets.GITHUB_TOKEN }}'
+          GH_REPO: '${{ github.repository }}'
+        run: gh pr merge --auto --squash '${{ github.event.pull_request.number }}'
