@@ -700,15 +700,24 @@ def test_surplus_statement_roundtrip_through_backup_and_mark(credit_card_api):
     assert restored[0].repaid_amount == 0.0  # 归一化后的合法值通过校验
 
 
-def test_repay_null_due_with_known_statement_date_defers_to_next_period(credit_card_api):
+def test_repay_null_due_with_known_statement_date_defers_to_next_period(credit_card_api, monkeypatch):
     """审核 Medium 3 回归：账单日已知、还款日 NULL（解析器常见输出）时还清——
     界线不得取账单日（否则停在当期不顺延、提醒不静默），必须回退自动补标
     账单的最大 due 或名义锚定日；最终 next_due_date 必须进入下一周期。"""
+    from app.routers import credit_cards as cc_router
+    from app.services import scheduler as sched
+
     client, db, alice, _, _ = credit_card_api
     created = client.post("/api/credit-cards", json=valid_payload(due_day=25, statement_day=5))
     card_id = created.json()["id"]
     card = db.get(CreditCard, card_id)
-    today = _local_today()
+    # 固定业务日期（月末窗口盲区修复）：today=9/10 时当期还款日 9/25 未过，
+    # 测试在任何真实日期运行下语义一致——不依赖墙钟。测试内派生日期直接用
+    # fake_today（顶部 from-import 绑定的是原函数，monkeypatch 不影响它）
+    fake_today = date(2026, 9, 10)
+    monkeypatch.setattr(sched, "_local_today", lambda: fake_today)
+    monkeypatch.setattr(cc_router.scheduler, "_local_today", lambda: fake_today)
+    today = fake_today
     current_due = next_due_date(today, 25)
 
     from app.models import CreditCardStatement

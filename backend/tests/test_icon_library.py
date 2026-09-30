@@ -16,7 +16,7 @@ def test_services_have_unique_slugs():
 def test_carrier_services_include_added_regional_carriers():
     """新增的区域电信运营商必须在内置 carrier 列表里。"""
     carriers = {name for name, _, cat in icon_library.SERVICES if cat == "carrier"}
-    for name in ["Skinny", "MTN Nigeria", "Club Sim", "CTM 澳门电信", "Simyo", "Yallo"]:
+    for name in ["Skinny", "MTN Nigeria", "Club Sim", "CTM 澳门电信", "Simyo", "Yallo", "DITO"]:
         assert name in carriers, f"缺少内置运营商：{name}"
 
 

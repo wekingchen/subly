@@ -164,6 +164,7 @@ SERVICES = [
     ("MTN Nigeria", "mtn.ng", "carrier"),
     ("Club Sim", "clubsim.com.hk", "carrier"),
     ("CTM 澳门电信", "ctm.net", "carrier"),
+    ("DITO", "dito.ph", "carrier"),
     ("Simyo", "simyo.nl", "carrier"),
     ("Yallo", "yallo.ch", "carrier"),
     # 云存储 cloud
