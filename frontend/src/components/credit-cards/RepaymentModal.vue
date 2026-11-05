@@ -85,7 +85,11 @@ function formatAmount(value) {
   return Number.isInteger(n) ? n.toLocaleString('zh-CN') : n.toFixed(2)
 }
 
-function onFocus() {
+function onFocus(event) {
+  // 程序化聚焦（弹窗自动首焦等）不清空——只有用户真实手势（点击/Tab，
+  // isTrusted=true）才执行「点中清空」，否则弹窗打开即默认金额被自动首焦
+  // 清掉，直接点确认会因金额为空而不提交（e2e CI 实测根因）
+  if (!event.isTrusted) return
   // 值仍是未改动的默认值 → 清空（用户要求的「点中清空」）；
   // 已有用户输入 → select() 全选，不销毁
   amount.value = nextAmountOnFocus(amount.value, defaultValue, () => amountRef.value?.select())

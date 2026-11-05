@@ -98,7 +98,7 @@ test('零张信用卡仍能进入全部账单并登记还款孤立账单（card:
   await page.getByRole('button', { name: '标记已还款' }).click()
   await page.getByRole('button', { name: '确认还款' }).click()
 
-  expect(repayCalls).toBe(1)
+  await expect.poll(() => repayCalls, { timeout: 5000 }).toBe(1)
   await expect(page.getByRole('button', { name: '取消还款标记' })).toBeVisible()
   // 汇总被刷新（还清后 total 变 0 → 统计卡展示 0）；card:null 不算失败
   await expect(page.getByRole('button', { name: /待还款总额/ })).toContainText('0')
@@ -156,5 +156,6 @@ test('单卡详情仍使用卡片级接口（泛化不破坏原路径）', async
   await page.goto('/credit-cards')
   await page.getByRole('button', { name: '查看详情' }).click()
   await expect(page.getByText('账单明细')).toBeVisible()
-  expect(cardPaths.length).toBe(1)
+  // 单卡 load() 的 GET 是异步的：区块渲染先于请求完成——轮询等待而非同步读
+  await expect.poll(() => cardPaths.length, { timeout: 5000 }).toBe(1)
 })
