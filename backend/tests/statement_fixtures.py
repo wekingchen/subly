@@ -26,7 +26,7 @@ def build_mime(html: str, bank_addr: str, subject: str, message_id: str) -> byte
     ).encode("utf-8")
 
 
-def load_cmb(*, day: int | None = None) -> bytes:
+def load_cmb(*, day: int | None = None, new_template: bool = False) -> bytes:
     """招行：DOM id 汇总 + 8-td 交易行（含还款行交易日为空）。
 
     day 参数替换账单日（statementCycle 结束日同步平移），供「银行侧
@@ -54,6 +54,22 @@ def load_cmb(*, day: int | None = None) -> bytes:
     </body></html>"""
     if day is not None and day != 15:
         html = html.replace("2026/07/16-2026/08/15", f"2026/07/26-2026/08/{day:02d}")
+    if new_template:
+        # 2026-10 模板：汇总区新增贷记金额（退款合计），交易明细含负数退款行
+        html = html.replace(
+            "<DIV id='D1rmbLdebits'>&yen; 608.11</DIV>",
+            "<DIV id='D1rmbLdebits'>&yen; 608.11</DIV>\n    <DIV id='D1rmbLcreditAmt'>&yen; 7.20</DIV>",
+        )
+        html = html.replace(
+            "</tr></table>",
+            "</tr><tr>"
+            "<td></td><td>1008</td><td>1008</td><td>METAPAY*8M8DJ8WNA4 汇率 6.7189</td><td>&yen; -6.72</td><td>6310</td><td>US</td><td>-1.00</td>"
+            "</tr><tr>"
+            "<td></td><td>1012</td><td>1012</td><td>抖音支付-盒马鲜生</td><td>&yen; -0.28</td><td>6310</td><td>CN</td><td>-0.28</td>"
+            "</tr><tr>"
+            "<td></td><td>1019</td><td>1019</td><td>抖音支付-盒马鲜生</td><td>&yen; -0.20</td><td>6310</td><td>CN</td><td>-0.20</td>"
+            "</tr></table>",
+        )
     return build_mime(html, "ccsvc@message.cmbchina.com", "招商银行信用卡电子账单", "cmb-fix-1")
 
 

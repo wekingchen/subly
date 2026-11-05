@@ -39,6 +39,10 @@ class StatementSyncResult:
         self.unmatched: list[dict] = []    # [{last_four, bank_key}] 无候选卡
         self.ambiguous: list[dict] = []    # 同尾号多卡
         self.mismatched: list[dict] = []   # 勾稽失败
+        # 勾稽未验证：有交易明细但该卡/账户不在勾稽结果里——模板变化导致
+        # 勾稽字段缺失（或建行结清/溢缴等合法跳过场景）时的响亮信号，
+        # 防止「未验证却被当 ok 静默参与统计」
+        self.unverified: list[dict] = []   # [{bank_key, scope}]
         self.errors: list[dict] = []       # [{uid, subject, error}]
         self.updated_cards: list[dict] = []  # [{last_four, fields}] 账单数据回写卡片
 
@@ -51,6 +55,7 @@ class StatementSyncResult:
             "unmatched": self.unmatched,
             "ambiguous": self.ambiguous,
             "mismatched": self.mismatched,
+            "unverified": self.unverified,
             "errors": self.errors,
             "updated_cards": self.updated_cards,
         }
@@ -189,7 +194,8 @@ def sync_statements(
         if result.saved:
             activity.log(
                 "bill.sync",
-                f"解析账单 {result.saved} 份（新保存），未匹配 {len(result.unmatched)}，勾稽异常 {len(result.mismatched)}",
+                f"解析账单 {result.saved} 份（新保存），未匹配 {len(result.unmatched)}，"
+                f"勾稽异常 {len(result.mismatched)}，未验证 {len(result.unverified)}",
                 user=user,
             )
         return result
@@ -274,6 +280,16 @@ def sync_statements_core(
                     "diff": v["diff"],
                 })
         ok_scope = "_account" if "_account" in verify else None
+        # 勾稽未验证收集（有明细却不在勾稽结果）：模板变化导致勾稽字段缺失、
+        # 或建行结清/溢缴等合法跳过——两者对用户都意味着「这笔账单没经过
+        # 自校验」，响亮展示防止未验证数据静默参与统计
+        for st in parsed.statements:
+            scope = ok_scope or st.card_last_four
+            if st.items and scope not in verify:
+                result.unverified.append({
+                    "bank_key": parsed.bank_key,
+                    "scope": scope,
+                })
         mail_saved = 0
         mail_skipped = 0
         for st in parsed.statements:

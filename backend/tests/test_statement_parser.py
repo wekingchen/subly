@@ -767,3 +767,20 @@ def test_parse_pab_debit_adjustment_positive_side():
     assert v["ok"] is True, f"借记调整场景勾稽误报: {v}"
     assert v["expected"] == pytest.approx(170.00)
     assert v["actual"] == pytest.approx(170.00)
+
+
+def test_parse_cmb_new_template_refunds_and_credit_amount():
+    """2026-10 招行模板：汇总区新增贷记金额 D1rmbLcreditAmt（退款合计），
+    交易明细含负数退款行——勾稽负数侧放宽为 payment + credit。
+    （生产 10 月账单 mismatch 的根因修复回归，真实邮件双样本验证。）"""
+    parsed = parse_email(load_cmb(new_template=True), from_address=ADDR["cmb"])
+    st = parsed.statements[0]
+    assert st.summary["credit"] == 7.20
+    refunds = [i for i in st.items if i.amount < 0 and i.tx_type == "refund"]
+    assert len(refunds) == 3
+    assert abs(sum(i.amount for i in refunds)) == pytest.approx(7.20)
+    # 负合计 = 还款 802.83 + 退款 7.20；勾稽用 credit 解释退款
+    neg = sum(i.amount for i in st.items if i.amount < 0)
+    assert neg == pytest.approx(-(802.83 + 7.20))
+    v = parsed.verify_all()["6310"]
+    assert v["ok"] is True

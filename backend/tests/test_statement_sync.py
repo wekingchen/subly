@@ -1664,3 +1664,40 @@ def test_multi_downgrade_side_effects_under_autoflush_false(sync_env, monkeypatc
     )
     assert db.get(CreditCardStatement, aug.id).is_repaid is False
     assert db.get(CreditCardStatement, sep.id).is_repaid is False
+
+
+def test_unverified_statements_surfaced_in_sync_result(sync_env, monkeypatch):
+    """勾稽未验证响亮上报：有交易明细但该卡不在勾稽结果里（模板变化导致
+    勾稽字段缺失）→ 同步响应含 unverified 明细；零交易卡（无明细）不算。
+    （模板剧变时「未验证却被当 ok 静默参与统计」的响亮信号。）"""
+    client, db, user, account = sync_env
+    card = CreditCard(
+        user_id=user.id, display_name="招行卡", bank_name="招商银行",
+        last_four="6310", statement_day=10, due_day=20,
+    )
+    db.add(card)
+    db.commit()
+    # 模拟模板变化：汇总区 D1rmbLdebits 字段整个消失（勾稽必需字段缺失
+    # → _verify_card 返回 None → 卡不在勾稽结果，但有交易明细）
+    raw = load_cmb().decode()
+    assert "D1rmbLdebits" in raw
+    raw = raw.replace("<DIV id='D1rmbLdebits'>&yen; 608.11</DIV>", "").encode()
+    _mock_imap(monkeypatch, [raw])
+    resp = client.post(f"/api/imap/accounts/{account.id}/sync-statements")
+    body = resp.json()
+    assert body["unverified"], "有明细但勾稽缺失的卡必须上报 unverified"
+    assert body["unverified"][0]["bank_key"] == "cmb"
+    assert body["unverified"][0]["scope"] == "6310"
+    # 未验证账单仍以 ok 落库（无勾稽证据时不误判失败），但已响亮上报
+    db.expire_all()
+    stmts = db.query(CreditCardStatement).all()
+    assert stmts and all(s.verify_status == "ok" for s in stmts)
+
+    # 零交易卡（items=[]）不算未验证：谓词 st.items 短路——建行 fixture 的
+    # 5561 卡（纯还款溢缴 -100，无交易明细）即使不在勾稽结果也不上报
+    from statement_fixtures import load_ccb
+    _mock_imap(monkeypatch, [load_ccb()])
+    resp2 = client.post(f"/api/imap/accounts/{account.id}/sync-statements")
+    body2 = resp2.json()
+    ccb_unverified = [u for u in body2["unverified"] if u["bank_key"] == "ccb"]
+    assert not ccb_unverified, "零交易卡（无明细）不在勾稽结果也不得上报 unverified"

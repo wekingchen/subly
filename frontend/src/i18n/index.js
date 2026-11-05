@@ -29,7 +29,7 @@ const zh = {
     banksHint: '不选 = 接收全部银行的账单邮件；勾选后仅拉取所选银行的账单',
     syncStatements: '解析账单', syncing: '解析中…',
     syncSaved: '已保存 {n} 份账单', syncSkipped: '跳过重复 {n} 封', syncIgnored: '忽略非账单邮件 {n} 封',
-    syncUnmatched: '未匹配卡 {n} 张', syncMismatched: '勾稽异常 {n} 项', syncErrors: '解析失败 {n} 封',
+    syncUnmatched: '未匹配卡 {n} 张', syncMismatched: '勾稽异常 {n} 项', syncUnverified: '{n} 项账单未经勾稽验证（邮件模板可能已变化）', syncErrors: '解析失败 {n} 封',
     ignoredReason: '非账单邮件（标题无账单特征），已忽略',
     syncUpdated: '已按账单更新 {n} 张卡的资料',
     updatedCardItem: '尾号 {last4} 的卡片资料已按最新账单更新',
@@ -37,6 +37,9 @@ const zh = {
     updatedField_due_day: '还款日',
     updatedField_credit_limit: '总额度',
     unmatchedCardItem: '检测到尾号 {last4} 的账单，未匹配到你的卡片',
+    unverifiedCardItem: '{bank} 尾号 {last4} 的账单未经勾稽验证',
+    unverifiedAccountItem: '{bank} 账单未经勾稽验证',
+    unverifiedReason: '有交易明细但未能通过勾稽自校验（银行邮件模板可能已变化），账单仍会按原样参与统计，请对照银行账单核对金额',
     unmatchedCardReason: '确认「信用卡管理」里该行卡片的银行与卡号后四位与此一致后，重新点「解析账单」即可自动关联'
   },
   rtlog: { title: '实时日志', live: '实时', paused: '已暂停', empty: '暂无日志', auto: '自动刷新' },

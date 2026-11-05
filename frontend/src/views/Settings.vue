@@ -1121,6 +1121,8 @@ async function syncStatements(acct) {
       }))
     }
     if (d.mismatched?.length) parts.push(t('imap.syncMismatched', { n: d.mismatched.length }))
+    // 勾稽未验证：有明细但没经过自校验（模板变化/结清未知等）——响亮展示
+    if (d.unverified?.length) parts.push(t('imap.syncUnverified', { n: d.unverified.length }))
     if (d.updated_cards?.length) parts.push(t('imap.syncUpdated', { n: d.updated_cards.length }))
     if (d.errors?.length) parts.push(t('imap.syncErrors', { n: d.errors.length }))
     // 明细统一构造后一次赋值：卡片回写 + 解析错误 + 忽略邮件，
@@ -1143,9 +1145,17 @@ async function syncStatements(acct) {
         subject: e.subject || `UID ${e.uid}`,
         from: e.from_address || '',
         error: t('imap.ignoredReason')
+      })),
+      ...(d.unverified || []).map((u) => ({
+        uid: `unverified-${u.bank_key}-${u.scope}`,
+        subject: u.scope === '_account'
+          ? t('imap.unverifiedAccountItem', { bank: bankNameOf(u.bank_key) })
+          : t('imap.unverifiedCardItem', { bank: bankNameOf(u.bank_key), last4: u.scope }),
+        from: '',
+        error: t('imap.unverifiedReason')
       }))
     ]
-    imOk.value = !d.mismatched?.length && !d.errors?.length
+    imOk.value = !d.mismatched?.length && !d.errors?.length && !d.unverified?.length
     imMsg.value = parts.join('，')
   } catch (e) {
     imOk.value = false

@@ -191,12 +191,17 @@ class ParsedEmail:
         if self.bank_key == "cmb":
             debits = st.summary.get("debits")
             pay_amt = st.summary.get("payment")
+            # 2026-10 模板把退款列入交易明细（负数），汇总区 D1rmbLcreditAmt
+            # = 退款合计（贷记金额）——负数侧恒等式从「== payment」放宽为
+            # 「== payment + credit」。旧模板无此字段或恒 0.00，按 0 处理
+            # 不影响历史账单勾稽（真实 9/10 月邮件双样本验证）。
+            credit_amt = st.summary.get("credit") or 0
             if debits is None:
                 return None
             ok = abs(pos - debits) <= tol
             if pay_amt is not None:
-                ok = ok and abs(neg - pay_amt) <= tol
-            return {"ok": ok, "expected": float(debits + (pay_amt or 0)), "actual": float(pos + neg), "diff": float(debits + (pay_amt or 0) - pos - neg)}
+                ok = ok and abs(neg - (pay_amt + credit_amt)) <= tol
+            return {"ok": ok, "expected": float(debits + (pay_amt or 0) + credit_amt), "actual": float(pos + neg), "diff": float(debits + (pay_amt or 0) + credit_amt - pos - neg)}
         if self.bank_key == "pab":
             # 勾稽公式（2026-09 模板实测修正，四期真实账单验证）：
             #   pos == charges + 借记调整（正向调整，追加费用计入明细正数）
@@ -530,11 +535,14 @@ def _parse_cmb(html: str) -> list[ParsedStatement]:
             ))
     debits = _f(parse_money(dom.get("D1rmbLdebits", "")))
     pay_amt = _f(parse_money(dom.get("D1rmbLpaymentAmt", "")))
+    # 2026-10 模板新增贷记金额（退款合计）：勾稽负数侧需要它（审核确认，
+    # 真实 9/10 月邮件对比——9 月该字段恒 0.00、10 月起退款列入交易明细）
+    credit_amt = _f(parse_money(dom.get("D1rmbLcreditAmt", "")))
     for stmt in statements.values():
         stmt.total_due = _f(parse_money(dom.get("L1rmbLcurrBal", "")))
         stmt.min_due = _f(parse_money(dom.get("L1rmbLdueAmt", "")))
         stmt.credit_limit = _f(parse_money(dom.get("creditLimit", "")))
-        stmt.summary = {"debits": debits, "payment": pay_amt}
+        stmt.summary = {"debits": debits, "payment": pay_amt, "credit": credit_amt}
     return list(statements.values())
 
 
