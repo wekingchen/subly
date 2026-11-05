@@ -1,5 +1,5 @@
 import json
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 import httpx
 import pytest
@@ -326,6 +326,7 @@ def test_outbox_api_lists_attempts_and_only_retries_allowed_states(tmp_path, mon
         row.status = "dead"
         row.attempt_count = 2
         row.last_error = "HTTP 400"
+        row.created_at = datetime(2024, 1, 1, 0, 0, 0)
         db.add(NotificationLog(
             subscription_id=row.subscription_id,
             user_id=user.id,
@@ -347,6 +348,10 @@ def test_outbox_api_lists_attempts_and_only_retries_allowed_states(tmp_path, mon
             renewal_date=row.renewal_date,
             payload={"event": {}},
             last_error="HTTP 401",
+            # created_at 是 CURRENT_TIMESTAMP（秒级精度）：两条 dead 同秒落库时
+            # 分页游标排序偶发歧义（CI 快速执行曾致 has_more 断言 flaky）——
+            # 显式错开，消除同秒边界
+            created_at=datetime(2024, 1, 2, 0, 0, 0),
         ))
         db.commit()
 
