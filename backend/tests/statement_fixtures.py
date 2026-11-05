@@ -26,8 +26,11 @@ def build_mime(html: str, bank_addr: str, subject: str, message_id: str) -> byte
     ).encode("utf-8")
 
 
-def load_cmb() -> bytes:
-    """招行：DOM id 汇总 + 8-td 交易行（含还款行交易日为空）。"""
+def load_cmb(*, day: int | None = None) -> bytes:
+    """招行：DOM id 汇总 + 8-td 交易行（含还款行交易日为空）。
+
+    day 参数替换账单日（statementCycle 结束日同步平移），供「银行侧
+    账单日变更」测试构造新日期的账单邮件。"""
     html = """<html><body>
     <DIV id='statementCycle'> 2026/07/16-2026/08/15 </DIV>
     <DIV id='creditLimit'>&yen; 60,000.00</DIV>
@@ -49,6 +52,8 @@ def load_cmb() -> bytes:
       <td></td><td>0813</td><td>0814</td><td>示例商户C</td><td>&yen; 35.30</td><td>6310</td><td>US</td><td>5.22</td>
     </tr></table>
     </body></html>"""
+    if day is not None and day != 15:
+        html = html.replace("2026/07/16-2026/08/15", f"2026/07/26-2026/08/{day:02d}")
     return build_mime(html, "ccsvc@message.cmbchina.com", "招商银行信用卡电子账单", "cmb-fix-1")
 
 

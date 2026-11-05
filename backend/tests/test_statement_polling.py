@@ -120,9 +120,12 @@ def test_poll_attempts_d1_to_d3_then_exhausted(poll_env, monkeypatch):
     assert run.attempt_count == 3
     assert calls["n"] == 3
 
-    # D+4：exhausted 不再尝试
+    # D+4：exhausted 进入兜底——当月内每日一次低频重试（银行侧账单日变更
+    # 场景：新账单晚于原窗口到达仍能追上），同日只试一次
     polling.run_poll(date(2026, 9, 19))
-    assert calls["n"] == 3
+    assert calls["n"] == 4
+    polling.run_poll(date(2026, 9, 19))
+    assert calls["n"] == 4  # 同日幂等
 
 
 def test_poll_success_stops_retrying(poll_env, monkeypatch):
@@ -343,3 +346,149 @@ def test_multi_card_one_account_all_progress(poll_env, monkeypatch):
     runs = db.query(CreditCardStatementPollRun).all()
     assert len(runs) == 2
     assert all(r.attempt_count == 1 for r in runs), "两张卡都必须被尝试"
+
+
+def test_poll_fallback_success_after_statement_day_change(poll_env, monkeypatch):
+    """兜底场景（银行侧账单日变更）：D+1..D+3 扑空 exhausted 后，当月内
+    兜底重试抓到晚到的新账单 → run 转 succeeded、卡片资料按新账单回写；
+    外部通知不重复（失败通知已占用 UNIQUE，成功通知被 IGNORE）；跨月停止。"""
+    from sqlalchemy import text
+
+    db, user, account = poll_env
+    card = CreditCard(
+        user_id=user.id, display_name="招行卡", bank_name="招商银行",
+        last_four="6310", statement_day=15, due_day=3,
+    )
+    db.add(card)
+    db.commit()
+
+    # D+1..D+3 邮箱无账单 → exhausted（含失败通知 3 channels）
+    _mock_imap(monkeypatch, [])
+    polling.run_poll(date(2026, 8, 16))
+    polling.run_poll(date(2026, 8, 17))
+    polling.run_poll(date(2026, 8, 18))
+    db.expire_all()
+    run = db.query(CreditCardStatementPollRun).one()
+    assert run.status == "exhausted"
+
+    def notify_count():
+        return db.execute(
+            text("SELECT COUNT(*) FROM bill_poll_notifications")
+        ).scalar()
+
+    assert notify_count() == 3  # 失败通知已发（telegram/bark/webhook）
+
+    # D+4（8/19）兜底：邮箱出现 8/15 账单（新账单晚到——银行侧改了账单日），
+    # statement_date 与 occurrence(8/15) 同月 → 兜底成功
+    _mock_imap(monkeypatch, [load_cmb()])
+    polling.run_poll(date(2026, 8, 19))
+    db.expire_all()
+    run = db.query(CreditCardStatementPollRun).one()
+    assert run.status == "succeeded"
+    assert run.statement_id is not None
+    assert run.attempt_count == 4
+    # 卡片资料按新账单回写（账单日/还款日/额度以最新邮件为准）
+    db.expire_all()
+    assert card.statement_day == 15
+    assert card.credit_limit is not None
+    # 通知不重复：失败通知占用 UNIQUE(poll_run_id, channel)，成功通知被 IGNORE
+    assert notify_count() == 3
+
+    # 成功后兜底自然退出：8/20 不再调用 IMAP
+    calls = {"n": 0}
+    real_core = polling.credit_card_statement_sync.sync_statements_core
+    def counting_core(*a, **k):
+        calls["n"] += 1
+        return real_core(*a, **k)
+    monkeypatch.setattr(polling.credit_card_statement_sync, "sync_statements_core", counting_core)
+    polling.run_poll(date(2026, 8, 20))
+    assert calls["n"] == 0
+
+
+def test_poll_fallback_stops_next_month(poll_env, monkeypatch):
+    """兜底只追「本期」：exhausted 后跨入下月，不再兜底（不无限回溯）。"""
+    calls = {"n": 0}
+    real_core = polling.credit_card_statement_sync.sync_statements_core
+    def counting_core(*a, **k):
+        calls["n"] += 1
+        return real_core(*a, **k)
+
+    db, user, account = poll_env
+    card = CreditCard(
+        user_id=user.id, display_name="招行卡", bank_name="招商银行",
+        last_four="6310", statement_day=15, due_day=3,
+    )
+    db.add(card)
+    db.commit()
+
+    _mock_imap(monkeypatch, [])
+    polling.run_poll(date(2026, 8, 16))
+    polling.run_poll(date(2026, 8, 17))
+    polling.run_poll(date(2026, 8, 18))   # exhausted
+    db.expire_all()
+    assert db.query(CreditCardStatementPollRun).one().status == "exhausted"
+
+    # 8/31 仍兜底（当月内）
+    monkeypatch.setattr(polling.credit_card_statement_sync, "sync_statements_core", counting_core)
+    polling.run_poll(date(2026, 8, 31))
+    assert calls["n"] == 1
+
+    # 9/1 跨月：兜底条件（锚定月一致）不满足 → 不再尝试
+    polling.run_poll(date(2026, 9, 1))
+    polling.run_poll(date(2026, 9, 14))   # 9/14 也不在新窗口（day=15 的 D+1 是 9/16）
+    assert calls["n"] == 1
+
+
+def test_poll_fallback_real_day_change_no_duplicate_sync(poll_env, monkeypatch):
+    """真实账单日变更（5→25）：兜底在新日期成功后，卡片资料回写 statement_day=25
+    → 次日正常窗口命中新 occurrence(8/25) ——整期已由兜底完成，不得再同步
+    （不重复 IMAP、新 run 静默标 succeeded 不重发通知）。"""
+    calls = {"n": 0}
+    real_core = polling.credit_card_statement_sync.sync_statements_core
+    def counting_core(*a, **k):
+        calls["n"] += 1
+        return real_core(*a, **k)
+
+    db, user, account = poll_env
+    card = CreditCard(
+        user_id=user.id, display_name="招行卡", bank_name="招商银行",
+        last_four="6310", statement_day=5, due_day=3,
+    )
+    db.add(card)
+    db.commit()
+
+    from sqlalchemy import text
+    def notify_count():
+        return db.execute(text("SELECT COUNT(*) FROM bill_poll_notifications")).scalar()
+
+    # 计数器从兜底抓取前装上（8/25 的成功与 8/26 的重复检测都靠它）
+    monkeypatch.setattr(polling.credit_card_statement_sync, "sync_statements_core", counting_core)
+
+    # 旧日期 8/5 的 D+1..D+3（8/6~8/8）扑空 → exhausted + 失败通知 3 条
+    _mock_imap(monkeypatch, [])
+    polling.run_poll(date(2026, 8, 6))
+    polling.run_poll(date(2026, 8, 7))
+    polling.run_poll(date(2026, 8, 8))
+    db.expire_all()
+    runs = db.query(CreditCardStatementPollRun).all()
+    assert len(runs) == 1 and runs[0].status == "exhausted"
+    assert notify_count() == 3
+
+    # 8/25 银行按新账单日发信：兜底抓到 statement_date=8/25 的账单（同月 → 成功）
+    _mock_imap(monkeypatch, [load_cmb(day=25)])
+    polling.run_poll(date(2026, 8, 25))
+    db.expire_all()
+    assert calls["n"] == 4  # 扑空 3 次 + 兜底 1 次
+    card = db.get(CreditCard, card.id)
+    assert card.statement_day == 25  # 资料按新账单回写
+    assert notify_count() == 3       # 兜底成功不发通知
+
+    # 8/26 新日期的 D+1：正常窗口命中 occurrence 8/25——整期已由兜底完成，
+    # 不得再同步（无 IMAP 调用、通知不增加）
+    polling.run_poll(date(2026, 8, 26))
+    assert calls["n"] == 4
+    assert notify_count() == 3
+    db.expire_all()
+    runs = db.query(CreditCardStatementPollRun).all()
+    assert len(runs) == 2  # 旧 8/5 run + 新 8/25 run（静默标 succeeded）
+    assert all(r.status == "succeeded" for r in runs)

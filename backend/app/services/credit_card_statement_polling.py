@@ -175,10 +175,12 @@ def _run_with_lock(as_of: date, *, catchup: bool) -> None:
         try:
             due = _collect_due_cards(db, as_of)
             if not due:
-                # 冷启动补偿：即使今天无卡到期，也要把过窗 pending 标 expired
+                # 冷启动补偿：即使今天无卡到期，也要把过窗 pending 标 expired；
+                # collect 阶段也可能产生状态变更（如新日期 run 被「本期已由兜底
+                # 完成」静默标 succeeded）——统一提交，不留未落库的会话状态
                 if catchup:
                     _expire_stale_runs(db, as_of)
-                    db.commit()
+                db.commit()
                 return
             _execute_grouped(db, as_of, due, catchup=catchup)
             db.commit()
@@ -191,8 +193,57 @@ def _run_with_lock(as_of: date, *, catchup: bool) -> None:
         _POLL_LOCK.release()
 
 
+def _fallback_occurrence(db: Session, card: CreditCard, as_of: date) -> date | None:
+    """兜底收集（银行侧账单日变更场景）：正常窗口外的卡，若其旧账单期的
+    run 已 exhausted 且仍在本期内（锚定月与 as_of 一致），返回该期供每日
+    兜底重试。
+
+    背景：用户在银行 App 改了账单日（如 5 号→25 号），Subly 卡片资料还是
+    旧值——旧窗口 D+1..D+3 扑空后 run exhausted，新账单（新日期发出）到来
+    时已无自动尝试。唯一信号就是「扑空」，因此 exhausted 降级为当月内每日
+    兜底重试，直到抓到同月新账单（_poll_succeeded 同月判定成立、资料回写、
+    run 转 succeeded 自然退出）或跨月停止。正常卡零额外成本；last_attempt_
+    date 照写保同日幂等；attempt_count 继续累加无害（exhausted 已定型）。
+    """
+    runs = db.scalars(
+        select(CreditCardStatementPollRun).where(
+            CreditCardStatementPollRun.credit_card_id == card.id,
+            CreditCardStatementPollRun.status == "exhausted",
+        )
+    ).all()
+    for run in runs:
+        if run.last_attempt_date == as_of:
+            continue  # 同日幂等：兜底与正常窗口共用该守卫
+        if (run.statement_date.year, run.statement_date.month) != (as_of.year, as_of.month):
+            continue  # 跨月即停：兜底只追「本期」，不无限回溯
+        return run.statement_date
+    return None
+
+
+def _month_already_succeeded(db: Session, card: CreditCard, occurrence: date) -> bool:
+    """该卡「occurrence 锚定月」是否已有 succeeded 的 run（任意名义日期）。
+
+    银行侧账单日变更场景：兜底在新日期（如 8/25）成功后，卡片资料回写
+    statement_day=25 → 次日正常窗口命中新 occurrence 8/25 并新建 run——
+    同一期账单已由兜底完成，不应再同步（重复 IMAP + 新 run 重发成功通知，
+    绕过 UNIQUE(poll_run_id, channel) 去重）。以「同卡同月已 succeeded」
+    判定整期完成，与 _poll_succeeded 的同月口径一致。
+    """
+    runs = db.scalars(
+        select(CreditCardStatementPollRun).where(
+            CreditCardStatementPollRun.credit_card_id == card.id,
+            CreditCardStatementPollRun.status == "succeeded",
+        )
+    ).all()
+    return any(
+        (r.statement_date.year, r.statement_date.month) == (occurrence.year, occurrence.month)
+        for r in runs
+    )
+
+
 def _collect_due_cards(db: Session, as_of: date) -> list[tuple[CreditCard, date]]:
-    """收集今天允许尝试的启用卡（D+1..D+3 且 run 未终结、同日未试）。"""
+    """收集今天允许尝试的启用卡（D+1..D+3 且 run 未终结、同日未试），
+    外加兜底：当月内 exhausted 的旧账单期（银行侧账单日变更场景）。"""
     due: list[tuple[CreditCard, date]] = []
     cards = db.scalars(select(CreditCard).where(CreditCard.is_active.is_(True))).all()
     for card in cards:
@@ -202,9 +253,19 @@ def _collect_due_cards(db: Session, as_of: date) -> list[tuple[CreditCard, date]
             continue
         occ = _candidate_occurrence(as_of, card.statement_day)
         if occ is None:
+            # 正常窗口外 → 兜底收集（exhausted 且当月内）
+            occ = _fallback_occurrence(db, card, as_of)
+            if occ is None:
+                continue
+            due.append((card, occ))
             continue
         run = _get_or_create_run(db, card, occ)
         if run.status != "pending" or run.last_attempt_date == as_of:
+            continue
+        # 本期已被兜底（或其他名义日期的 run）完成 → 不再同步（防新日期
+        # occurrence 重复同步 + 重复通知，见 _month_already_succeeded）
+        if run.statement_id is None and _month_already_succeeded(db, card, occ):
+            run.status = "succeeded"
             continue
         due.append((card, occ))
     return due
@@ -258,7 +319,9 @@ def _execute_grouped(db: Session, as_of: date, due: list[tuple[CreditCard, date]
                     )
                 for card, occ in covered:
                     run = _get_or_create_run(db, card, occ)
-                    if run.status != "pending" or run.last_attempt_date == as_of:
+                    # pending = 正常窗口；exhausted = 兜底重试（银行侧账单日变更
+                    # 场景，见 _fallback_occurrence）。succeeded/expired 不再尝试。
+                    if run.status not in ("pending", "exhausted") or run.last_attempt_date == as_of:
                         continue  # 可能已被其他账户的命中推进
                     statement_id = _poll_succeeded(db, card, occ, results) if imap_ok else None
                     run.attempt_count += 1
@@ -266,6 +329,16 @@ def _execute_grouped(db: Session, as_of: date, due: list[tuple[CreditCard, date]
                     if statement_id is not None:
                         run.status = "succeeded"
                         run.statement_id = statement_id
+                        # 兜底场景（原 exhausted）成功 = 银行侧账单日确已变更：
+                        # 外部通知被 bill_poll_notifications 的 UNIQUE(poll_run_id,
+                        # channel) 挡住（失败通知已占用，INSERT OR IGNORE 吃掉）
+                        # ——正好不重复打扰；在实时日志留痕供查证
+                        if run.attempt_count > MAX_ATTEMPTS:
+                            activity.log(
+                                "bill.poll_fallback_success",
+                                "兜底抓取成功：账单日晚于原窗口到达（账单日可能已在银行侧变更），卡片资料已按新账单更新",
+                                user=user,
+                            )
                         _enqueue_notify(db, user, card, run.id, success=True)
                     elif run.attempt_count >= MAX_ATTEMPTS:
                         run.status = "exhausted"
