@@ -58,7 +58,7 @@ const zh = {
   auth: {
     login: '登录', register: '注册', username: '用户名', email: '邮箱', password: '密码',
     loginBtn: '登录', registerBtn: '注册',
-    loginFail: '用户名或密码错误',
+    loginFail: '用户名或密码错误', loginServiceError: '登录服务异常，请稍后重试；若持续失败请检查服务状态',
     verifyTitle: '邮箱验证', verifyTip: '验证码已发送至 {email}，请查收并填写（10 分钟内有效）',
     radarKicker: '实时续费雷达', radarTitle: '续费雷达控制台',
     radarSubtitle: '把订阅、域名、VPS 和提醒通道放进自己的自托管雷达站。',

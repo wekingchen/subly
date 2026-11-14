@@ -124,7 +124,16 @@ async function submit() {
       }
     }
   } catch (e) {
-    error.value = e.response?.data?.detail || t('auth.loginFail')
+    // 区分三类失败，账密错误不得吞掉服务异常（宿主机重启后服务未就绪时
+    // 曾被笼统显示为「账密错误」，误导排查）：
+    // - fetchMe 失败（auth store 标记 serviceError）→ 服务异常可重试
+    // - login 401 且后端给了明细 → 透传（真正的账密错误）
+    // - 其余无明细失败 → 通用兜底
+    if (e.serviceError) {
+      error.value = t('auth.loginServiceError')
+    } else {
+      error.value = e.response?.data?.detail || t('auth.loginFail')
+    }
   } finally {
     busy.value = false
   }

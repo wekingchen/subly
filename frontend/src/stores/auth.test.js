@@ -6,6 +6,11 @@ import { createPinia, setActivePinia } from 'pinia'
 // reorder 已本地合并的顺序（含修订号 0→1 的首次拖拽场景）。
 vi.mock('../api', () => ({
   default: { patch: vi.fn(), get: vi.fn(), post: vi.fn() },
+  ACCOUNT_BLOCK_DETAILS: new Set([
+    '请先完成邮箱验证',
+    '账号正在等待管理员审核，请耐心等待',
+    '账户已被禁用，请联系管理员'
+  ]),
   logoutRefreshCookie: vi.fn(),
   refreshTokens: vi.fn()
 }))
@@ -19,6 +24,7 @@ vi.mock('../auth/session', () => ({
 }))
 
 import api from '../api'
+import { clearAccessToken } from '../auth/session'
 import { useAuth } from './auth'
 
 // vitest environment 是 node（无 DOM）：stub applyTheme 用到的 document，
@@ -181,5 +187,124 @@ describe('fetchMe 修订号（九审 Low 4）', () => {
     vi.mocked(api.get).mockResolvedValue({ data: { theme: 'ocean', subscription_order: { '1': [7] } } })
     await auth.fetchMe()
     expect(auth._orderRevision).toBe(0)
+  })
+})
+
+describe('auth store login：fetchMe 失败的分类标记（宿主机重启竞态实测）', () => {
+  beforeEach(() => {
+    vi.mocked(api.post).mockReset()
+    vi.mocked(api.get).mockReset()
+  })
+
+  function makeStore() {
+    setActivePinia(createPinia())
+    return useAuth()
+  }
+
+  it('POST 成功但 /me 500：清除 token、抛原错误且带 serviceError 标记', async () => {
+    api.post.mockResolvedValue({ data: { access_token: 't' } })
+    const failure = Object.assign(new Error('boom'), {
+      response: { status: 500, data: { detail: 'internal error' } }
+    })
+    api.get.mockRejectedValue(failure)
+    const store = makeStore()
+
+    const err = await store.login('u', 'p').then(
+      () => null,
+      (e) => e
+    )
+
+    expect(err).toBe(failure)                       // 原错误对象原样抛出
+    expect(err.serviceError).toBe(true)             // 标记服务异常
+    expect(err.response.data.detail).toBe('internal error')  // response 保留
+    expect(clearAccessToken).toHaveBeenCalled()
+  })
+
+  it('POST 成功但 /me 403 账号状态拒绝：不打 serviceError（后端明细透传）', async () => {
+    api.post.mockResolvedValue({ data: { access_token: 't' } })
+    const blocked = Object.assign(new Error('blocked'), {
+      response: { status: 403, data: { detail: '账户已被禁用，请联系管理员' } }
+    })
+    api.get.mockRejectedValue(blocked)
+    const store = makeStore()
+
+    const err = await store.login('u', 'p').then(() => null, (e) => e)
+
+    expect(err.serviceError).toBeUndefined()        // 不伪装成服务异常
+    expect(err.response.data.detail).toBe('账户已被禁用，请联系管理员')
+  })
+
+  it('POST 401（真账密错误）：不进入 fetchMe，错误无 serviceError 标记', async () => {
+    const unauthorized = Object.assign(new Error('unauthorized'), {
+      response: { status: 401, data: { detail: '用户名或密码错误' } }
+    })
+    api.post.mockRejectedValue(unauthorized)
+    const store = makeStore()
+
+    const err = await store.login('u', 'p').then(() => null, (e) => e)
+
+    expect(err).toBe(unauthorized)
+    expect(err.serviceError).toBeUndefined()
+    expect(api.get).not.toHaveBeenCalled()          // POST 失败不走 /me
+  })
+})
+
+
+describe('auth store login：fetchMe 失败的分类标记（宿主机重启竞态实测）', () => {
+  beforeEach(() => {
+    vi.mocked(api.post).mockReset()
+    vi.mocked(api.get).mockReset()
+  })
+
+  function makeStore() {
+    setActivePinia(createPinia())
+    return useAuth()
+  }
+
+  it('POST 成功但 /me 500：清除 token、抛原错误且带 serviceError 标记', async () => {
+    api.post.mockResolvedValue({ data: { access_token: 't' } })
+    const failure = Object.assign(new Error('boom'), {
+      response: { status: 500, data: { detail: 'internal error' } }
+    })
+    api.get.mockRejectedValue(failure)
+    const store = makeStore()
+
+    const err = await store.login('u', 'p').then(
+      () => null,
+      (e) => e
+    )
+
+    expect(err).toBe(failure)                       // 原错误对象原样抛出
+    expect(err.serviceError).toBe(true)             // 标记服务异常
+    expect(err.response.data.detail).toBe('internal error')  // response 保留
+    expect(clearAccessToken).toHaveBeenCalled()
+  })
+
+  it('POST 成功但 /me 403 账号状态拒绝：不打 serviceError（后端明细透传）', async () => {
+    api.post.mockResolvedValue({ data: { access_token: 't' } })
+    const blocked = Object.assign(new Error('blocked'), {
+      response: { status: 403, data: { detail: '账户已被禁用，请联系管理员' } }
+    })
+    api.get.mockRejectedValue(blocked)
+    const store = makeStore()
+
+    const err = await store.login('u', 'p').then(() => null, (e) => e)
+
+    expect(err.serviceError).toBeUndefined()        // 不伪装成服务异常
+    expect(err.response.data.detail).toBe('账户已被禁用，请联系管理员')
+  })
+
+  it('POST 401（真账密错误）：不进入 fetchMe，错误无 serviceError 标记', async () => {
+    const unauthorized = Object.assign(new Error('unauthorized'), {
+      response: { status: 401, data: { detail: '用户名或密码错误' } }
+    })
+    api.post.mockRejectedValue(unauthorized)
+    const store = makeStore()
+
+    const err = await store.login('u', 'p').then(() => null, (e) => e)
+
+    expect(err).toBe(unauthorized)
+    expect(err.serviceError).toBeUndefined()
+    expect(api.get).not.toHaveBeenCalled()          // POST 失败不走 /me
   })
 })

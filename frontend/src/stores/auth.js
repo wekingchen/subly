@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import api, { logoutRefreshCookie, refreshTokens } from '../api'
+import api, { ACCOUNT_BLOCK_DETAILS, logoutRefreshCookie, refreshTokens } from '../api'
 import {
   bootstrapSession,
   clearAccessToken,
@@ -68,6 +68,15 @@ export const useAuth = defineStore('auth', {
         await this.fetchMe()
       } catch (error) {
         clearAccessToken()
+        // 账密已验证通过（login 200）但会话建立失败（/me 报错）——这不是
+        // 账密错误。标记 serviceError 供登录页区分展示，避免笼统的
+        // 「用户名或密码错误」掩盖启动期服务异常（宿主机重启竞态实测）。
+        // 明确的账号状态拒绝（禁用/待审核/未验证邮箱，403）不算服务异常
+        // ——后端明细是用户需要的处理指引，透传不覆盖
+        const detail = error.response?.data?.detail
+        if (!(error.response?.status === 403 && detail && ACCOUNT_BLOCK_DETAILS.has(detail))) {
+          error.serviceError = true
+        }
         throw error
       }
       this.initialized = true
