@@ -15,7 +15,7 @@ const NO_AUTO_REFRESH = new Set([
   '/api/auth/refresh',
   '/api/auth/logout'
 ])
-const ACCOUNT_BLOCK_DETAILS = new Set([
+export const ACCOUNT_BLOCK_DETAILS = new Set([
   '请先完成邮箱验证',
   '账号正在等待管理员审核，请耐心等待',
   '账户已被禁用，请联系管理员'
